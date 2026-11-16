@@ -32,6 +32,7 @@
           <button aria-pressed="true" data-filter="all">All</button>
           <button aria-pressed="false" data-filter="characters">Characters</button>
           <button aria-pressed="false" data-filter="props">Props</button>
+          <button aria-pressed="false" data-filter="kits" data-tip="A character and the gear made for it, kept together.">Kits</button>
         </div>
         <div class="lib-filters">
           <select id="stageFilter" aria-label="Show assets at this step">
@@ -57,6 +58,8 @@
 
   <aside class="col side" aria-label="Steps">
     <div class="side-head"><h2>Steps</h2><span class="side-right"><span class="meta" id="sideKind"></span>
+      <button class="ghost small tip-left" id="gearBtn" data-tip="Make a sheet of nine props for this character: sword, shield, helmet... They stay together in its kit." hidden>Make gear</button>
+      <button class="ghost small tip-left" id="kitBtn" data-tip="Open the kit this is in: the character, its gear and every prop at once." hidden>Kit</button>
       <button class="ghost small tip-left" id="mainBtn" data-tip="Mark this version as the main one: the one to export and use in your game." hidden>☆ Main</button>
       <button class="ghost small tip-left" id="deleteBtn" data-tip="Delete this version from your disk. You will be asked first." hidden>Delete</button>
       <button class="ghost small tip-left" id="hideBtn" data-tip="Hide from the Library. Nothing is deleted; turn on Show hidden to see it again." hidden>Hide</button></span></div>

@@ -124,7 +124,7 @@ export function openCreate({ stage, recipes, engines, presets, frontBack = null,
   const picEngine = () => pictureEngines.find((e) => e.id === state.picEngine) || null;
   const fitPicture = (pictureOnly) => { if (!state.pic.touched) Object.assign(state.pic, pictureDefaults(picEngine(), pictureOnly)); };
   // "Draw another picture": the picture's own description, word for word, so nothing is added twice
-  if (prefill?.text) Object.assign(state, { text: prefill.text, useRecipe: false, want: prefill.want || state.want });
+  if (prefill?.text) Object.assign(state, { text: prefill.text, useRecipe: !!prefill.useRecipe, want: prefill.want || state.want });
   const retryPicture = retryPictureSettings(prefill?.pictureSettings);
   if (retryPicture) Object.assign(state.pic, retryPicture);
   // paste a picture (Ctrl+V) anywhere while the sheet is open; text pastes are left alone

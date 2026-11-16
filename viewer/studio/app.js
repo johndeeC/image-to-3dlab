@@ -18,6 +18,8 @@ import { libraryRowSelection, libraryFamilyOpen } from './library-selection.js';
 import { modelChoices, activeChoice } from './model-switch.js';
 import { thumbFile, createThumbCache, createThumbQueue } from './model-thumbs.js';
 import { createThumbnailRenderer } from './model-thumb-renderer.js';
+import { gearPrompt, kitsWith, tryPlans } from './kit.js';
+import { openKitPane } from './kit-pane.js';
 
 const $ = (id) => document.getElementById(id);
 const LOGO = './studio/mark.svg';
@@ -39,7 +41,19 @@ const thumbQueue = createThumbQueue({
   },
   isHidden: () => document.hidden,
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) thumbQueue.resume(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { thumbQueue.resume(); kitThumbs.resume(); } });
+const kitThumbs = createThumbQueue({
+  render: (file) => thumbRenderer.render(url(file)),
+  cache: thumbCache,
+  onThumb: ({ file }, data) => {
+    document.querySelectorAll('.kit-sheet [data-kit-file]').forEach((image) => {
+      if (image.dataset.kitFile !== file) return;
+      image.src = data;
+      image.classList.remove('mark');
+    });
+  },
+  isHidden: () => document.hidden,
+});
 const thumbItems = new WeakMap();
 let thumbObserver = null;
 
@@ -78,6 +92,10 @@ let viewingPictures = false;  // the viewer shows the asset's pictures instead o
 let viewingStep = null;       // a step id when the viewer shows that step's own model (the raw one, say)
 let viewingSkin = null;       // a skin id when the viewer shows one of the model's skins
 const openFamilies = new Set();  // families whose versions are listed under their row
+let kits = [];             // kits: a character and its gear (viewer/kits_api.py)
+let kitPane = null, openKitId = null;
+const kitQueue = [];       // Redo / ×2-×4 tries waiting their turn: the studio runs one thing at a time
+let kitReturn = null;      // the kit to reopen once its tries are done
 
 const viewer = createStudioViewer({ stage: $('stage'), logoUrl: LOGO, onClipChange: (clip) => setDownload(clip.file), fixSession: {
   // only a finished model on screen (not a rigged one, a move or the raw model)
@@ -130,9 +148,27 @@ function renderEngineChoices() {
   select.value = engineFilter;
 }
 
+function kitRows() {
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const list = kits.filter((k) => words.every((w) => k.name.toLowerCase().includes(w)));
+  if (!list.length) return `<li class="empty-lib">${kits.length ? 'Nothing matches.' : 'No kits yet. Open a character and press Make gear.'}</li>`;
+  return list.map((kit) => {
+    const character = assets.find((a) => a.id === kit.character);
+    const thumb = character?.picture ? `<img src="/api/thumb?path=${encodeURIComponent(character.picture)}" alt="" loading="lazy">` : `<img class="mark" src="${LOGO}" alt="">`;
+    const gear = kit.gear.length;
+    return `<li><button class="asset" data-kit="${escape(kit.id)}" aria-current="${openKitId === kit.id}"><span class="thumb">${thumb}</span>
+      <span style="min-width:0"><span class="nm">${escape(kit.name)}</span><span class="st">${escape(character?.name || 'Character missing')} · ${gear} piece${gear === 1 ? '' : 's'} of gear</span></span></button></li>`;
+  }).join('');
+}
+
 function renderLibrary() {
   if (!libraryReady) return;
   renderEngineChoices();
+  if (filter === 'kits') {
+    $('assetList').innerHTML = makingRow() + kitRows();
+    $('libFoot').textContent = `${kits.length} kit${kits.length === 1 ? '' : 's'} · saved in output/ on this machine`;
+    return;
+  }
   const { rows: list, more, hiddenCount } = visibleFamilies(assets, { filter, query, showHidden, limit, stage: stageFilter, engine: engineFilter, starred: starredOnly, sort: sortBy });
   $('assetList').innerHTML = makingRow() + (list.length ? list.map(({ key, shown, members }) => {
     if (members.length < 2) return `<li>${assetButton(shown)}</li>`;
@@ -461,6 +497,8 @@ function show(asset) {
 }
 
 $('assetList').addEventListener('click', (event) => {
+  const kitRow = event.target.closest('[data-kit]');
+  if (kitRow) { openKit(kitRow.dataset.kit); return; }
   const toggle = event.target.closest('[data-family]');
   if (toggle) {
     const key = toggle.dataset.family;
@@ -528,6 +566,8 @@ $('deleteBtn').addEventListener('click', async () => {
 });
 
 function renderHideButton() {
+  $('gearBtn').hidden = !current || ['prop set', 'prop'].includes(current.kind);
+  $('kitBtn').hidden = !current || !kitsWith(kits, current.id).length;
   $('deleteBtn').hidden = !current;
   $('deleteBar').hidden = true;
   const star = $('mainBtn');
@@ -563,6 +603,7 @@ async function loadLibrary(keepId = null, { pick = true } = {}) {
     onSuccess: (payload) => {
     base = payload.base;
     assets = payload.assets;
+    void loadKits();
     libraryReady = true;
     setLibraryLoading(libraryRoot, false);
     show(pick ? assets.find((a) => a.id === keepId) ?? assets[0] ?? null : null);
@@ -588,7 +629,7 @@ async function refreshAssets() {
   base = payload.base;
   assets = payload.assets;
   if (current) current = assets.find((a) => a.id === current.id) ?? current;
-  renderLibrary();
+  await loadKits();
 }
 
 async function loadTools() {
@@ -605,11 +646,104 @@ async function loadTools() {
   recipes = await fetch('/api/recipes').then((r) => r.json()).catch(() => null);
 }
 
+// ------------------------------------------------------------------ Kits
+async function loadKits() {
+  try {
+    const response = await fetch('/api/kits');
+    if (response.ok) kits = (await response.json()).kits || [];
+  } catch { /* an older server without kits: none to show */ }
+  renderLibrary();
+  if (current) renderHideButton();
+  drawKit();
+}
+
+async function kitPost(path, body) {
+  const response = await fetch(`/api/kits${path ? `/${path}` : ''}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'That did not work.');
+  await loadKits();
+  return payload;
+}
+
+function drawKit() {
+  const kit = kits.find((k) => k.id === openKitId);
+  if (!kitPane || !kitPane.element.isConnected) { kitPane = null; return; }
+  if (!kit) { kitPane.element.remove(); kitPane = null; openKitId = null; return; }
+  kitPane.render(kit, assets, kitQueue.length);
+}
+
+function openKit(id) {
+  if (!kits.some((k) => k.id === id)) return;
+  openKitId = id;
+  kitPane = openKitPane({ stage: $('stage'), on: {
+    open: (asset, stepId) => {
+      if (!asset) return;
+      show(asset);
+      if (['model', 'finished'].includes(stepId) && canViewStep(asset, stepId)) showStep(asset, stepId);
+    },
+    prop: (asset, index) => {
+      if (!asset) return;
+      show(asset);
+      if (asset.kind === 'prop set' && index > 0) {
+        viewer.setClips(asset.props.map((p) => ({ name: p.name.replace(/[_-]/g, ' '), url: url(p.file), file: p.file })), { still: true, index });
+      }
+    },
+    run: (asset, stepId, count) => queueTries(asset, stepId, count),
+    use: (laneId, assetId) => kitPost(`${id}/swap`, { from: laneId, to: assetId }).catch(() => {}),
+    remove: (assetId) => kitPost(`${id}/remove`, { asset: assetId }).catch(() => {}),
+    add: (assetId) => kitPost(`${id}/add`, { asset: assetId }).catch(() => {}),
+    rename: (name) => kitPost(`${id}/name`, { name }).catch(() => {}),
+    drop: () => kitPost(`${id}/delete`, {}).catch(() => {}),
+    makeGear: () => {
+      const kit = kits.find((k) => k.id === id);
+      const character = assets.find((a) => a.id === kit?.character);
+      if (kit) openCreateSheet({ text: gearPrompt(character || { name: kit.name }, recipes), want: 'set', useRecipe: true, kit: kit.id });
+    },
+    thumb: (image, file) => { if (kitThumbs.offer({ file }) !== 'cached') kitThumbs.enqueue({ file }); },
+  } });
+  renderLibrary();
+  drawKit();
+}
+
+/** Make gear for a character: its kit (made on first use), then Create on a sheet of nine. */
+async function makeGear(character) {
+  let kit = kits.find((k) => k.character === character.id);
+  if (!kit) {
+    try { kit = await kitPost('', { character: character.id }); } catch { return; }
+  }
+  openCreateSheet({ text: gearPrompt(character, recipes), want: 'set', useRecipe: true, kit: kit.id });
+}
+
+/** Redo or ×2-×4 on a node: that many one-step runs, one after another. */
+function queueTries(asset, stepId, count) {
+  if (!asset) return;
+  const plans = tryPlans(stepId, asset, count, { engine: engines[0]?.id, move: presets.find((p) => !p.take)?.id });
+  if (!plans.length) return;
+  kitQueue.push(...plans.map((plan, i) => ({ ...plan, description: `${asset.name} · try ${i + 1} of ${plans.length}` })));
+  kitReturn = openKitId;
+  drawKit();
+  nextKitTry();
+}
+
+function nextKitTry() {
+  if (busy || (making && !making.finished && !making.failed)) return;
+  const plan = kitQueue.shift();
+  if (plan) { void startChain(plan); return; }
+  if (kitReturn) { const id = kitReturn; kitReturn = null; refreshAssets().then(() => openKit(id)); }
+}
+
+$('gearBtn').addEventListener('click', () => { if (current) makeGear(current); });
+$('kitBtn').addEventListener('click', () => {
+  const kit = current && (kitsWith(kits, current.id)[0]);
+  if (kit) openKit(kit.id);
+});
+
 // ------------------------------------------------------------------ Create
 function openCreateSheet(prefill = null) {
   closeSheet($('stage'));
   createHandle = openCreate({ stage: $('stage'), recipes, engines, presets, frontBack, pictureEngines, prefill,
-    onSourceChange: () => { libraryInputId = null; renderLibrary(); }, onStart: (plan) => startChain(plan) });
+    onSourceChange: () => { libraryInputId = null; renderLibrary(); },
+    onStart: (plan) => startChain(prefill?.kit ? { ...plan, kit: prefill.kit } : plan) });
 }
 
 async function useLibraryPicture(asset) {
@@ -808,6 +942,7 @@ async function startChain(plan, attach = null) {
     },
     done: (step, made, seconds) => { making.done.push(step); making.made = made; making.seconds = seconds || {}; renderLibrary(); if (viewingMaking) showMaking(); },
     cancelled: (step) => {
+      kitQueue.length = 0;   // cancelling one try stops the ones waiting after it
       Object.assign(making, { current: stoppedStep(making.current, step, making.plan.steps), failed: true, cancelled: true, why: 'Cancelled. Everything finished before this step is kept.', log: '', fullLog: '' });
       renderLibrary(); if (viewingMaking) showMaking();
     },
@@ -818,6 +953,7 @@ async function startChain(plan, attach = null) {
     finish: (mine) => {
       making.finished = true;
       making.result = assets.find(mine) ?? null;
+      if (plan.kit && making.result) void kitPost(`${plan.kit}/add`, { asset: making.result.id });
       // land on the finished asset, playing its first move if it has one
       if (viewingMaking && making.result) { playNext = making.plan.firstMove; const result = making.result; making = null; show(result); }
       else renderLibrary();
@@ -828,6 +964,7 @@ async function startChain(plan, attach = null) {
   } finally {
     clearInterval(timer);
     ctx.onBusy(false);
+    nextKitTry();
   }
 }
 

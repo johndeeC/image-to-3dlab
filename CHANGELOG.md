@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Kits**: a character and the gear made for it, kept together. **Make gear** on a character
+  opens Create on a sheet of nine props, already described from the character, and the props
+  join its kit. The kit opens as one row of steps per member, with **Redo** or **×2–×4** on any
+  step to make more tries and pick the one the kit uses, and every split prop shown at once.
+  Agents get `list_kits`, `make_kit` and `add_to_kit`. See `docs/kits.md`.
+
 ## [0.5.11] - 2026-11-17
 
 ### Added
