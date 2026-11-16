@@ -38,6 +38,7 @@ import bug_report_api
 import fixspot_api
 import hf_api
 import image_api
+import kits_api
 import model_info_api
 import notices_api
 import preview_api
@@ -2807,6 +2808,12 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _route_post(self) -> None:
         parts = self._path_parts()
+        if parts == ["api", "kits"]:
+            self._kits_post(None, "make")
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "kits"] and parts[3] in {"add", "remove", "swap", "name", "delete"}:
+            self._kits_post(parts[2], parts[3])
+            return
         if parts == ["api", "skins"]:
             self._skins_post([])
             return
@@ -3272,6 +3279,37 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
+    def _kits_post(self, kit_id: str | None, action: str) -> None:
+        """Kits (viewer/kits_api.py): make one, file gear in it, swap a try, rename, delete the grouping."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(length)) if 0 < length <= 4096 else {}
+            if not isinstance(body, dict):
+                raise ValueError("send a JSON object")
+            library = {a["id"]: a for a in list_assets(OUTPUT_ROOT)}
+            if action == "make":
+                character = str(body.get("character", ""))
+                kit = kits_api.make_kit(OUTPUT_ROOT, character, str(body.get("name", "")), known=library,
+                                        character_name=(library.get(character) or {}).get("name", ""))
+                self._send_json(201, kit)
+                return
+            assert kit_id is not None
+            if action == "delete":
+                kits_api.delete_kit(OUTPUT_ROOT, kit_id)
+                self._send_json(200, {"id": kit_id, "deleted": True})
+                return
+            kit = {
+                "add": lambda: kits_api.add_to_kit(OUTPUT_ROOT, kit_id, str(body.get("asset", "")), known=library),
+                "remove": lambda: kits_api.remove_from_kit(OUTPUT_ROOT, kit_id, str(body.get("asset", ""))),
+                "swap": lambda: kits_api.swap_in_kit(OUTPUT_ROOT, kit_id, str(body.get("from", "")),
+                                                     str(body.get("to", "")), known=library),
+                "name": lambda: kits_api.rename_kit(OUTPUT_ROOT, kit_id, str(body.get("name", ""))),
+            }[action]()
+        except (ValueError, json.JSONDecodeError) as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        self._send_json(200, kit)
+
     def _skins_post(self, rest: list[str]) -> None:
         """POST /api/skins {asset, instruction, name?}: a new skin, its first front try started.
         /api/skins/<id>/try {side, instruction?}, /approve {side, number?}, /build,
@@ -3493,6 +3531,9 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send_json(200, plan_asset_delete(OUTPUT_ROOT, parts[2]))
             except ValueError as exc:
                 self._send_json(422, {"error": str(exc)})
+            return
+        if parts == ["api", "kits"]:
+            self._send_json(200, {"kits": kits_api.list_kits(OUTPUT_ROOT)})
             return
         if parts == ["api", "assets"]:
             try:
