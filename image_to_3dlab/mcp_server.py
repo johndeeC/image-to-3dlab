@@ -46,6 +46,10 @@ STUDIO_ONLY = {
     "api/assets/*/hidden": "Library tidying, a person's choice",
     "api/assets/*/main": "marking the main version is the user's verdict",
     "api/assets/*/name": "renaming is the user's choice",
+    "api/kits/*/remove": "taking gear out of a kit is the user's tidying, in the kit pane",
+    "api/kits/*/swap": "which try a kit uses is the user's pick, in the kit pane",
+    "api/kits/*/name": "renaming is the user's choice",
+    "api/kits/*/delete": "deleting a kit is the user's call, made in the studio",
     "api/skins/*/discard": "deleting a skin is the user's call, made in the studio",
     "api/blender/install": "installs an app; the Setup page asks first",
     "api/gltfpack/install": "installs a tool; the Setup page asks first",
@@ -72,7 +76,8 @@ STUDIO_ONLY = {
 # Server actions the tools below call.
 USED = {"api/chains", "api/chains/*/cancel", "api/setup/*/download", "api/reveal", "api/roblox-export", "api/bug-report", "api/usage",
         "api/skins", "api/skins/*/try", "api/skins/*/approve", "api/skins/*/build", "api/skins/build/*/cancel",
-        "api/image/brush", "api/image/versions/use", "api/image/versions/delete"}
+        "api/image/brush", "api/image/versions/use", "api/image/versions/delete",
+        "api/kits", "api/kits/*/add"}
 
 
 class StudioError(RuntimeError):
@@ -526,6 +531,41 @@ def find_asset(studio: Studio, asset_id: str, assets: list[dict[str, Any]] | Non
     if asset is None:
         raise StudioError(f"No asset with id {asset_id!r}. list_assets shows what there is.")
     return asset
+
+
+# --------------------------------------------------------------------------- kits
+def _kit_member(assets: dict[str, dict[str, Any]], asset_id: str) -> dict[str, Any]:
+    asset = assets.get(asset_id)
+    if asset is None:
+        return {"id": asset_id, "missing": True}
+    return {"id": asset_id, "name": asset.get("name"), "kind": asset.get("kind"), "stage": asset.get("stage")}
+
+
+def kit_summary(kit: dict[str, Any], assets: list[dict[str, Any]], studio: Studio) -> dict[str, Any]:
+    """A kit with each member's name and how far it got, so an agent need not look each one up."""
+    by_id = {a["id"]: a for a in assets}
+    return {"id": kit["id"], "name": kit["name"], "character": _kit_member(by_id, kit["character"]),
+            "gear": [_kit_member(by_id, g) for g in kit.get("gear", [])],
+            "studio": studio.studio_link(kit["character"])}
+
+
+def list_kits(studio: Studio) -> dict[str, Any]:
+    assets = studio.get("api/assets")["assets"]
+    return {"kits": [kit_summary(k, assets, studio) for k in studio.get("api/kits")["kits"]]}
+
+
+def make_kit(studio: Studio, *, character_id: str, name: str = "") -> dict[str, Any]:
+    assets = studio.get("api/assets")["assets"]
+    find_asset(studio, character_id, assets)
+    kit = studio.post_json("api/kits", {"character": character_id, "name": name})
+    return kit_summary(kit, assets, studio)
+
+
+def add_to_kit(studio: Studio, *, kit_id: str, asset_id: str) -> dict[str, Any]:
+    assets = studio.get("api/assets")["assets"]
+    find_asset(studio, asset_id, assets)
+    kit = studio.post_json(f"api/kits/{kit_id}/add", {"asset": asset_id})
+    return kit_summary(kit, assets, studio)
 
 
 # The file each step starts from, so a reply can say which model it is working on.
@@ -1320,6 +1360,24 @@ def build_server(studio: Studio | None = None):
         """Every version of one character or prop, oldest first: the same picture's 3D models,
         Finishes and rigs, each with its files (the raw 3D model too). Any version's id works."""
         return safe(lambda: list_versions(studio, asset_id=asset_id))
+
+    @server.tool(name="list_kits", structured_output=False)
+    def tool_list_kits():
+        """Kits: a character and the gear (prop sets, props) made for it, kept together for one game.
+        Each member has its name and how far it got; a deleted one shows as missing."""
+        return safe(lambda: list_kits(studio))
+
+    @server.tool(name="make_kit", structured_output=False)
+    def tool_make_kit(character_id: str, name: str = ""):
+        """Start a kit for a character (name defaults to "<character> kit"). Then make gear for it with
+        create(want="set", description="nine pieces of gear for <character>: a sword, a shield, ...")
+        and, once that run is done, file its asset_id with add_to_kit."""
+        return safe(lambda: make_kit(studio, character_id=character_id, name=name))
+
+    @server.tool(name="add_to_kit", structured_output=False)
+    def tool_add_to_kit(kit_id: str, asset_id: str):
+        """File a prop set or prop under a kit (list_kits shows the kits). Adding one twice keeps it once."""
+        return safe(lambda: add_to_kit(studio, kit_id=kit_id, asset_id=asset_id))
 
     @server.tool(name="brush_back", structured_output=False)
     def tool_brush_back(asset_id: str, mask_path: str, change: str, picture_engine: str | None = None,

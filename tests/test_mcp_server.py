@@ -54,6 +54,7 @@ class FakeHttp:
         self.posts: list[tuple[str, dict]] = []
         self.alive = True
         self.assets = [KNIGHT, DANCER, PICTURE]
+        self.kits = []
 
     def get(self, url, params=None, timeout=None):
         path = url.split("8777/", 1)[1]
@@ -64,6 +65,7 @@ class FakeHttp:
             "api/catalog": CATALOG, "api/animate/models": PRESETS,
             "api/recipes": {"goals": {"character": {"wording": "A-pose, plain background"}}},
             "api/assets": {"assets": self.assets},
+            "api/kits": {"kits": self.kits},
             "api/chains": {"running": None, "recent": [{"id": "r1", "status": "done", "done": ["picture"], "made": {"picture": "images/x.png"}}]},
             "api/chains/r1": {"id": "r1", "status": "done", "done": ["picture"], "made": {"picture": "images/x.png"}},
         }.get(path)
@@ -89,6 +91,14 @@ class FakeHttp:
                                   "checks": [{"level": "pass", "text": "19,981 triangles"}]})
         if path == "api/chains":
             return Response(202, {"id": "new-run"})
+        if path == "api/kits":
+            kit = {"id": "kit-0000000a", "name": json.get("name") or "knight kit", "character": json["character"], "gear": []}
+            self.kits.append(kit)
+            return Response(201, kit)
+        if path.startswith("api/kits/") and path.endswith("/add"):
+            kit = next(k for k in self.kits if k["id"] == path.split("/")[2])
+            kit["gear"].append(json["asset"])
+            return Response(200, kit)
         if path.endswith("/cancel"):
             return Response(200, {"cancelled": True})
         return Response(202, {"status_url": "/api/setup/hunyuan/status"})
@@ -153,7 +163,8 @@ def test_the_server_registers_every_tool():
                      "list_assets", "list_versions", "options", "preview", "open_in_studio", "install_backend", "blender_helpers",
                      "model_info", "show_in_folder", "export_roblox", "report_bug", "make_skin", "skin_status", "skin_picture",
                      "approve_skin_picture", "redo_skin_picture", "build_skin", "cancel_skin", "export_skins",
-                     "usage_counts", "brush_back", "picture_status", "back_versions"}
+                     "usage_counts", "brush_back", "picture_status", "back_versions",
+                     "list_kits", "make_kit", "add_to_kit"}
 
 
 # --------------------------------------------------------------------------- create
@@ -1092,3 +1103,25 @@ def test_export_roblox_sends_the_steps_file_and_passes_the_height_on(studio):
 def test_export_roblox_leaves_the_height_to_the_studio_when_not_given(studio):
     ms.export_roblox(studio, asset_id=KNIGHT["id"], kind="accessory")
     assert "height_studs" not in studio.http.posts[-1][1]
+
+
+# --------------------------------------------------------------------------- kits
+def test_a_kit_is_made_for_a_character_and_gear_is_filed_in_it(studio):
+    kit = ms.make_kit(studio, character_id=KNIGHT["id"])
+    assert studio.http.posts[-1] == ("api/kits", {"character": KNIGHT["id"], "name": ""})
+    out = ms.add_to_kit(studio, kit_id=kit["id"], asset_id=PICTURE["id"])
+    assert out["gear"] == [{"id": PICTURE["id"], "name": "fox", "kind": "picture", "stage": "picture"}]
+    listed = ms.list_kits(studio)["kits"][0]
+    assert listed["character"]["name"] == "knight" and listed["gear"][0]["name"] == "fox"
+    assert listed["studio"].endswith(f"#asset={KNIGHT['id']}")
+
+
+def test_a_kit_says_which_of_its_assets_are_gone(studio):
+    studio.http.kits.append({"id": "kit-0000000b", "name": "old", "character": "ffffffffffff", "gear": []})
+    assert ms.list_kits(studio)["kits"][0]["character"] == {"id": "ffffffffffff", "missing": True}
+
+
+def test_making_a_kit_for_an_unknown_asset_sends_nothing(studio):
+    with pytest.raises(ms.StudioError, match="No asset"):
+        ms.make_kit(studio, character_id="ffffffffffff")
+    assert not studio.http.posts

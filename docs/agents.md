@@ -87,6 +87,7 @@ The studio does not need to be open: the first tool call starts it in the backgr
 | `list_assets` | Your Library |
 | `options` | Every knob, as the studio's Advanced panels show them: what each does, its default and when to try it |
 | `list_versions` | Every version of one character: its 3D models, Finishes and rigs, raw model included |
+| `list_kits`, `make_kit`, `add_to_kit` | Kits: a character and the gear made for it, kept together ([kits.md](kits.md)) |
 | `preview` | A picture of the asset from four sides, or four moments of one of its moves, so the agent can see it and show you |
 | `open_in_studio` | Opens the asset in your browser, so you can spin it and play its moves |
 | `model_info` | A model's numbers (triangles, vertices, textures and their sizes, bones, moves, file size) and its full path on your computer |
