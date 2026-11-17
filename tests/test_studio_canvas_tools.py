@@ -167,3 +167,14 @@ def test_the_quick_view_camera_stands_back_far_enough_to_see_the_whole_model():
     out = _run("canvas-view", "console.log(JSON.stringify([m.fitDistance(2, 90, 1), m.fitDistance(4, 35), m.fitDistance(0, 35)]))")
     assert out[0] == pytest.approx(1.0)                    # a 90° view sees 2 across from 1 away
     assert out[1] > 2 * 1.35 * 2 and out[2] > 0             # narrower view, further back; a flat model still has a camera
+
+
+def test_the_canvas_tooltip_sits_under_its_target_or_over_it_and_stays_on_the_board():
+    out = _run("canvas-view", """const area = { width: 800, height: 500 }, tip = { width: 200, height: 60 };
+      console.log(JSON.stringify([m.placeTip({ left: 300, top: 100, width: 100, height: 40 }, area, tip),
+        m.placeTip({ left: 300, top: 420, width: 100, height: 40 }, area, tip),
+        m.placeTip({ left: 5, top: 100, width: 20, height: 20 }, area, tip),
+        m.placeTip({ left: 780, top: 100, width: 20, height: 20 }, area, tip)]))""")
+    assert out[0] == {"left": 250, "top": 148}              # under, centred
+    assert out[1] == {"left": 250, "top": 352}              # no room under: over it
+    assert out[2]["left"] == 6 and out[3]["left"] == 594    # kept inside the board

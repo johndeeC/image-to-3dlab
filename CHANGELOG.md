@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Canvas: prompt → 4 pictures → carry on from each. A box's tries (a Picture asked for 4, or
   Make another) each get a tile of their own beside it, with their own dot: draw a line from
   any one to make the next step from that picture.
+- Canvas tooltips sit above every box at their normal size; they used to hide under the next
+  box and shrink when zoomed out.
 - Agents can build and run canvases: `box_types`, `list_canvases`, `get_canvas`, `edit_canvas`,
   `save_canvas`, `check_canvas`, `run_canvas`, `canvas_status`, `cancel_canvas_run`.
 

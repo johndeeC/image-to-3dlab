@@ -617,3 +617,7 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
   border: 2px solid var(--line-hi); cursor: crosshair; }
 .rtile .port.out:hover { border-color: var(--ember); background: var(--ember); }
 .canvas-lines .tie { fill: none; stroke: #8a7e76; stroke-width: 1; opacity: .45; }
+/* the canvas draws its own tooltip (canvas-pane.js) above every box, at normal size */
+.canvas-space [data-tip]:hover::after, .canvas-space [data-tip]:focus-visible::after { content: none; display: none; }
+.canvas-tip { position: absolute; z-index: 20; max-width: 260px; padding: 8px 10px; border-radius: 8px; background: #2a201b;
+  border: 1px solid var(--line); color: var(--bone); font: 400 12.5px/1.45 var(--f-ui); pointer-events: none; box-shadow: 0 8px 24px rgb(0 0 0 / .5); }

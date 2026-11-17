@@ -90,3 +90,14 @@ export function fitDistance(size, fovDeg = 35, room = 1.35) {
   const half = Math.max(1e-6, Number(size) || 0) / 2;
   return (half / Math.tan(((fovDeg * Math.PI) / 180) / 2)) * room;
 }
+
+/** Where the canvas's one tooltip goes: under its target, centred, or over it when there is no
+ *  room below, never past the board's edges. Rects are {left, top, width, height} in board pixels. */
+export function placeTip(target, area, tip, gap = 8, margin = 6) {
+  const below = target.top + target.height + gap;
+  const top = below + tip.height <= area.height - margin || target.top - gap - tip.height < margin
+    ? below : target.top - gap - tip.height;
+  const centred = target.left + target.width / 2 - tip.width / 2;
+  const left = Math.max(margin, Math.min(centred, area.width - tip.width - margin));
+  return { left: Math.round(left), top: Math.round(top) };
+}

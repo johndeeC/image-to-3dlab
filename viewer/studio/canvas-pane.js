@@ -8,7 +8,7 @@ import { NODES, NODE_W, PORT_Y, newGraph, addNode, removeNodes, moveNodes, setSe
   groupBounds, pickResult, downstreamOf, isChoice, edgeFile, useResult, addFromResult, tileFace, tagText,
   optionTiles, makeRoom, curve, OPTION_W, OPTION_OFFSET } from './canvas.js';
 import { openPeek } from './canvas-peek.js';
-import { identity, screenToBoard, zoomAt, zoomTo, zoomStep, panBy, wheelFactor, wheelIntent, fitAll, zoomPercent, rememberView, recallView } from './canvas-view.js';
+import { identity, screenToBoard, zoomAt, zoomTo, zoomStep, panBy, wheelFactor, wheelIntent, fitAll, zoomPercent, rememberView, recallView, placeTip } from './canvas-view.js';
 import { nodesInRect, toggle, addAll, keepExisting } from './canvas-select.js';
 import { createHistory, record, undo, redo } from './canvas-history.js';
 import { copyNodes, pasteNodes } from './canvas-clip.js';
@@ -86,6 +86,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       <div class="canvas-menu" role="menu" hidden></div>
       <div class="canvas-keys" hidden></div>
       <aside class="canvas-side" aria-label="The chosen box" hidden></aside>
+      <div class="canvas-tip" role="tooltip" hidden></div>
     </div>
     <div class="canvas-picker" hidden></div>
     <div class="row end"><button type="button" class="ghost small" data-drop data-tip="Removes this board only. What it made stays in the Library.">Delete canvas</button></div>`;
@@ -656,6 +657,29 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       else if (selection.length) { selection = []; render(); }
     },
   };
+
+  // ---------------------------------------------------------------- the one tooltip
+  // Tips on the board are drawn here, above every box and at their normal size: drawn by each
+  // box itself they sat under the next box and shrank as you zoomed out.
+  const tipBox = $('.canvas-tip');
+  let tipFor = null;
+  const hideTip = () => { tipFor = null; tipBox.hidden = true; };
+  board.addEventListener('pointerover', (event) => {
+    const target = event.target.closest?.('.canvas-space [data-tip]');
+    if (!target || drag) { if (!target) hideTip(); return; }
+    if (target === tipFor) return;
+    tipFor = target;
+    tipBox.textContent = target.dataset.tip;
+    tipBox.hidden = false;
+    const b = board.getBoundingClientRect(), t = target.getBoundingClientRect();
+    const at = placeTip({ left: t.left - b.left, top: t.top - b.top, width: t.width, height: t.height },
+      { width: board.clientWidth, height: board.clientHeight }, { width: tipBox.offsetWidth, height: tipBox.offsetHeight });
+    tipBox.style.left = `${at.left}px`;
+    tipBox.style.top = `${at.top}px`;
+  });
+  board.addEventListener('pointerleave', hideTip);
+  board.addEventListener('pointerdown', hideTip, true);
+  board.addEventListener('wheel', hideTip, { passive: true });
 
   // ---------------------------------------------------------------- pointer
   board.addEventListener('pointerdown', (event) => {
