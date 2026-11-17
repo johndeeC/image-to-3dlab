@@ -5,7 +5,8 @@
 // model at a time, a short gap between them, a cap per page load, and the result cached so a
 // second visit costs nothing. No timer runs while the tab is hidden.
 
-export const THUMB_PREFIX = 'af-thumb-v1:';
+// v2: rendered with room reflections; v1 drew shiny metal black, so those are drawn again
+export const THUMB_PREFIX = 'af-thumb-v2:';
 const INDEX_KEY = 'af-thumb-index';
 
 /** The file a row's thumbnail should come from, or null when the row already has a picture. */

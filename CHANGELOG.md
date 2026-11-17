@@ -49,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agents can build and run canvases: `box_types`, `list_canvases`, `get_canvas`, `edit_canvas`,
   `save_canvas`, `check_canvas`, `run_canvas`, `canvas_status`, `cancel_canvas_run`.
 
+### Fixed
+- Model thumbnails (the Library, the canvas) show shiny metal as metal: they were drawn
+  with nothing to reflect, so armour and blades came out black. Thumbnails saved before are
+  drawn again.
+
 ## [0.5.11] - 2026-11-17
 
 ### Added

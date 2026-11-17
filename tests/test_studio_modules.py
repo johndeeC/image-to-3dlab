@@ -1753,7 +1753,7 @@ def test_a_row_without_a_picture_asks_for_a_model_thumbnail():
       key: m.thumbKey('b.glb'),
     }));""")
     assert out == {"finished": "b.glb", "raw": "a.glb", "rigged": "c.glb",
-                   "pictured": None, "nothing": None, "key": "af-thumb-v1:b.glb"}
+                   "pictured": None, "nothing": None, "key": "af-thumb-v2:b.glb"}
 
 
 @needs_node

@@ -7,6 +7,7 @@
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const SIZE = 160;
 const FOV = 32;
@@ -14,6 +15,7 @@ const FOV = 32;
 export function createThumbnailRenderer({ size = SIZE } = {}) {
   let renderer = null;
   let loader = null;
+  let room = null;   // soft room reflections: metal with nothing to reflect rendered black
 
   const context = () => {
     if (renderer) return renderer;
@@ -22,6 +24,9 @@ export function createThumbnailRenderer({ size = SIZE } = {}) {
     renderer.setSize(size, size, false);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     loader = new GLTFLoader();
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    room = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmrem.dispose();
     return renderer;
   };
 
@@ -44,8 +49,10 @@ export function createThumbnailRenderer({ size = SIZE } = {}) {
       const scene = new THREE.Scene();
       const root = gltf.scene;
       scene.add(root);
-      scene.add(new THREE.HemisphereLight(0xffffff, 0x2a211c, 2.4));
-      const key = new THREE.DirectionalLight(0xffffff, 2.2);
+      scene.environment = room;
+      // the room lights the model too, so the lamps are dimmer than before it (2.4 and 2.2)
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x2a211c, 1.1));
+      const key = new THREE.DirectionalLight(0xffffff, 1.3);
       key.position.set(2, 4, 3);
       scene.add(key);
 
@@ -66,6 +73,8 @@ export function createThumbnailRenderer({ size = SIZE } = {}) {
       return data;
     },
     dispose() {
+      room?.dispose();
+      room = null;
       renderer?.dispose();
       renderer?.forceContextLoss?.();
       renderer = null;
