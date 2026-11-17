@@ -347,3 +347,14 @@ def test_a_fixed_try_takes_the_old_ones_place_and_a_failed_one_leaves_it():
     assert out["done"]["edges"][0]["file"] == "c.png" and out["done"]["nodes"][0]["picked"] == "c.png"
     assert out["failed"]["x"][1]["file"] == "b.png"
     assert [r["file"] for r in out["again"]["m"]] == ["m.glb", "n.glb"]
+
+
+def test_a_run_says_where_it_is_and_what_it_is_doing():
+    out = _run("""const run = { id: 'r', graph: 'g1', name: 'Knight parts', status: 'running', stage: 1, elapsed: 83,
+        plan: ['Starts from Picture you gave', 'Run 1, once for each of 3 parts: 3D model'] };
+      console.log(JSON.stringify([m.runBanner(run, 'g1'), m.runBanner(run, 'g2'), m.runBanner(null, 'g1'),
+        m.runBanner({ ...run, status: 'done' }, 'g2'), m.runBanner({ ...run, graph: 'g1', name: '' }, 'g2')]))""")
+    assert out[0] == {"here": True, "text": "Running: 3D model, once for each of 3 parts · 1 min 23 s"}
+    assert out[1] == {"here": False, "text": "Running on “Knight parts”: 3D model, once for each of 3 parts · 1 min 23 s"}
+    assert out[2] is None and out[3] is None
+    assert out[4]["text"].startswith("Running on another canvas:")

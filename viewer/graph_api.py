@@ -742,6 +742,13 @@ def plan_redo(raw: Any, node_id: str, file: str, note: str | None, results: dict
     return plan
 
 
+def doing(line: str) -> str:
+    """A plan line as what is happening: "Run 2, once for each part from run 1: 3D model" reads
+    "3D model, once for each part from run 1" (canvas.js runBanner says it the same way)."""
+    hit = re.match(r"^Run \d+(?:, (.*?))?: (.*)$", line)
+    return (f"{hit[2]}, {hit[1]}" if hit[1] else hit[2]) if hit else line
+
+
 def describe_plan(plan: Plan) -> list[str]:
     """The plan in plain lines, for the canvas to show before it runs. Only stages that make
     something are runs; a picture or model you gave is where they start."""
@@ -870,6 +877,11 @@ class GraphRun:
     again: bool = False          # a box made again: its new tries join the old ones
     started: float = field(default_factory=time.time)
 
+    def doing(self) -> str:
+        """What the run is on now, in the plan's words: "3D model, once for each of 3 parts"."""
+        lines = describe_plan(self.plan)
+        return doing(lines[min(self.stage, len(lines) - 1)]) if lines else "starting"
+
     def waiting_for_pick(self) -> list[str]:
         """The Picture boxes whose options wait for you to pick one."""
         by_id = {s.id: s for s in self.plan.stages}
@@ -915,8 +927,9 @@ class GraphRunner:
               before_stage: Callable[[GraphRun, int], Any] | None = None) -> GraphRun:
         plan = self.plan(graph, node, mode, redo_try=redo_try, note=note)   # refused here, before anything starts
         with self.lock:
-            if self.running() is not None:
-                raise RuntimeError("a canvas is already running; wait for it to finish")
+            busy = self.running()
+            if busy is not None:
+                raise RuntimeError(f"“{busy.name}” is running ({busy.doing()}). Wait for it to finish, or stop it there.")
             run = GraphRun(graph_id=graph.get("id"), name=_clean_text(graph.get("name"), NAME_LIMIT) or "Canvas", plan=plan,
                            again=again and mode == "only" and not redo_try)
             recent = sorted(self.runs.values(), key=lambda r: r.started)[-(KEEP_RUNS - 1):]

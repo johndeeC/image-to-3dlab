@@ -63,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ("make the cape dark red") and it is drawn again with that change; or **Make this one
   again** for a new picture, part or 3D model. Lines that carried the old try carry the new
   one. Agents: `run_canvas(fix_try=..., note=...)`.
+- Canvas: a line above the board shows any run that is going, here or on another canvas
+  (an agent's, another tab's): what it is doing, for how long, with **Open it** and **Stop**.
+  Asking for a second run names the canvas that is busy.
 
 ### Fixed
 - Canvas engine menus say which engine each choice is: "Best detail · Pixal3D", "Fastest, rough ·
@@ -74,6 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left one mirrored, so the two sides agree.
 - Canvas boxes each show the file their own step made, not the run's final model.
 - Cut out background works on generated pictures (their licence record was read wrong).
+- Canvas: opening the canvas while another one was running no longer showed that run's
+  results on the wrong boxes. The quick view fits a short window.
 
 ## [0.5.11] - 2026-11-17
 

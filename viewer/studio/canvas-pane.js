@@ -6,7 +6,7 @@
 import { NODES, NODE_W, PORT_Y, newGraph, addNode, removeNodes, moveNodes, setSetting, connect, canConnect, removeEdge,
   edgePath, starter, nodeState, runningNode, takersOf, addConnected, connectSelected, group, ungroup, renameGroup,
   groupBounds, pickResult, downstreamOf, isChoice, edgeFile, useResult, addFromResult, tileFace, tagText,
-  optionTiles, makeRoom, curve, OPTION_W, OPTION_OFFSET, redoChoices, mergeRun, finishRun } from './canvas.js';
+  optionTiles, makeRoom, curve, OPTION_W, OPTION_OFFSET, redoChoices, mergeRun, finishRun, runBanner } from './canvas.js';
 import { openPeek } from './canvas-peek.js';
 import { libraryChoices, assetIdsFor } from './canvas-library.js';
 import { identity, screenToBoard, zoomAt, zoomTo, zoomStep, panBy, wheelFactor, wheelIntent, fitAll, zoomPercent, rememberView, recallView, placeTip } from './canvas-view.js';
@@ -53,6 +53,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
 
   let graph = newGraph(), saved = [], view = identity(), selection = [], history = createHistory();
   let run = null, chain = null, timer = null, saveTimer = null, saving = Promise.resolve();
+  let elsewhere = null, watchTimer = null;   // a run on another canvas (an agent's, another tab's)
   let tool = 'pointer', spaceHeld = false, drag = null, menu = null, pastes = 0;
   let kits = [];   // the Library's kits (docs/kits.md): a box's models can be filed into one
   const cards = new Map();   // box id -> its element
@@ -81,6 +82,9 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       <button type="button" class="ghost small" data-help aria-label="Keyboard shortcuts">?</button>
     </div>
     <p class="hint canvas-say" aria-live="polite"></p>
+    <div class="canvas-running" role="status" hidden><span class="spin" aria-hidden="true"></span><span data-running-words></span>
+      <button type="button" class="ghost small" data-run-open data-tip="Opens the canvas that is running, to watch its boxes.">Open it</button>
+      <button type="button" class="ghost small" data-run-stop data-tip="Stops after the step that is running. What it made is kept.">Stop</button></div>
     <div class="canvas-board" tabindex="0" aria-label="Canvas board">
       <div class="canvas-space"><div class="canvas-frames"></div><svg class="canvas-lines" aria-hidden="true"></svg><div class="canvas-options"></div><div class="canvas-nodes"></div></div>
       <p class="hint canvas-empty">An empty board. Double-click it, press Tab or use + Add.</p>
@@ -425,6 +429,12 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   }
 
   function openGraph(next) {
+    if (run && run.graph !== next.id) {   // its boxes are not on this canvas: show it above the board instead
+      clearTimeout(timer);
+      elsewhere = run;
+      run = null;
+      chain = null;
+    }
     graph = { groups: [], ...next };
     history = createHistory();
     selection = [];
@@ -481,6 +491,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       return;
     }
     render();
+    renderBanner();
     if (run.status === 'running') {
       const line = run.plan[run.stage] ? run.plan[run.stage].replace(/^Run \d+[^:]*: /, '') : '';
       say(`Running ${line}… You can close this; it keeps going.`);
@@ -500,7 +511,32 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     for (const n of graph.nodes) if (optionTiles(roomy, n, nodeState(merged(), n.id).files).length) roomy = makeRoom(roomy, n.id, ROOM);
     if (roomy !== graph) apply(keepRun(roomy));
     render();
+    renderBanner();
     on.ran?.();
+  }
+
+  // ---------------------------------------------------------------- what is running, and where
+  function renderBanner() {
+    const said = runBanner(run || elsewhere, graph.id);
+    const box = $('.canvas-running');
+    box.hidden = !said;
+    if (!said) return;
+    box.querySelector('[data-running-words]').textContent = said.text;
+    box.querySelector('[data-run-open]').hidden = said.here;
+  }
+
+  /** Every few seconds: a run started anywhere (an agent, another tab) shows above the board,
+   *  and this canvas's own run is followed on its boxes. */
+  async function watch() {
+    clearTimeout(watchTimer);
+    if (!el.isConnected) return;
+    if (!run) {
+      let running = null;
+      try { ({ running } = await json(await fetchImpl('/api/graph-runs'))); } catch { /* the studio is restarting */ }
+      if (running && running.graph === graph.id) { elsewhere = null; follow(running.id); }
+      else { elsewhere = running; renderBanner(); }
+    }
+    watchTimer = setTimeout(watch, Math.max(interval * 2, 3000));
   }
 
   async function start(body) {
@@ -509,7 +545,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       const started = await json(await post(fetchImpl, `/api/graphs/${graph.id}/run`, body));
       say(started.plan.join(' · '));
       follow(started.id);
-    } catch (error) { say(error.message, true); }
+    } catch (error) { say(error.message, true); watch(); }
   }
 
   // ---------------------------------------------------------------- menus
@@ -966,6 +1002,13 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       t.disabled = true;
       await start({});
       t.disabled = false;
+    } else if (t.dataset.runStop !== undefined && (run || elsewhere)) {
+      fetchImpl(`/api/graph-runs/${(run || elsewhere).id}/cancel`, { method: 'POST' }).catch(() => {});
+      say('Stopping after the step that is running…');
+    } else if (t.dataset.runOpen !== undefined && elsewhere) {
+      await loadList();
+      const there = saved.find((g) => g.id === elsewhere.graph);
+      if (there) { openGraph(there); watch(); } else say('That canvas was deleted; its run still finishes.', true);
     } else if (t.dataset.stop !== undefined && run) {
       fetchImpl(`/api/graph-runs/${run.id}/cancel`, { method: 'POST' }).catch(() => {});
       say('Stopping after the step that is running…');
@@ -1028,10 +1071,11 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
 
   function close() {
     clearTimeout(timer);
+    clearTimeout(watchTimer);
     if (saveTimer) saveNow().catch(() => {});
     el.remove();
   }
-  el.onSheetClose = () => { clearTimeout(timer); if (saveTimer) saveNow().catch(() => {}); };
+  el.onSheetClose = () => { clearTimeout(timer); clearTimeout(watchTimer); if (saveTimer) saveNow().catch(() => {}); };
 
   // a run that is already going (the tab was reopened) is picked back up
   (async () => {
@@ -1040,7 +1084,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     let running = null;
     try { ({ running } = await json(await fetchImpl('/api/graph-runs'))); } catch { /* an older server */ }
     openGraph((running && saved.find((g) => g.id === running.graph)) || saved[0] || newGraph());
-    if (running) follow(running.id);
+    watch();   // follows this canvas's run, or shows another's above the board
     board.focus({ preventScroll: true });
   })();
   return { element: el };

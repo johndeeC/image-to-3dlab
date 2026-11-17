@@ -935,3 +935,18 @@ def test_a_failed_fix_keeps_the_old_try(tmp_path):
     assert run.status == "error"
     last = ga.get_graph(tmp_path, saved["id"])["last_run"]
     assert last["results"]["x"] == PART_TRIES["x"] and last["error"] == "it broke"
+
+
+def test_a_second_run_is_told_which_canvas_is_running_and_what_it_is_doing(tmp_path):
+    runner, _jobs = _graph_runner(tmp_path)
+    held = []
+
+    def hold(run, index):   # the first run stays "running" while a second one is asked for
+        if not held:
+            held.append(run)
+            with pytest.raises(RuntimeError) as busy:
+                runner.start({**PARTS, "name": "Other"}, background=False)
+            held.append(str(busy.value))
+
+    runner.start(PARTS, background=False, before_stage=hold)
+    assert held[1] == "“Knight parts” is running (Starts from Picture you gave). Wait for it to finish, or stop it there."

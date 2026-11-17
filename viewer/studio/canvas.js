@@ -419,3 +419,18 @@ export function finishRun(graph, run) {
   }
   return g;
 }
+
+/** What a canvas run is doing and where, for the line above the board: `here` when it is this
+ *  canvas's run (its boxes show it too), else which canvas it is on. Null when nothing runs.
+ *  "Run 2, once for each part: 3D model" reads "3D model, once for each part" (graph_api.doing). */
+export function runBanner(run, graphId) {
+  if (!run || run.status !== 'running') return null;
+  const line = run.plan?.[Math.min(run.stage, run.plan.length - 1)] || 'starting';
+  const hit = /^Run \d+(?:, (.*?))?: (.*)$/.exec(line);
+  const doing = hit ? (hit[1] ? `${hit[2]}, ${hit[1]}` : hit[2]) : line;
+  const secs = Math.round(run.elapsed || 0);
+  const time = secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)} min ${secs % 60} s`;
+  const here = run.graph === graphId;
+  const where = here ? 'Running' : run.name ? `Running on “${run.name}”` : 'Running on another canvas';
+  return { here, text: `${where}: ${doing} · ${time}` };
+}
