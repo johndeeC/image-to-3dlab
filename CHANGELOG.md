@@ -65,6 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Model thumbnails (the Library, the canvas) show shiny metal as metal: they were drawn
   with nothing to reflect, so armour and blades came out black. Thumbnails saved before are
   drawn again.
+- Four views: the left view now faces the way Hunyuan3D-2mv reads it, and the right view is the
+  left one mirrored, so the two sides agree.
+- Canvas boxes each show the file their own step made, not the run's final model.
+- Cut out background works on generated pictures (their licence record was read wrong).
 
 ## [0.5.11] - 2026-11-17
 
