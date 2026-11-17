@@ -189,7 +189,8 @@ def test_every_box_setting_on_screen_is_one_the_server_keeps():
 
 def test_every_choice_on_screen_is_a_value_the_server_keeps():
     tools = {"engines": [{"id": "pixal3d", "label": "Pixal3D (C++/GGML)"}, {"id": "newthing", "label": "New"}],
-             "presets": [{"id": "walk", "label": "Walk"}], "pictureEngines": [{"id": "qwen-image", "label": "Qwen", "installed": True}]}
+             "presets": [{"id": "walk", "label": "Walk"}], "pictureEngines": [{"id": "qwen", "label": "Qwen-Image 2.1 (text to image)", "installed": True},
+                                {"id": "flux-light", "label": "FLUX", "installed": False}]}
     fields = _settings(f"""const t = {json.dumps(tools)};
       console.log(JSON.stringify(Object.fromEntries(Object.entries(m.FIELDS).map(([type, fs]) => [type,
         fs.filter((f) => f[3] === 'select').map((f) => [f[0], f[4](t)])]))))""")
@@ -201,6 +202,8 @@ def test_every_choice_on_screen_is_a_value_the_server_keeps():
                 if value != "":
                     assert ga.clean_settings(box, {key: value}) != {}, (box, key, value)
     assert dict(fields["model"])["engine"] == [["pixal3d", "Best detail"], ["newthing", "New"]]
+    # the catalog's picture engine ids, named by what they do; one not installed is not offered
+    assert dict(fields["picture"])["picture_engine"] == [["", "The usual one"], ["qwen", "Follows long descriptions"]]
 
 
 def test_a_form_value_becomes_what_the_box_keeps():

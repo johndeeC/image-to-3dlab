@@ -14,10 +14,11 @@ export const ENGINE_WORDS = {
   'hunyuan-mlx': ['Shape and paint, older pairing', 'The earlier shape and paint pair.'],
   sf3d: ['Fastest, rough', 'A quick look in seconds. Lighting is baked into the colours.'],
 };
+// keyed by the ids /api/catalog's picture_engines use (the ones a run's picture_engine takes)
 export const PICTURE_ENGINE_WORDS = {
-  'flux-image': ['Quick pictures', 'Fast, and the pictures are yours for any use.'],
-  'flux-image-light': ['Quick pictures, less memory', 'The same pictures for Macs with 16 GB or less.'],
-  'qwen-image': ['Follows long descriptions', 'Slower, but sticks closely to what you wrote.'],
+  flux: ['Quick pictures', 'Fast, and the pictures are yours for any use.'],
+  'flux-light': ['Quick pictures, less memory', 'The same pictures for Macs with 16 GB or less.'],
+  qwen: ['Follows long descriptions', 'Slower, but sticks closely to what you wrote.'],
 };
 
 const words = (table, id, fallback) => (table[id] ? table[id][0] : fallback || id);
