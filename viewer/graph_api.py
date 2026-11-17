@@ -40,17 +40,18 @@ _LOCK = threading.Lock()     # the server answers on threads; one write at a tim
 
 # What each box is called, what it takes in, what it makes, and its runner step.
 # viewer/studio/canvas.js has the same table; tests/test_studio_canvas.py checks they agree.
-LABELS = {"picture": "Picture", "asset": "Your 3D model", "back": "Front + back", "parts": "Pick out parts", "model": "3D model",
+LABELS = {"picture": "Picture", "asset": "Your 3D model", "back": "Front + back", "parts": "Pick out parts", "model": "3D model", "repaint": "Repaint",
           "split": "Split into props", "finish": "Finish", "rig": "Rig", "move": "Move", "export": "Export"}
-TAKES = {"picture": (), "asset": (), "back": ("picture",), "parts": ("picture",), "model": ("picture", "pair"), "split": ("model",),
+TAKES = {"picture": (), "asset": (), "back": ("picture",), "parts": ("picture",), "model": ("picture", "pair"),
+         "repaint": ("model", "finished", "props"), "split": ("model",),
          "finish": ("model",), "rig": ("model", "finished", "props"), "move": ("rigged",),
          "export": ("model", "finished", "rigged", "animated", "props")}
-MAKES = {"picture": "picture", "asset": "model", "back": "pair", "parts": "picture", "model": "model", "split": "props",
+MAKES = {"picture": "picture", "asset": "model", "back": "pair", "parts": "picture", "model": "model", "repaint": "model", "split": "props",
          "finish": "finished", "rig": "rigged", "move": "animated", "export": None}
-STEP = {"picture": "picture", "back": "back", "parts": "part", "model": "model", "split": "split", "finish": "finished",
+STEP = {"picture": "picture", "back": "back", "parts": "part", "model": "model", "repaint": "repaint", "split": "split", "finish": "finished",
         "rig": "rigged", "move": "animated"}
 # the runner's `made` key each box's file lands under (split: the folder its props went to)
-MADE_KEY = {"picture": "picture", "asset": "model", "back": "back", "parts": "picture", "model": "model", "split": "split",
+MADE_KEY = {"picture": "picture", "asset": "model", "back": "back", "parts": "picture", "model": "model", "repaint": "model", "split": "split",
             "finish": "finished", "rig": "rigged", "move": "animated"}
 ROOTS = ("picture", "asset")
 # Boxes whose results all carry on, each its own run below: a Split's props, a Pick out parts' parts.
@@ -70,6 +71,7 @@ SETTINGS: dict[str, dict[str, tuple]] = {
     "asset": {"file": ("path",), "goal": ("choice", "character", "prop")},
     "back": {},
     "parts": {"names": ("text",)},
+    "repaint": {"file": ("path",)},
     "model": {"engine": ("text",)},
     "split": {"names": ("text",)},
     "finish": {"detail": ("choice", *FINISH_DETAILS), "pixel_match": ("bool",),
@@ -280,6 +282,7 @@ class Stage:
     each_prop: bool = False      # run once for each prop the stage before split off
     only_prop: str | None = None # ... or for just this one, by name (one prop dragged onto the line)
     parts: list[str] = field(default_factory=list)   # a Pick out parts box: one run per part, by name
+    paint_from: str | None = None   # a Repaint box's own picture (else the picture the model was made from)
     only_part: str | None = None # below Pick out parts: just this part (one dragged onto the line)
     want: str = "character"
     prompt: str | None = None
@@ -395,6 +398,13 @@ def _check(raw: Any, keep: set[str] | None = None, above: set[str] = frozenset()
         root_of[i] = at
     for i, n in nodes.items():
         root = nodes[root_of[i]]
+        if n["type"] == "repaint" and i not in above and not n["settings"].get("file"):
+            up, at = [], parent.get(i)
+            while at is not None:
+                up.append(nodes[at]["type"])
+                at = parent.get(at)
+            if root["type"] != "picture" or "split" in up:
+                raise ValueError("Repaint: pick a picture to paint it from (its line has none to give it).")
         if n["type"] == "split" and root["type"] == "picture" and not root["settings"].get("file") \
                 and root["settings"].get("goal", "character") != "set":
             raise ValueError("Split into props needs a sheet of nine: set its Picture to a sheet of nine.")
@@ -482,6 +492,8 @@ class _Planner:
                 stage.engine = s["engine"]
             elif kind == "parts":
                 stage.parts = part_names(s["names"])
+            elif kind == "repaint" and s.get("file"):
+                stage.paint_from = s["file"]
             elif kind == "split":
                 stage.want = "set"
                 if s.get("names"):
@@ -851,13 +863,14 @@ class GraphRunner:
                 return None
             picture = ({**stage.picture_settings, "seed": self.random()} if "picture" in stage.steps
                        else {"seed": self.random()} if "part" in stage.steps else {})
+            made = {**job["made"], **({"picture": stage.paint_from} if stage.paint_from else {})}
             chain = Chain(title=title, steps=list(stage.steps), want=stage.want, prompt=stage.prompt,
                           engine=stage.engine, first_move=stage.first_move, picture_engine=stage.picture_engine,
                           picture_settings=picture, finish_settings=dict(stage.finish_settings),
                           split_settings=dict(stage.split_settings), rig_settings=dict(stage.rig_settings),
-                          move_settings=dict(stage.move_settings), made=dict(job["made"]), client=client,
+                          move_settings=dict(stage.move_settings), made=made, client=client,
                           part_name=job.get("part"),
-                          model_seed=self.random() if "model" in stage.steps else None)
+                          model_seed=self.random() if {"model", "repaint"} & set(stage.steps) else None)
             run.current_chain = chain.id
             try:
                 self.chains.submit(chain, background=False)

@@ -11,6 +11,7 @@ export const NODES = {
   parts: { tone: 'draw', label: 'Pick out parts', hint: 'Redraws each part you name (head, hair, hands) on its own, so each can become its own 3D model.', takes: ['picture'], makes: 'picture', step: 'part' },
   model: { tone: 'shape', label: '3D model', hint: 'Builds a 3D model from the picture.', takes: ['picture', 'pair'], makes: 'model', step: 'model' },
   split: { tone: 'shape', label: 'Split into props', hint: 'Cuts a sheet of nine into separate game-ready props.', takes: ['model'], makes: 'props', step: 'split' },
+  repaint: { tone: 'finish', label: 'Repaint', hint: 'Paints the model again from a picture: a new look on the same shape.', takes: ['model', 'finished', 'props'], makes: 'model', step: 'repaint' },
   finish: { tone: 'finish', label: 'Finish', hint: 'Makes the model game-ready: cleaner shape, lighter file.', takes: ['model'], makes: 'finished', step: 'finished' },
   rig: { tone: 'move', label: 'Rig', hint: 'Adds a skeleton so it can move. Humanoids work best.', takes: ['model', 'finished', 'props'], makes: 'rigged', step: 'rigged' },
   move: { tone: 'move', label: 'Move', hint: 'Plays a move on the rigged model.', takes: ['rigged'], makes: 'animated', step: 'animated' },

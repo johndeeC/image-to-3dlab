@@ -444,7 +444,7 @@ def test_job_status_payload_names_the_model_once_it_is_on_disk(tmp_path, monkeyp
 def test_backend_registry_lists_every_backend():
     assert set(api.BACKENDS) == {
         "trellis", "sf3d", "hunyuan-mlx", "hunyuan-mlx-xiong", "pixal3d", "hunyuan-cuda",
-        "hunyuan-rocm",
+        "hunyuan-rocm", "hunyuan-paint",
     }
     for spec in api.BACKENDS.values():
         assert spec.stages, f"{spec.id} must declare at least one stage"
@@ -2358,3 +2358,33 @@ def test_the_rig_upload_reads_the_bone_names_choice_and_refuses_an_unknown_one()
     rig = source[source.index("def _create_animate_rig"):source.index("def _create_animate_play")]
     assert "bone_names_choice(form)" in rig and "bone_names=" in rig
     assert "except ValueError" in rig
+
+
+
+# --- Repaint (the canvas's Repaint box) -----------------------------------------------
+
+def test_a_repaint_names_a_model_inside_output_and_nothing_else(tmp_path):
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "m.glb").write_bytes(b"glb")
+    (tmp_path / "run" / "notes.txt").write_text("x")
+    assert api.repaint_mesh(tmp_path, "run/m.glb") == (tmp_path / "run" / "m.glb").resolve()
+    for bad in ("run/missing.glb", "run/notes.txt", "../outside.glb", ""):
+        with pytest.raises(ValueError, match="not a 3D model in output"):
+            api.repaint_mesh(tmp_path, bad)
+
+
+def test_a_repaint_keeps_its_settings_in_bounds_and_builds_its_command(tmp_path, monkeypatch):
+    spec = api.BACKENDS["hunyuan-paint"]
+    settings = spec.validate_settings({"mesh": "run/m.glb", "paint_seed": "3", "unknown": 1})
+    assert settings["paint_seed"] == 3 and "unknown" not in settings
+    for bad in ({"paint_tex": 999}, {"decimation_target": 10}, {"paint_steps": 0}, {"paint_res": 300}):
+        with pytest.raises(ValueError):
+            spec.validate_settings(bad)
+    monkeypatch.setattr(api, "OUTPUT_ROOT", tmp_path)
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "m.glb").write_bytes(b"glb")
+    job = api.Job("0" * 32, tmp_path, tmp_path / "in.png", tmp_path / "out.glb", settings, "hunyuan-paint")
+    args = spec.build_args(job)
+    assert args[:3] == [str((tmp_path / "run" / "m.glb").resolve()), str(tmp_path / "in.png"), str(tmp_path / "out.glb")]
+    assert args[args.index("--paint-seed") + 1] == "3"
+    assert spec.wrapper.name == "hunyuan_mlx_retexture.py"

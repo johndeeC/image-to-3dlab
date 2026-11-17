@@ -25,12 +25,12 @@ from usage_api import CLIENT_HEADER
 HISTORY_NAME = ".activity.jsonl"
 TERMINAL = {"done", "error", "cancelled"}
 STALL_SECONDS = 180
-STEPS = ("picture", "back", "model", "finished", "split", "rigged", "animated", "part")
+STEPS = ("picture", "back", "model", "finished", "split", "rigged", "animated", "part", "repaint")
 LABELS = {"picture": "Picture", "back": "Back picture", "model": "3D model", "finished": "Finish",
           "split": "Split into props", "rigged": "Rig", "animated": "Animate", "skin": "Skin",
-          "part": "Pick out a part"}
+          "part": "Pick out a part", "repaint": "Repaint"}
 KIND = {"picture": "image", "back": "image", "model": "generate", "finished": "finish", "split": "props",
-        "rigged": "animate", "animated": "animate", "part": "image"}
+        "rigged": "animate", "animated": "animate", "part": "image", "repaint": "generate"}
 # The Finish choices a plan may carry (the same ones the Steps panel's Finish sends).
 MOVE_KEYS = ("speed", "arm_spread", "in_place")
 SPLIT_KEYS = ("names",)       # what a plan may tell the props job (props_api.normalise_names checks them)
@@ -318,6 +318,10 @@ class ChainRunner:
         elif step == "part":
             # the part is the picture from here on: the 3D model and Finish work from it
             chain.made["picture"] = final.get("picture")
+        elif step == "repaint":
+            # the repainted model is the model from here on; the old finished one would be rigged instead
+            chain.made["model"] = final.get("model")
+            chain.made.pop("finished", None)
         elif step == "model":
             chain.made["model"] = final.get("model")
         elif step == "finished":
@@ -412,6 +416,13 @@ class ChainRunner:
             body = {"picture": chain.made["picture"], "part": chain.part_name, "prefer_engine": chain.picture_engine,
                     **({"seed": chain.picture_settings["seed"]} if "seed" in chain.picture_settings else {})}
             return kind, self._post("/api/image/part", json.dumps(body).encode(), "application/json")
+        if step == "repaint":
+            mesh = chain.made.get("finished") or chain.made.get("model")
+            if not mesh or not (chain.made.get("picture") or chain.upload):
+                raise ValueError("Repaint needs a 3D model and a picture to paint it from")
+            settings = {"backend": "hunyuan-paint", "mesh": mesh, "paint_seed": chain.model_seed or 0}
+            body, ctype = multipart({"settings": json.dumps(settings)}, {"image": self._picture(chain)})
+            return kind, self._post("/api/generate", body, ctype)
         if step == "model":
             settings = {"backend": chain.engine} if chain.engine else {}
             if chain.model_seed is not None:
@@ -475,7 +486,7 @@ class ChainRunner:
                   "made": chain.made.get({"picture": "picture", "back": "back", "model": "model",
                                           "finished": "finished", "rigged": "rigged",
                                           "animated": "animated", "split": "split",
-                                          "part": "picture"}.get(step, ""), None),
+                                          "part": "picture", "repaint": "model"}.get(step, ""), None),
                   "log": str(log or "")[-3000:]}
         append_history(self.output, record)
 

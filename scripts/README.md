@@ -61,6 +61,7 @@ game-ready LODs), start with [the prop sheet guide](../docs/prop-sheets.md).
 | `hunyuan_rocm_generate.py` | Full image -> textured GLB through Tencent's own Hunyuan3D-2.1 on an AMD card. |
 | `hunyuan_mlx_generate.py` | End-to-end Hunyuan3D-MLX generation: image -> textured GLB. |
 | `hunyuan_mlx_xiong_generate.py` | End-to-end, single-repo Hunyuan3D-MLX generation: image -> textured GLB. |
+| `hunyuan_mlx_retexture.py` | Repaint an existing 3D model from a picture with the Hunyuan3D paint stage. |
 | `hunyuan_shape_octree_test.py` | Shape-only generation at a given octree_resolution, with visible progress. |
 | `trellis_stage3.py` | Resample only TRELLIS.2's Stage-3 material field on a cached shape latent. |
 | `trellis_rebake.py` | Re-bake a GLB from a cached decode, without re-sampling or loading the model. |

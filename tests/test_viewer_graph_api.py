@@ -699,3 +699,36 @@ def test_a_part_step_asks_for_the_part_by_name_and_hands_its_picture_on(tmp_path
     assert chain.made["picture"] == "images/left-hand__part__1/left-hand__part__1.png"   # the 3D model is made from the part
     refused = runner.submit(aa.Chain(title="x", steps=["part"], made={}), background=False)
     assert refused.status == "error" and "needs a picture" in refused.error     # nothing to pick parts from
+
+
+# ---------------------------------------------------------------- Repaint (re-texture)
+def test_a_repaint_paints_the_model_above_it_from_the_picture_and_hands_the_new_one_on(tmp_path):
+    g = graph([node("p", "picture", prompt="a knight"), node("m", "model", engine="sf3d"), node("f", "finish"),
+               node("r", "repaint"), node("g", "rig")], [("p", "m"), ("m", "f"), ("f", "r"), ("r", "g")])
+    assert ga.plan_graph(g, RECIPES).stages[0].steps == ["picture", "model", "finished", "repaint", "rigged"]
+    jobs = FakeJobs(tmp_path)
+    sent = []
+    runner = aa.ChainRunner(tmp_path, lambda *a, **k: (sent.append(a), jobs(*a, **k))[1], poll=0, sleep=lambda s: None)
+    (tmp_path / "images").mkdir()
+    (tmp_path / "images" / "k.png").write_bytes(b"png")
+    chain = runner.submit(aa.Chain(title="x", steps=["repaint", "rigged"], model_seed=5,
+                                   made={"picture": "images/k.png", "model": "m/raw.glb", "finished": "finish/k_20k.glb"}),
+                          background=False)
+    body = next(a[2] for a in sent if a[1] == "/api/generate").decode()
+    assert '"backend": "hunyuan-paint"' in body and '"mesh": "finish/k_20k.glb"' in body and "k.png" in body
+    assert chain.status == "done" and chain.made["model"].endswith("model.glb") and "finished" not in chain.made
+    rig = next(a[2] for a in sent if a[1] == "/api/animate/rig").decode()
+    assert chain.made["model"] in rig                 # the rig takes the repainted model, not the old finished one
+
+
+def test_a_repaint_with_no_picture_on_its_line_must_be_given_one():
+    g = graph([node("a", "asset", file="m/k.glb"), node("r", "repaint")], [("a", "r")])
+    with pytest.raises(ValueError, match="Repaint: pick a picture"):
+        ga.plan_graph(g, RECIPES)
+    g["nodes"][1]["settings"]["file"] = "images/new-look.png"
+    stage = ga.plan_graph(g, RECIPES).stages[0]
+    assert stage.steps == ["repaint"] and stage.paint_from == "images/new-look.png"
+    below_split = graph([node("s1", "picture", prompt="nine swords", goal="set"), node("s2", "model", engine="sf3d"),
+                         node("s3", "split"), node("r", "repaint")], [("s1", "s2"), ("s2", "s3"), ("s3", "r")])
+    with pytest.raises(ValueError, match="Repaint: pick a picture"):
+        ga.plan_graph(below_split, RECIPES)

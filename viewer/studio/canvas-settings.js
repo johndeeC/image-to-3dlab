@@ -61,6 +61,9 @@ export const FIELDS = {
   parts: [
     ['names', 'Parts', 'One per line or with commas: head, hair, left hand. Each is redrawn on its own.', 'area'],
   ],
+  repaint: [
+    ['file', 'Paint from', 'A picture of the new look. Leave it empty to paint from the picture the model was made from.', 'file'],
+  ],
   model: [
     ['engine', 'Engine', 'Which engine builds the 3D model.', 'select', (t) => (t.engines || []).map((e) => [e.id, words(ENGINE_WORDS, e.id, e.label)])],
   ],

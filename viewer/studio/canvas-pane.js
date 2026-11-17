@@ -172,7 +172,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       const file = node.settings[box.dataset.fileField];
       const html = file
         ? `<span class="hint" title="${esc(file)}">${esc(file.split('/').pop())}</span><button type="button" class="x" data-clear-file aria-label="Stop using this file">×</button>`
-        : `<button type="button" class="ghost small" data-library>From Library</button>${node.type === 'picture' ? '<button type="button" class="ghost small" data-upload>Upload</button>' : ''}`;
+        : `<button type="button" class="ghost small" data-library>From Library</button>${['picture', 'repaint'].includes(node.type) ? '<button type="button" class="ghost small" data-upload>Upload</button>' : ''}`;
       if (box.dataset.shown !== html) { box.innerHTML = html; box.dataset.shown = html; }
     }
   }
@@ -567,7 +567,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   // ---------------------------------------------------------------- the Library picker
   async function pickFromLibrary(id) {
     const node = graph.nodes.find((n) => n.id === id);
-    const want = node.type === 'picture' ? 'picture' : 'model';
+    const want = ['picture', 'repaint'].includes(node.type) ? 'picture' : 'model';   // a Repaint box takes a picture too
     const box = $('.canvas-picker');
     box.hidden = false;
     box.dataset.for = id;

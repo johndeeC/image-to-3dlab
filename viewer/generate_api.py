@@ -2232,6 +2232,69 @@ def _hunyuan_xiong_readiness() -> dict[str, Any]:
     }
 
 
+# Repaint (the canvas's Repaint box): the Hunyuan paint stage on a model that already exists,
+# from a picture. scripts/hunyuan_mlx_retexture.py; same venvs and paint weights as Xiong's route.
+HUNYUAN_PAINT_WRAPPER = REPO / "scripts" / "hunyuan_mlx_retexture.py"
+HUNYUAN_PAINT_DEFAULT_SETTINGS: dict[str, Any] = {
+    "mesh": "", "decimation_target": 300_000, "paint_seed": 0, "paint_res": 512, "paint_steps": 15, "paint_tex": 4096,
+}
+REPAINT_MESH_SUFFIXES = {".glb", ".gltf", ".obj", ".ply"}
+
+
+def repaint_mesh(output_root: Path, relative: str) -> Path:
+    """The model a repaint reads: a file inside output/ (named by its place there, never a path elsewhere)."""
+    root = output_root.resolve()
+    path = (root / str(relative)).resolve()
+    if root not in path.parents or not path.is_file() or path.suffix.lower() not in REPAINT_MESH_SUFFIXES:
+        raise ValueError(f"not a 3D model in output/: {relative}")
+    return path
+
+
+def _hunyuan_paint_validate_settings(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("settings must be a JSON object")
+    settings = dict(HUNYUAN_PAINT_DEFAULT_SETTINGS)
+    for key, value in raw.items():
+        if key not in settings:
+            continue
+        if key == "mesh":
+            settings[key] = str(value or "")
+            continue
+        try:
+            settings[key] = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be a whole number") from exc
+    if not 1_000 <= settings["decimation_target"] <= 500_000:
+        raise ValueError("decimation_target must be between 1,000 and 500,000 (the bake stalls past that)")
+    if settings["paint_tex"] not in (1024, 2048, 4096):
+        raise ValueError("paint_tex must be 1024, 2048 or 4096")
+    if not 1 <= settings["paint_steps"] <= 50 or settings["paint_res"] not in (384, 512):
+        raise ValueError("paint_steps is 1 to 50 and paint_res is 384 or 512")
+    return settings
+
+
+def _hunyuan_paint_build_args(job: Job) -> list[str]:
+    s = job.settings
+    return [
+        str(repaint_mesh(OUTPUT_ROOT, s["mesh"])), str(job.image_path), str(job.output_path),
+        "--decimation-target", str(s["decimation_target"]), "--paint-seed", str(s["paint_seed"]),
+        "--paint-res", str(s["paint_res"]), "--paint-steps", str(s["paint_steps"]), "--paint-tex", str(s["paint_tex"]),
+    ]
+
+
+def _hunyuan_paint_readiness() -> dict[str, Any]:
+    parts = {"shape venv (hunyuan_mlx/shape/.venv)": HUNYUAN_XIONG_SHAPE_VENV.is_file(),
+             "paint venv (hunyuan_mlx/paint/.venv)": HUNYUAN_PAINT_VENV.is_file(),
+             "paint weights (hunyuan_mlx/paint/weights/hunyuan3d-paintpbr-v2-1)": HUNYUAN_PAINT_WEIGHTS.is_dir(),
+             "scripts/hunyuan_mlx_retexture.py": HUNYUAN_PAINT_WRAPPER.is_file()}
+    missing = [name for name, ok in parts.items() if not ok]
+    ready = not missing
+    return {"schema_version": 1, "ready": ready, "missing_weights": missing, "weights": {},
+            "build": {"present": ready, "hint": None if ready else (
+                "Repaint uses the Hunyuan3D-MLX paint stage, which is not set up: missing "
+                + "; ".join(missing) + ". Setup's Hunyuan3D-MLX (fast and clean) route installs it.")}}
+
+
 PIXAL3D_DEFAULT_SETTINGS: dict[str, Any] = {
     "res": 1024,
     "seed": 42,
@@ -2640,6 +2703,14 @@ BACKENDS.update({
         stage_labels=HUNYUAN_STAGE_LABELS, requires_alpha=True,  # its shape stage trusts alpha
         validate_settings=_hunyuan_validate_settings, build_args=_hunyuan_build_args,
         parse_line=_hunyuan_parse_line, readiness=_hunyuan_readiness,
+    ),
+    "hunyuan-paint": BackendSpec(
+        id="hunyuan-paint", label="Repaint (Hunyuan3D-MLX paint)",
+        interpreter=HUNYUAN_XIONG_SHAPE_VENV, wrapper=HUNYUAN_PAINT_WRAPPER,
+        default_settings=HUNYUAN_PAINT_DEFAULT_SETTINGS, stages=HUNYUAN_STAGES,
+        stage_labels=HUNYUAN_STAGE_LABELS, requires_alpha=True,   # the paint reads a cut-out, as Xiong's route does
+        validate_settings=_hunyuan_paint_validate_settings, build_args=_hunyuan_paint_build_args,
+        parse_line=_hunyuan_parse_line, readiness=_hunyuan_paint_readiness,
     ),
     "hunyuan-mlx-xiong": BackendSpec(
         id="hunyuan-mlx-xiong", label="Hunyuan3D-MLX (Xiong, full pipeline)",
@@ -3920,6 +3991,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             try:
                 settings = spec.validate_settings(raw_settings)
+                if backend_id == "hunyuan-paint":
+                    repaint_mesh(OUTPUT_ROOT, settings["mesh"])   # the model to repaint, named before the upload is kept
             except ValueError as exc:
                 self._send_json(422, {"error": str(exc)})
                 return
