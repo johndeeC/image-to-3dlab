@@ -50,3 +50,11 @@ export function libraryChoices(assets, want, query = '') {
   }
   return out;
 }
+
+/** The Library assets that hold these files (any of their pictures, models, moves or props), each once. */
+export function assetIdsFor(assets, files) {
+  const wanted = new Set(files || []);
+  const holds = (a) => [a.picture, a.back, a.model, a.finished, a.rigged].some((f) => f && wanted.has(f))
+    || (a.clips || []).some((c) => wanted.has(c.file)) || (a.props || []).some((p) => wanted.has(p.file));
+  return [...new Set((assets || []).filter(holds).map((a) => a.id))];
+}

@@ -8,7 +8,7 @@ import { NODES, NODE_W, PORT_Y, newGraph, addNode, removeNodes, moveNodes, setSe
   groupBounds, pickResult, downstreamOf, isChoice, edgeFile, useResult, addFromResult, tileFace, tagText,
   optionTiles, makeRoom, curve, OPTION_W, OPTION_OFFSET } from './canvas.js';
 import { openPeek } from './canvas-peek.js';
-import { libraryChoices } from './canvas-library.js';
+import { libraryChoices, assetIdsFor } from './canvas-library.js';
 import { identity, screenToBoard, zoomAt, zoomTo, zoomStep, panBy, wheelFactor, wheelIntent, fitAll, zoomPercent, rememberView, recallView, placeTip } from './canvas-view.js';
 import { nodesInRect, toggle, addAll, keepExisting } from './canvas-select.js';
 import { createHistory, record, undo, redo } from './canvas-history.js';
@@ -54,6 +54,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   let graph = newGraph(), saved = [], view = identity(), selection = [], history = createHistory();
   let run = null, chain = null, timer = null, saveTimer = null, saving = Promise.resolve();
   let tool = 'pointer', spaceHeld = false, drag = null, menu = null, pastes = 0;
+  let kits = [];   // the Library's kits (docs/kits.md): a box's models can be filed into one
   const cards = new Map();   // box id -> its element
   let options = new Map();   // box id -> its option tiles (optionTiles), one per try
   const ROOM = OPTION_OFFSET + OPTION_W + 60;   // what a column of options needs before the next box
@@ -154,6 +155,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       ${more.length ? `<details class="cmore"><summary>More settings</summary>${more.map((f) => fieldHtml(node, f)).join('')}</details>` : ''}
       <div class="side-runs"></div>
       <div class="cresults"></div>
+      <div class="side-kit"></div>
       <div class="row end"><button type="button" class="ghost small" data-remove>Remove this box</button></div>`;
   }
 
@@ -172,7 +174,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       const file = node.settings[box.dataset.fileField];
       const html = file
         ? `<span class="hint" title="${esc(file)}">${esc(file.split('/').pop())}</span><button type="button" class="x" data-clear-file aria-label="Stop using this file">×</button>`
-        : `<button type="button" class="ghost small" data-library>From Library</button>${['picture', 'repaint'].includes(node.type) ? '<button type="button" class="ghost small" data-upload>Upload</button>' : ''}`;
+        : `<button type="button" class="ghost small" data-library>From Library</button>${['picture', 'repaint', 'asset'].includes(node.type) ? '<button type="button" class="ghost small" data-upload>Upload</button>' : ''}`;
       if (box.dataset.shown !== html) { box.innerHTML = html; box.dataset.shown = html; }
     }
   }
@@ -189,6 +191,10 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     const { state, files, errors } = nodeState(merged(), node.id);
     const choice = isChoice(graph, node.id) && files.length > 1;
     const carried = new Set(graph.edges.filter((e) => e.from === node.id && e.file).map((e) => e.file));
+    const loose = files.filter((f) => !PICTURE.test(f.file) && !/\.glb$/i.test(f.file));   // FBX, OBJ, USDZ: to download
+    if (loose.length) {
+      return { state, partly: false, html: `<div class="downloads">${loose.map((f) => `<a class="ghost small" href="${esc((tools.url || ((x) => `/output/${x}`))(f.file))}" download>Download ${esc(String(f.file).split('/').pop())}</a>`).join('')}</div>${errors.length ? `<small class="bad">${esc(errors[0])}</small>` : ''}` };
+    }
     const shown = files.slice(0, 12).map((f, i) => {
       const img = PICTURE.test(f.file)
         ? `<img src="/api/thumb?path=${encodeURIComponent(f.file)}" alt="" loading="lazy" draggable="false">`
@@ -303,6 +309,13 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
         ${below ? '<button type="button" class="ghost small" data-side-run="from" data-tip="Runs this step and every box after it.">Run from here</button>' : ''}</div>` : '';
     const runsBox = panel.querySelector('.side-runs');
     if (runsBox.dataset.shown !== runs) { runsBox.innerHTML = runs; runsBox.dataset.shown = runs; }
+    const kitBox = panel.querySelector('.side-kit');
+    const models = nodeState(merged(), node.id).files.filter((f) => /\.glb$/i.test(f.file));
+    const kitHtml = models.length ? `<label class="cfield"><span>Keep in a kit</span>
+        <select data-kit-pick>${kits.map((k) => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('')}
+          <option value="new">A new kit, with this as its character</option></select></label>
+        <button type="button" class="ghost small" data-kit-add>Add to the kit</button>` : '';
+    if (kitBox.dataset.shown !== kitHtml) { kitBox.innerHTML = kitHtml; kitBox.dataset.shown = kitHtml; }
     const results = panel.querySelector('.cresults');
     const { html } = resultsHtml(node);
     const live = runningNode(run, graph, chain) === node.id && chain?.message ? `<small class="hint">${esc(chain.message)}</small>` : '';
@@ -592,10 +605,32 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     box.querySelector('.picker-search').focus();
   }
 
+  /** File a box's models into a kit (or start one with the first as its character). */
+  async function fileInKit(id, kitId) {
+    try {
+      const files = nodeState(merged(), id).files.map((f) => f.file);
+      const ids = assetIdsFor((await json(await fetchImpl('/api/assets'))).assets || [], files);
+      if (!ids.length) { say('Those are not in the Library yet. Give it a moment after the run, then try again.', true); return; }
+      let target = kitId;
+      if (kitId === 'new') target = (await json(await post(fetchImpl, '/api/kits', { character: ids[0] }))).id;
+      for (const asset of kitId === 'new' ? ids.slice(1) : ids) {
+        await json(await post(fetchImpl, `/api/kits/${target}/add`, { asset })).catch?.(() => {});
+      }
+      await loadKits();
+      say(`Kept in the kit. Library → Kits shows it with the rest of its gear.`);
+    } catch (error) { say(error.message, true); }
+  }
+
+  async function loadKits() {
+    try { kits = (await json(await fetchImpl('/api/kits'))).kits || []; } catch { kits = []; }
+    renderSide();
+  }
+
   function upload(id) {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'image/png,image/jpeg,image/webp';
+    const model = graph.nodes.find((n) => n.id === id)?.type === 'asset';
+    input.accept = model ? '.glb,model/gltf-binary' : 'image/png,image/jpeg,image/webp';
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
@@ -913,6 +948,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       return;
     }
     if (t.dataset.sideClose !== undefined) { selection = []; render(); return; }
+    if (t.dataset.kitAdd !== undefined) { fileInKit(id, t.closest('.canvas-side').querySelector('[data-kit-pick]').value); return; }
     if (t.dataset.step) {
       const node = graph.nodes.find((n) => n.id === id);
       const face = tileFace(graph, node, nodeState(merged(), id));
@@ -998,6 +1034,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   // a run that is already going (the tab was reopened) is picked back up
   (async () => {
     await loadList();
+    loadKits();
     let running = null;
     try { ({ running } = await json(await fetchImpl('/api/graph-runs'))); } catch { /* an older server */ }
     openGraph((running && saved.find((g) => g.id === running.graph)) || saved[0] || newGraph());

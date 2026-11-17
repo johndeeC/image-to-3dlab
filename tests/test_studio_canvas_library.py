@@ -48,3 +48,10 @@ def test_pictures_include_backs_and_a_search_keeps_matching_names():
                f" m.libraryChoices({json.dumps(LIBRARY)}, 'model', 'KNIGHT').length, m.engineWords('x__newengine__y'),"
                f" m.detailWords('a_40k_rigged.glb')]))")
     assert out == [["Picture", "Picture", "Back picture", "Picture", "Picture"], 3, "", "40k"]
+
+
+def test_a_canvas_result_is_traced_back_to_the_library_assets_that_hold_it():
+    assets = [{"id": "a1", "model": "m/a.glb", "finished": "f/a.glb"}, {"id": "a2", "props": [{"file": "props/x/sword_LOD0.glb"}]},
+              {"id": "a3", "rigged": "r/c.glb", "clips": [{"file": "r/c_walk.glb"}]}, {"id": "a4", "picture": "images/p.png"}]
+    out = _run(f"console.log(JSON.stringify(m.assetIdsFor({json.dumps(assets)}, ['f/a.glb', 'm/a.glb', 'props/x/sword_LOD0.glb', 'r/c_walk.glb', 'nowhere.glb'])))")
+    assert out == ["a1", "a2", "a3"]
