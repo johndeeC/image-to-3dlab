@@ -627,3 +627,4 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .canvas-side .field-note { display: block; margin-top: 3px; font-size: 11.5px; line-height: 1.35; color: var(--ash); }
 .canvas-side .downloads { display: grid; gap: 4px; }
 .canvas-side .downloads a { text-decoration: none; }
+.peek-ask input { flex: 1; min-width: 0; }

@@ -183,7 +183,7 @@ class FakeJobs:
                     "/api/animate/rig": "rigged", "/api/animate/play": "animated", "/api/props": "split",
                     "/api/image/part": "part", "/api/tool/cutout": "cutout", "/api/tool/remesh": "remesh",
                     "/api/tool/unwrap": "unwrap", "/api/tool/export": "export", "/api/tool/combine": "combine",
-                    "/api/tool/mirror": "mirror"}[path]
+                    "/api/tool/mirror": "mirror", "/api/image/fix": "fix"}[path]
             self.started.append(kind)
             if kind in ("cutout", "remesh", "unwrap", "export", "combine", "mirror"):
                 self.bodies.append({"tool": kind, **json.loads(body)})
@@ -191,6 +191,8 @@ class FakeJobs:
                 self.parts.append(json.loads(body)["part"])
             if path == "/api/image/back":
                 self.bodies.append(json.loads(body))
+            if kind == "fix":
+                self.bodies.append({"fix": json.loads(body)})
             if path == "/api/generate":
                 self.bodies.append({"generate": body})
             job_id = f"job-{len(self.started)}"
@@ -202,7 +204,8 @@ class FakeJobs:
         n = len(self.started)
         slug = ga.slugged(self.parts[-1]) if self.parts else ""
         made = {"picture": f"images/{slug}__part__{n}/{slug}__part__{n}.png" if kind == "part"
-                else f"images/p__side{n}.png" if kind == "back" else "images/p.png",
+                else f"images/p__side{n}.png" if kind == "back"
+                else f"images/fix{n}/fix{n}.png" if kind == "fix" else "images/p.png",
                 "model": f"sf3d/m{n}/model.glb", "finished": f"finish/f{n}.glb",
                 "rigged": f"animate/r{n}/rigged.glb", "animated": f"animate/r{n}/walk.glb"}
         event = {"phase": "done", "message": "done", "overall_pct": 100}
@@ -220,13 +223,13 @@ class FakeJobs:
                 (folder / "finished" / name / f"{name}_LOD0.glb").write_bytes(b"x")
             event["directory"] = folder.name
         else:
-            file = made["picture" if kind in ("part", "back") else kind]
+            file = made["picture" if kind in ("part", "back", "fix") else kind]
             (self.output / file).parent.mkdir(parents=True, exist_ok=True)
             (self.output / file).write_bytes(b"x")
         if kind in ("finished", "rigged", "animated"):
             event["path"] = made[kind]
         return 200, {"status": "done", "last_event": event, "log_tail": "ok",
-                     "picture": made["picture"] if kind in ("picture", "part", "back") else None,
+                     "picture": made["picture"] if kind in ("picture", "part", "back", "fix") else None,
                      "model": made["model"] if kind == "model" else None}
 
 
@@ -855,3 +858,80 @@ def test_each_box_shows_the_file_its_own_step_made(tmp_path):
     assert results["a"][0]["file"] == "m/k.glb"
     assert results["r"][0]["file"] == "tools/t1/t1.glb" and results["u"][0]["file"] == "tools/t2/t2.glb"
     assert results["p"][0]["file"] == "images/k.png" and results["c"][0]["file"] == "images/cut3/cut3.png"
+
+
+# ---------------------------------------------------------------- fix one try: say what's wrong, or make it again
+PART_TRIES = {"p": [{"status": "done", "file": "images/knight.png"}],
+              "x": [{"status": "done", "file": "images/helmet__part__1/helmet__part__1.png", "label": "helmet"},
+                    {"status": "done", "file": "images/red-cape__part__2/red-cape__part__2.png", "label": "red cape"}],
+              "m": [{"status": "done", "file": "sf3d/m3/model.glb", "label": "helmet"},
+                    {"status": "done", "file": "sf3d/m4/model.glb", "label": "red cape"}]}
+CAPE = "images/red-cape__part__2/red-cape__part__2.png"
+
+
+def test_a_picture_try_with_a_note_is_redrawn_from_itself_as_the_note_says():
+    plan = ga.plan_redo(PARTS, "x", CAPE, "  make it dark red,\nnot pink ", PART_TRIES, RECIPES)
+    (stage,) = plan.stages
+    assert stage.steps == ["fix"] and stage.nodes == ["x"] and stage.fix_note == "make it dark red, not pink"
+    assert stage.seeds == [{"made": {"picture": CAPE}, "label": "red cape"}]
+    assert plan.redo == {"node": "x", "file": CAPE}
+    assert ga.describe_plan(plan) == ["Fix red cape: make it dark red, not pink"]
+
+
+def test_a_try_made_again_runs_its_own_box_for_that_try_alone():
+    stage = ga.plan_redo(PARTS, "m", "sf3d/m4/model.glb", "", PART_TRIES, RECIPES).stages[0]
+    assert stage.steps == ["model"] and stage.seeds == [{"made": {"picture": CAPE}, "label": "red cape"}]
+    parts = ga.plan_redo(PARTS, "x", CAPE, None, PART_TRIES, RECIPES).stages[0]
+    assert parts.steps == ["part"] and parts.parts == ["red cape"]
+    options = graph([node("p", "picture", prompt="a lantern", count=4), node("m", "model", engine="sf3d")], [("p", "m")])
+    tries = {"p": [{"status": "done", "file": f"images/o{i}.png", "label": f"Option {i}"} for i in (1, 2)]}
+    assert ga.plan_redo(options, "p", "images/o2.png", "", tries, RECIPES).stages[0].count == 1
+
+
+def test_a_3d_try_takes_no_note_and_a_gone_try_is_refused():
+    with pytest.raises(ValueError, match="3D engines do not read words"):
+        ga.plan_redo(PARTS, "m", "sf3d/m4/model.glb", "less pink", PART_TRIES, RECIPES)
+    with pytest.raises(ValueError, match="no longer"):
+        ga.plan_redo(PARTS, "x", "images/gone.png", "x", PART_TRIES, RECIPES)
+    with pytest.raises(ValueError, match="say what is wrong"):   # a tool box makes the same file twice
+        g = graph([node("p", "picture", file="images/k.png"), node("c", "cutout")], [("p", "c")])
+        ga.plan_redo(g, "c", "images/cut.png", "", {"c": [{"status": "done", "file": "images/cut.png"}]}, RECIPES)
+    with pytest.raises(ValueError, match="you gave"):
+        ga.plan_redo(PARTS, "p", "images/knight.png", "add a visor", PART_TRIES, RECIPES)
+
+
+def test_a_fixed_try_takes_the_old_ones_place_and_its_lines_follow(tmp_path):
+    g = json.loads(json.dumps(PARTS))
+    g["edges"][1]["file"] = CAPE                               # x -> m carried the old cape
+    g["nodes"][1]["picked"] = CAPE
+    saved = ga.save_graph(tmp_path, {**g, "id": None})
+    with ga._LOCK:
+        graphs = ga._read(tmp_path)
+        graphs[0]["last_run"] = {"status": "done", "results": PART_TRIES}
+        ga._write(tmp_path, graphs)
+    runner, jobs = _graph_runner(tmp_path)
+    run = runner.start(ga.get_graph(tmp_path, saved["id"]), node="x", mode="only", redo_try=CAPE,
+                       note="dark red", background=False)
+    assert run.status == "done" and jobs.started == ["fix"]
+    assert jobs.bodies[-1] == {"fix": {"picture": CAPE, "instruction": "dark red", "seed": jobs.bodies[-1]["fix"]["seed"]}}
+    assert run.to_dict()["redo"] == {"node": "x", "file": CAPE}
+    after = ga.get_graph(tmp_path, saved["id"])
+    tries = after["last_run"]["results"]["x"]
+    assert tries[0] == PART_TRIES["x"][0] and len(tries) == 2
+    assert tries[1]["label"] == "red cape" and tries[1]["file"] != CAPE and tries[1]["was"] == [CAPE]
+    assert after["edges"][1]["file"] == tries[1]["file"] and after["nodes"][1]["picked"] == tries[1]["file"]
+    assert after["last_run"]["results"]["m"] == PART_TRIES["m"]   # the boxes below keep theirs until run
+
+
+def test_a_failed_fix_keeps_the_old_try(tmp_path):
+    saved = ga.save_graph(tmp_path, {**PARTS, "id": None})
+    with ga._LOCK:
+        graphs = ga._read(tmp_path)
+        graphs[0]["last_run"] = {"status": "done", "results": PART_TRIES}
+        ga._write(tmp_path, graphs)
+    runner, _jobs = _graph_runner(tmp_path, fail="fix")
+    run = runner.start(ga.get_graph(tmp_path, saved["id"]), node="x", mode="only", redo_try=CAPE, note="red",
+                       background=False)
+    assert run.status == "error"
+    last = ga.get_graph(tmp_path, saved["id"])["last_run"]
+    assert last["results"]["x"] == PART_TRIES["x"] and last["error"] == "it broke"

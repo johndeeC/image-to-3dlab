@@ -26,23 +26,24 @@ HISTORY_NAME = ".activity.jsonl"
 TERMINAL = {"done", "error", "cancelled"}
 STALL_SECONDS = 180
 STEPS = ("picture", "back", "model", "finished", "split", "rigged", "animated", "part", "repaint",
-         "cutout", "remesh", "unwrap", "export", "combine", "left", "right")
+         "cutout", "remesh", "unwrap", "export", "combine", "left", "right", "fix")
 # The short tool jobs (viewer/tool_jobs.py): what each reads from `made`, in order of preference.
 TOOL_STEPS = {"cutout", "remesh", "unwrap", "export", "combine"}
 LABELS = {"picture": "Picture", "back": "Back picture", "model": "3D model", "finished": "Finish",
           "split": "Split into props", "rigged": "Rig", "animated": "Animate", "skin": "Skin",
           "part": "Pick out a part", "repaint": "Repaint", "cutout": "Cut out background",
           "remesh": "Quad remesh", "unwrap": "UV unwrap", "export": "Save as", "combine": "Put together",
-          "left": "Left view", "right": "Right view"}
+          "left": "Left view", "right": "Right view", "fix": "Fix the picture"}
 KIND = {"picture": "image", "back": "image", "model": "generate", "finished": "finish", "split": "props",
         "rigged": "animate", "animated": "animate", "part": "image", "repaint": "generate",
         **{step: "tool" for step in ("cutout", "remesh", "unwrap", "export", "combine")},
-        "left": "image", "right": "image"}
+        "left": "image", "right": "image", "fix": "image"}
 # The `made` key each step's file lands under. Several steps write the same one (a remesh, then an
 # unwrap, each "model"), so what each step made is also kept apart, in Chain.step_made.
 STEP_MADE = {"picture": "picture", "back": "back", "model": "model", "finished": "finished", "rigged": "rigged",
              "animated": "animated", "split": "split", "part": "picture", "repaint": "model", "cutout": "picture",
-             "remesh": "model", "unwrap": "model", "combine": "model", "export": "export", "left": "left", "right": "right"}
+             "remesh": "model", "unwrap": "model", "combine": "model", "export": "export", "left": "left", "right": "right",
+             "fix": "picture"}
 # The Finish choices a plan may carry (the same ones the Steps panel's Finish sends).
 MOVE_KEYS = ("speed", "arm_spread", "in_place")
 SPLIT_KEYS = ("names",)       # what a plan may tell the props job (props_api.normalise_names checks them)
@@ -119,6 +120,7 @@ class Chain:
     tool_settings: dict[str, Any] = field(default_factory=dict)      # step -> its choices: faces, size, format
     gather: list[str] = field(default_factory=list)                  # the models a "combine" step puts together
     four_views: bool = False                                         # the 3D model reads front, left, back, right (Hunyuan3D-2mv)
+    fix_note: str | None = None                                      # what a "fix" step changes in the picture (the canvas)
     step_made: dict[str, str] = field(default_factory=dict)          # step -> the file that step made
     picture_settings: dict[str, Any] = field(default_factory=dict)  # size, steps, seed (the image job checks them)
     picture_engine: str | None = None                                # "flux" / "flux-light" / "qwen"; None = the default
@@ -337,8 +339,8 @@ class ChainRunner:
             chain.made["picture"] = final.get("picture")
         elif step in ("back", "left", "right"):
             chain.made[step] = final.get("picture")
-        elif step == "part":
-            # the part is the picture from here on: the 3D model and Finish work from it
+        elif step in ("part", "fix"):
+            # the part (or the fixed picture) is the picture from here on: the 3D model and Finish work from it
             chain.made["picture"] = final.get("picture")
         elif step in ("repaint", "remesh", "unwrap", "combine"):
             # the new model is the model from here on; an older finished one would be rigged instead
@@ -448,6 +450,13 @@ class ChainRunner:
             body = {"picture": chain.made["picture"], "part": chain.part_name, "prefer_engine": chain.picture_engine,
                     **({"seed": chain.picture_settings["seed"]} if "seed" in chain.picture_settings else {})}
             return kind, self._post("/api/image/part", json.dumps(body).encode(), "application/json")
+        if step == "fix":
+            if not chain.made.get("picture") or not chain.fix_note:
+                raise ValueError("Fixing a picture needs the picture and what is wrong with it")
+            body = {"picture": chain.made["picture"], "instruction": chain.fix_note,
+                    **({"prefer_engine": chain.picture_engine} if chain.picture_engine else {}),
+                    **({"seed": chain.picture_settings["seed"]} if "seed" in chain.picture_settings else {})}
+            return kind, self._post("/api/image/fix", json.dumps(body).encode(), "application/json")
         if step in TOOL_STEPS:
             return kind, self._post(f"/api/tool/{step}", json.dumps(self._tool_body(chain, step)).encode(), "application/json")
         if step == "repaint":

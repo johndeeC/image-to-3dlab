@@ -57,6 +57,7 @@ STUDIO_ONLY = {
     "api/kits/*/name": "renaming is the user's choice",
     "api/kits/*/delete": "deleting a kit is the user's call, made in the studio",
     "api/image/part": "drawn by a canvas's Pick out parts box; agents add that box with edit_canvas",
+    "api/image/fix": "a canvas try fixed as a note says; agents use run_canvas(fix_try=..., note=...)",
     "api/tool/cutout": "a canvas box (Cut out background); agents add it with edit_canvas",
     "api/tool/remesh": "a canvas box (Quad remesh); agents add it with edit_canvas",
     "api/tool/unwrap": "a canvas box (UV unwrap); agents add it with edit_canvas",
@@ -722,12 +723,17 @@ def check_canvas(studio: Studio, *, canvas_id: str, box_id: str | None = None, m
 
 
 def run_canvas(studio: Studio, *, canvas_id: str, box_id: str | None = None, mode: str = "all",
-               again: bool = False) -> dict[str, Any]:
+               again: bool = False, fix_try: str | None = None, note: str | None = None) -> dict[str, Any]:
     if mode not in ("all", "only", "from", "after"):
         raise StudioError("mode is all, only (this box), from (this box and below) or after (below a picked picture)")
+    if fix_try and not box_id:
+        raise StudioError("fix_try needs box_id: the box the try is on")
     if mode != "all" and not box_id:
         raise StudioError(f"mode {mode!r} needs box_id")
-    body = {"node": box_id, "mode": mode, "again": again} if mode != "all" else {}
+    if fix_try:   # one try done over in its place: redrawn as the note says, or (no note) made again
+        body = {"node": box_id, "mode": "only", "try": fix_try, **({"note": note} if note else {})}
+    else:
+        body = {"node": box_id, "mode": mode, "again": again} if mode != "all" else {}
     run = studio.post_json(f"api/graphs/{canvas_id}/run", body)
     return {"run_id": run["id"], "plan": run["plan"], "watch": "canvas_status with this run_id (wait_seconds up to 50)",
             "studio": studio.studio_link()}
@@ -1614,12 +1620,17 @@ def build_server(studio: Studio | None = None):
         return safe(lambda: check_canvas(studio, canvas_id=canvas_id, box_id=box_id, mode=mode))
 
     @server.tool(name="run_canvas", structured_output=False)
-    def tool_run_canvas(canvas_id: str, box_id: str | None = None, mode: str = "all", again: bool = False):
+    def tool_run_canvas(canvas_id: str, box_id: str | None = None, mode: str = "all", again: bool = False,
+                        fix_try: str | None = None, note: str | None = None):
         """Run a saved canvas: mode all (every box), only (box_id alone, from what the boxes above it made last
         time), from (box_id and every box below it), after (the boxes below box_id; use once a Picture's option
         is picked). again=True with mode only adds a new try beside the box's old ones instead of replacing
-        them. Takes minutes; each straight line of boxes is one ordinary run. Watch with canvas_status."""
-        return safe(lambda: run_canvas(studio, canvas_id=canvas_id, box_id=box_id, mode=mode, again=again))
+        them. fix_try (a file box_id made) does that one try over in its place: with note (what is wrong, e.g.
+        "make the cape dark red"), a picture is redrawn as the note says; without, the box makes that try again
+        with a new seed. 3D tries take no note: fix the picture they came from, then make them again.
+        Takes minutes; each straight line of boxes is one ordinary run. Watch with canvas_status."""
+        return safe(lambda: run_canvas(studio, canvas_id=canvas_id, box_id=box_id, mode=mode, again=again,
+                                       fix_try=fix_try, note=note))
 
     @server.tool(name="canvas_status", structured_output=False)
     def tool_canvas_status(run_id: str | None = None, wait_seconds: int = 0):

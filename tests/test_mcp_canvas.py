@@ -76,6 +76,16 @@ def test_an_agent_builds_checks_runs_and_reads_a_canvas(studio):
     boxes = ms.get_canvas(studio, canvas_id=canvas_id)["boxes"]
     assert boxes["s3"]["status"] == "done" and len(boxes["s3"]["files"]) == 2
     assert ms.check_canvas(studio, canvas_id=canvas_id, box_id="s4", mode="only")["plan"] == ["Run 1, once for each of 2 props: Rig"]
+    picture = boxes["s1"]["files"][0]
+    fixed = ms.run_canvas(studio, canvas_id=canvas_id, box_id="s1", fix_try=picture, note="bluer blades")
+    assert fixed["plan"] == ["Fix Picture: bluer blades"]
+    for _ in range(100):
+        if ms.canvas_status(studio, run_id=fixed["run_id"])["status"] != "running":
+            break
+    assert studio.jobs.started[-1] == "fix" and studio.jobs.bodies[-1]["fix"]["instruction"] == "bluer blades"
+    assert ms.get_canvas(studio, canvas_id=canvas_id)["boxes"]["s1"]["files"] != [picture]
+    with pytest.raises(ms.StudioError, match="3D engines do not read words"):
+        ms.run_canvas(studio, canvas_id=canvas_id, box_id="s2", fix_try=boxes["s2"]["files"][0], note="shinier")
 
 
 def test_an_agent_is_told_why_a_canvas_cannot_run_and_a_stale_save_is_refused(studio):
@@ -87,4 +97,6 @@ def test_an_agent_is_told_why_a_canvas_cannot_run_and_a_stale_save_is_refused(st
         ms.save_canvas(studio, canvas={**old, "name": "an agent's old copy"})
     with pytest.raises(ms.StudioError, match="needs box_id"):
         ms.run_canvas(studio, canvas_id=old["id"], mode="only")
+    with pytest.raises(ms.StudioError, match="fix_try needs box_id"):
+        ms.run_canvas(studio, canvas_id=old["id"], fix_try="images/a.png")
     assert ms.canvas_status(studio) == {"status": "idle", "note": "No canvas is running."}

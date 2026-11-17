@@ -6,7 +6,7 @@
 import { NODES, NODE_W, PORT_Y, newGraph, addNode, removeNodes, moveNodes, setSetting, connect, canConnect, removeEdge,
   edgePath, starter, nodeState, runningNode, takersOf, addConnected, connectSelected, group, ungroup, renameGroup,
   groupBounds, pickResult, downstreamOf, isChoice, edgeFile, useResult, addFromResult, tileFace, tagText,
-  optionTiles, makeRoom, curve, OPTION_W, OPTION_OFFSET } from './canvas.js';
+  optionTiles, makeRoom, curve, OPTION_W, OPTION_OFFSET, redoChoices, mergeRun, finishRun } from './canvas.js';
 import { openPeek } from './canvas-peek.js';
 import { libraryChoices, assetIdsFor } from './canvas-library.js';
 import { identity, screenToBoard, zoomAt, zoomTo, zoomStep, panBy, wheelFactor, wheelIntent, fitAll, zoomPercent, rememberView, recallView, placeTip } from './canvas-view.js';
@@ -179,13 +179,8 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     }
   }
 
-  const merged = () => {
-    const before = graph.last_run?.results || {}, now = run?.results || {};
-    const joined = run?.again   // a box made again: its new tries sit beside the old ones
-      ? Object.fromEntries(Object.entries(now).map(([k, v]) => [k, [...(before[k] || []).filter((r) => r.status === 'done'), ...v]]))
-      : now;
-    return { status: run?.status, results: { ...before, ...joined } };
-  };
+  // a box made again keeps its old tries beside the new; a try done over is swapped in its place
+  const merged = () => ({ status: run?.status, results: mergeRun(graph.last_run?.results || {}, run) });
 
   function resultsHtml(node) {
     const { state, files, errors } = nodeState(merged(), node.id);
@@ -231,8 +226,15 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     const node = graph.nodes.find((n) => n.id === id);
     const choice = isChoice(graph, id) && nodeState(merged(), id).files.length > 1;   // nothing to choose between one
     const title = `${NODES[node.type].label}${name ? ` · ${name}` : ''}`;
+    const redo = redoChoices(graph, id, file);
+    const busy = () => (run ? (say('Wait for this run to finish first.', true), true) : false);
     openPeek(board, { file, url: tools.url || ((f) => `/output/${f}`), title, onClose: () => board.focus({ preventScroll: true }),
+      ask: redo.note ? { placeholder: "What's wrong? e.g. make the cape dark red", label: 'Fix it',
+        hint: 'Draws this picture again with that change. The rest stays as it is.',
+        send: (note) => { if (!busy()) start({ node: id, mode: 'only', try: file, note }); } } : null,
+      note: !redo.note && redo.again ? "3D engines don't read words. To change its look, fix the picture it came from, then make this again." : '',
       actions: [
+        ...(redo.again ? [['Make this one again', 'The same box makes this try again, in its place.', () => { if (!busy()) start({ node: id, mode: 'only', try: file }); }]] : []),
         ...(choice ? [['Use this one', 'The boxes after this one carry on from it.', () => { apply(pickResult(graph, id, file)); say('Picked. Carry on, or drag it onto the next box.'); }]] : []),
         ['Open in the viewer', 'Closes the canvas (it keeps everything) and opens this in the studio.', () => { on.open?.(file); close(); }],
       ] });
@@ -490,7 +492,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       ? (waiting ? 'Pick a picture in the Picture box, then press Carry on with this one.' : 'Done. Everything it made is in your Library.')
       : run.status === 'cancelled' ? 'Stopped. Everything finished before that is kept.'
         : `It stopped: ${run.error || 'see the boxes marked Stopped.'}`, run.status === 'error');
-    graph = { ...graph, last_run: { status: run.status, results: merged().results } };
+    graph = finishRun(graph, run);   // a try done over: its lines and pick carry the new one
     run = null;
     chain = null;
     // a box that now has several tries shows each as a tile: move what comes after it out of their way

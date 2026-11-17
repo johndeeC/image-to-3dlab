@@ -1053,7 +1053,12 @@ def part_prompt(part: str) -> str:
 def part_output(output_root: Path, part: str, stamp: str | None = None) -> Path:
     """Where a picked-out part lands: its own picture folder, so the Library lists it like any
     other picture, named by the part (`left-hand__part__<time>/left-hand__part__<time>.png`)."""
-    name = f"{slug(part, 30)}__part__{stamp or time.strftime('%Y%m%d-%H%M%S')}"
+    return own_folder(output_root, f"{slug(part, 30)}__part", stamp)
+
+
+def own_folder(output_root: Path, name: str, stamp: str | None = None) -> Path:
+    """`<name>__<time>/<name>__<time>.png`, a picture folder of its own (`-2` and on if taken)."""
+    name = f"{name}__{stamp or time.strftime('%Y%m%d-%H%M%S')}"
     path = output_root / name / f"{name}.png"
     suffix = 2
     while path.parent.exists():
@@ -1074,6 +1079,42 @@ def start_part(picture: Path, part: str, seed: int = 7, engine: PictureEngine = 
                          output_path=part_output(manager.output_root, part), reference=picture,
                          mode="edit (part)", engine=engine)
     job.instruction = " ".join(str(part).split())[:PART_LIMIT]
+    if background:
+        threading.Thread(target=run_job, args=(job, manager), daemon=True).start()
+    return job
+
+
+FIX_PROMPT = ("The same picture as the reference, with one change: {note}. Keep everything else exactly as it "
+              "is: the subject, its design, shape, colours and materials, the framing, the background and the art style.")
+NOTE_LIMIT = 300
+
+
+def fix_prompt(note: str) -> str:
+    """What a picture's fix asks for: the change said in words, and nothing else touched."""
+    said = " ".join(str(note or "").split())[:NOTE_LIMIT]
+    if not said:
+        raise ValueError("say what is wrong with the picture (make the cape dark red, add a visor...)")
+    return FIX_PROMPT.format(note=said.rstrip("."))
+
+
+def fix_output(output_root: Path, picture: Path, stamp: str | None = None) -> Path:
+    """Where a fixed picture lands: its own folder named after the one it fixed
+    (`red-cape__fix__<time>/red-cape__fix__<time>.png`), so the old one stays as it was."""
+    return own_folder(output_root, f"{slug(picture.stem.split('__')[0], 30)}__fix", stamp)
+
+
+def start_fix(picture: Path, note: str, seed: int = 11, engine: PictureEngine = QWEN,
+              manager: ImageJobManager | None = None, background: bool = True) -> ImageJob:
+    """Redraw `picture` (it is the reference) with the change `note` asks for, into its own folder."""
+    from PIL import Image
+
+    manager = manager or MANAGER
+    with Image.open(picture) as opened:   # a crafted file is refused before the engine reads it
+        check_picture_size(opened)
+    job = manager.create(fix_prompt(note), clean_settings({"seed": seed}, engine),
+                         output_path=fix_output(manager.output_root, picture), reference=picture,
+                         mode="edit (fix)", engine=engine)
+    job.instruction = " ".join(str(note).split())[:NOTE_LIMIT]
     if background:
         threading.Thread(target=run_job, args=(job, manager), daemon=True).start()
     return job

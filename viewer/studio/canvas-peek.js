@@ -14,14 +14,18 @@ const FOV = 35;
 
 /**
  * Show `file` over `container`. `url(file)` is where the studio serves it. `actions` are
- * [label, hint, fn] buttons. Returns close(); Esc and the backdrop close it too.
+ * [label, hint, fn] buttons. `ask` adds a line to say what is wrong ({ placeholder, label, hint,
+ * send(text) }); `note` is a line of help under it. Returns close(); Esc and the backdrop close it too.
  */
-export function openPeek(container, { file, url, title, actions = [], onClose }) {
+export function openPeek(container, { file, url, title, actions = [], ask = null, note = '', onClose }) {
   const box = document.createElement('div');
   box.className = 'canvas-peek';
   box.innerHTML = `<div class="peek-card" role="dialog" aria-label="${esc(title)}">
       <div class="row"><b>${esc(title)}</b><button type="button" class="ghost small" data-peek-close>Close</button></div>
       <div class="peek-stage">${PICTURE.test(file) ? `<img src="${esc(url(file))}" alt="${esc(title)}">` : '<p class="hint">Loading the 3D model…</p>'}</div>
+      ${ask ? `<form class="row peek-ask"><input type="text" maxlength="300" placeholder="${esc(ask.placeholder)}" aria-label="What is wrong with it">
+        <button type="submit" class="primary small" title="${esc(ask.hint)}">${esc(ask.label)}</button></form>` : ''}
+      ${note ? `<small class="hint">${esc(note)}</small>` : ''}
       <div class="row end">${actions.map(([label, hint], i) => `<button type="button" class="${i === 0 ? 'primary' : 'ghost'} small" data-peek-act="${i}" title="${esc(hint)}">${esc(label)}</button>`).join('')}</div>
     </div>`;
   container.appendChild(box);
@@ -34,6 +38,13 @@ export function openPeek(container, { file, url, title, actions = [], onClose })
     if (event.target === box || event.target.closest('[data-peek-close]')) { close(); return; }
     const act = event.target.closest('[data-peek-act]');
     if (act) { close(); actions[Number(act.dataset.peekAct)][2](); }
+  });
+  box.querySelector('.peek-ask')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const text = event.target.querySelector('input').value.trim();
+    if (!text) { event.target.querySelector('input').focus(); return; }
+    close();
+    ask.send(text);
   });
   box.addEventListener('pointerdown', (event) => event.stopPropagation());
   box.addEventListener('wheel', (event) => event.stopPropagation());

@@ -949,3 +949,24 @@ def test_a_side_view_asks_for_that_side_and_lands_beside_the_front(tmp_path):
     assert job.output_path == front.with_name("knight__right.png") and "right side" in job.prompt
     with pytest.raises(ValueError):
         api.create_back_job(api.ImageJobManager(output_root=tmp_path), front, side="top")
+
+
+# ---------------------------------------------------------------- fix a picture: say what is wrong (the canvas)
+def test_a_fix_asks_for_the_change_and_to_keep_the_rest():
+    prompt = api.fix_prompt("  make the cape\n dark red ")
+    assert "make the cape dark red" in prompt and "Keep everything else" in prompt
+    with pytest.raises(ValueError, match="say what is wrong"):
+        api.fix_prompt("  ")
+
+
+def test_a_fixed_picture_gets_its_own_folder_named_after_the_one_it_fixed(tmp_path):
+    from PIL import Image
+
+    source = tmp_path / "red-cape__part__20261116-212023" / "red-cape__part__20261116-212023.png"
+    source.parent.mkdir()
+    Image.new("RGB", (64, 64)).save(source)
+    assert api.fix_output(tmp_path, source, "20261116-230000").parent.name == "red-cape__fix__20261116-230000"
+    manager = api.ImageJobManager(output_root=tmp_path / "images")
+    job = api.start_fix(source, "dark red", seed=9, manager=manager, background=False)
+    assert job.reference == source and job.mode == "edit (fix)" and job.instruction == "dark red"
+    assert job.output_path.parent.name.startswith("red-cape__fix__") and job.settings["seed"] == 9

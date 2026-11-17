@@ -34,6 +34,10 @@ MAX_NODES = 60
 MAX_EDGES = 120
 NAME_LIMIT = 80
 TEXT_LIMIT = 2000
+NOTE_LIMIT = 300             # what is wrong with a try, said in a line or two
+PICTURE_FILES = (".png", ".jpg", ".jpeg", ".webp")
+# Boxes whose tries come out different each time they run: one of them can simply be made again.
+REMAKE = {"picture", "parts", "model", "repaint"}
 KEEP_RUNS = 10               # runs remembered for a canvas to read back
 RECIPES = Path(__file__).resolve().parents[1] / "image_to_3dlab" / "prompt_recipes.json"
 _LOCK = threading.Lock()     # the server answers on threads; one write at a time
@@ -271,9 +275,33 @@ def delete_graph(output: Path, graph_id: str) -> None:
         _write(output, [g for g in graphs if g["id"] != graph_id])
 
 
-def _keep_run(output: Path, graph_id: str | None, last_run: dict[str, Any], *, again: bool = False) -> None:
+def _swap_try(g: dict[str, Any], before: dict[str, list], after: dict[str, list], redo: dict[str, str]) -> dict[str, list]:
+    """One try fixed or made again: the new one takes the old one's place (and label) on its box,
+    remembering what it replaced, and the lines and pick that carried the old one carry the new.
+    A fix that made nothing leaves the box as it was."""
+    node, old = redo["node"], redo["file"]
+    new = next((r for r in after.get(node, []) if r.get("status") == "done" and r.get("file")), None)
+    kept = list(before.get(node, []))
+    if new is None:
+        return {node: kept}
+    for i, r in enumerate(kept):
+        if r.get("file") == old:
+            entry = {k: v for k, v in new.items() if k != "label"}
+            kept[i] = {**entry, **({"label": r["label"]} if r.get("label") else {}), "was": [*r.get("was", []), old]}
+    for e in g.get("edges", []):
+        if e.get("from") == node and e.get("file") == old:
+            e["file"] = new["file"]
+    for n in g.get("nodes", []):
+        if n.get("id") == node and n.get("picked") == old:
+            n["picked"] = new["file"]
+    return {node: kept}
+
+
+def _keep_run(output: Path, graph_id: str | None, last_run: dict[str, Any], *, again: bool = False,
+              redo: dict[str, str] | None = None) -> None:
     """Remember a run on its graph. Only the boxes this run touched are replaced, so running
-    one box keeps what the others made before; with `again`, its new tries join the old ones."""
+    one box keeps what the others made before; with `again`, its new tries join the old ones;
+    with `redo`, one fixed try takes its old one's place."""
     if not graph_id:
         return
     with _LOCK:
@@ -282,7 +310,9 @@ def _keep_run(output: Path, graph_id: str | None, last_run: dict[str, Any], *, a
             if g["id"] == graph_id:
                 before = (g.get("last_run") or {}).get("results") or {}
                 after = last_run.get("results", {})
-                if again:
+                if redo:
+                    after = _swap_try(g, before, after, redo)
+                elif again:
                     after = {k: [r for r in before.get(k, []) if r.get("status") == "done"] + v for k, v in after.items()}
                 g["last_run"] = {**last_run, "results": {**before, **after}}
                 _write(output, graphs)
@@ -320,6 +350,7 @@ class Stage:
     made: dict[str, str] = field(default_factory=dict)        # a file already made, for a first stage
     seeds: list[dict[str, Any]] | None = None                 # runs to start from (one box run on its own)
     waits_for_pick: bool = False                              # follows a Picture with options to pick from
+    fix_note: str | None = None                               # one picture redrawn from itself as this says
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "nodes": self.nodes, "steps": self.steps, "after": self.after,
@@ -333,6 +364,7 @@ class Plan:
     exports: dict[str, str]      # export box -> the box whose files it lists
     labels: dict[str, str]       # box id -> what it is called
     types: dict[str, str]        # box id -> its type
+    redo: dict[str, str] | None = None   # {"node", "file"}: one try fixed or made again, in its place
 
 
 def _load_recipes() -> dict[str, Any] | None:
@@ -668,6 +700,48 @@ def plan_from(raw: Any, node_id: str, mode: str, results: dict[str, list[dict[st
     return planner.plan()
 
 
+def plan_redo(raw: Any, node_id: str, file: str, note: str | None, results: dict[str, list[dict[str, Any]]] | None = None,
+              recipes: dict[str, Any] | None = None) -> Plan:
+    """One try of a box done over, to take its place. With a note (what is wrong), a picture is
+    redrawn from itself as the note says. Without one, the box runs again for that try alone:
+    the same picture, part or prop, a new seed. A 3D engine reads no words, so a 3D try only
+    gets the second; fix the picture it came from to steer it."""
+    graph = clean_graph(raw)
+    box = next((n for n in graph["nodes"] if n["id"] == node_id), None)
+    if box is None:
+        raise ValueError(f"no box {node_id} on this canvas")
+    entry = next((r for r in (results or {}).get(node_id, []) if r.get("status") == "done" and r.get("file") == file), None)
+    if entry is None:
+        raise ValueError("That try is no longer on the box. Look again: the box shows its latest.")
+    note, label, name = _clean_text(note, NOTE_LIMIT), entry.get("label"), LABELS[box["type"]]
+    if box["settings"].get("file"):
+        raise ValueError("That is the file you gave. Fix it where it was made, or give this box another.")
+    picture = str(file).lower().endswith(PICTURE_FILES)
+    if note:
+        if not picture:
+            raise ValueError("3D engines do not read words. Fix the picture it came from, then make the 3D model again.")
+        up = _ancestors(graph, node_id)
+        planner = _Planner(_check(graph, {*up, node_id}, above=set(up)), recipes)
+        planner.stages.append(Stage(id="s1", nodes=[node_id], steps=["fix"], fix_note=note,
+                                    seeds=[{"made": {"picture": file}, "label": label}]))
+        plan = planner.plan()
+    else:
+        if box["type"] not in REMAKE:
+            raise ValueError(f"{name} makes the same {'picture' if picture else 'model'} each time"
+                             + (": say what is wrong to change it." if picture else "."))
+        plan = plan_from(graph, node_id, "only", results, recipes)
+        stage = plan.stages[0]
+        stage.count = 1
+        if stage.parts:
+            stage.parts = [label] if label else stage.parts[:1]
+        elif stage.seeds and any(s.get("label") for s in stage.seeds):
+            stage.seeds = [s for s in stage.seeds if s.get("label") == label]
+            if not stage.seeds:
+                raise ValueError(f"What {name} made {label or 'that try'} from is gone. Run the box above it again.")
+    plan.redo = {"node": node_id, "file": file}
+    return plan
+
+
 def describe_plan(plan: Plan) -> list[str]:
     """The plan in plain lines, for the canvas to show before it runs. Only stages that make
     something are runs; a picture or model you gave is where they start."""
@@ -680,6 +754,9 @@ def describe_plan(plan: Plan) -> list[str]:
     lines = []
     for stage in plan.stages:
         names = " → ".join(plan.labels[i] for i in stage.nodes)
+        if stage.fix_note:
+            lines.append(f"Fix {(stage.seeds or [{}])[0].get('label') or names}: {stage.fix_note}")
+            continue
         if not stage.steps:
             lines.append(f"Starts from {names} you gave")
             continue
@@ -806,7 +883,7 @@ class GraphRun:
                 "stage": self.stage, "stages": [s.to_dict() for s in self.plan.stages],
                 "plan": describe_plan(self.plan), "chains": list(self.chains),
                 "current_chain": self.current_chain, "results": results, "error": self.error,
-                "waiting_for_pick": self.waiting_for_pick(), "again": self.again, "elapsed": round(time.time() - self.started, 1)}
+                "waiting_for_pick": self.waiting_for_pick(), "again": self.again, "redo": self.plan.redo, "elapsed": round(time.time() - self.started, 1)}
 
 
 class GraphRunner:
@@ -824,21 +901,24 @@ class GraphRunner:
     def running(self) -> GraphRun | None:
         return next((r for r in self.runs.values() if r.status == "running"), None)
 
-    def plan(self, graph: dict[str, Any], node: str | None = None, mode: str = "all") -> Plan:
+    def plan(self, graph: dict[str, Any], node: str | None = None, mode: str = "all", *,
+             redo_try: str | None = None, note: str | None = None) -> Plan:
         if node is None or mode == "all":
             return plan_graph(graph, self.recipes)
         results = (graph.get("last_run") or {}).get("results") or {}
+        if redo_try:
+            return plan_redo(graph, node, redo_try, note, results, self.recipes)
         return plan_from(graph, node, mode, results, self.recipes)
 
     def start(self, graph: dict[str, Any], *, node: str | None = None, mode: str = "all", client: str | None = None,
-              again: bool = False, background: bool = True,
+              again: bool = False, redo_try: str | None = None, note: str | None = None, background: bool = True,
               before_stage: Callable[[GraphRun, int], Any] | None = None) -> GraphRun:
-        plan = self.plan(graph, node, mode)   # refused here, before anything starts
+        plan = self.plan(graph, node, mode, redo_try=redo_try, note=note)   # refused here, before anything starts
         with self.lock:
             if self.running() is not None:
                 raise RuntimeError("a canvas is already running; wait for it to finish")
             run = GraphRun(graph_id=graph.get("id"), name=_clean_text(graph.get("name"), NAME_LIMIT) or "Canvas", plan=plan,
-                           again=again and mode == "only")
+                           again=again and mode == "only" and not redo_try)
             recent = sorted(self.runs.values(), key=lambda r: r.started)[-(KEEP_RUNS - 1):]
             self.runs = {r.id: r for r in recent} | {run.id: run}   # finished runs pile up otherwise
         work = lambda: self._run(run, client, before_stage)
@@ -903,7 +983,8 @@ class GraphRunner:
         finally:
             run.current_chain = None
             _keep_run(self.output, run.graph_id, {"status": run.status, "results": run.to_dict()["results"],
-                                                   "error": run.error, "finished": int(time.time())}, again=run.again)
+                                                   "error": run.error, "finished": int(time.time())}, again=run.again,
+                  redo=run.plan.redo)
 
     def _chain(self, run: GraphRun, stage: Stage, job: dict[str, Any], client: str | None) -> Chain | None:
         title = f"{run.name} · {job['label']}" if job["label"] else run.name
@@ -911,7 +992,7 @@ class GraphRunner:
             if run.cancel_requested:
                 return None
             picture = ({**stage.picture_settings, "seed": self.random()} if "picture" in stage.steps
-                       else {"seed": self.random()} if "part" in stage.steps else {})
+                       else {"seed": self.random()} if {"part", "fix"} & set(stage.steps) else {})
             made = {**job["made"], **({"picture": stage.paint_from} if stage.paint_from else {})}
             chain = Chain(title=title, steps=list(stage.steps), want=stage.want, prompt=stage.prompt,
                           engine=stage.engine, first_move=stage.first_move, picture_engine=stage.picture_engine,
@@ -919,7 +1000,7 @@ class GraphRunner:
                           split_settings=dict(stage.split_settings), rig_settings=dict(stage.rig_settings),
                           move_settings=dict(stage.move_settings), made=made, client=client,
                           part_name=job.get("part"), tool_settings=dict(stage.tool_settings),
-                          gather=list(job.get("gather") or []), four_views=stage.four_views,
+                          gather=list(job.get("gather") or []), four_views=stage.four_views, fix_note=stage.fix_note,
                           model_seed=self.random() if {"model", "repaint"} & set(stage.steps) else None)
             run.current_chain = chain.id
             try:
@@ -946,7 +1027,7 @@ class GraphRunner:
                     elif chain.status != "done" and chain.current == side:
                         self._add(run, node_id, {"status": chain.status, "error": chain.error, "label": f"{side} view"})
                 continue
-            step = STEP.get(kind)
+            step = "fix" if stage.fix_note else STEP.get(kind)
             # each box its own step's file (a remesh and an unwrap both write "model"); a box with no
             # step (a picture or model you gave) its own file
             file = chain.step_made.get(step) if step in stage.steps else (given or {}).get(MADE_KEY[kind]) or chain.made.get(MADE_KEY[kind])

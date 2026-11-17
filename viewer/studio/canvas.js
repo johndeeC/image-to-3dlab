@@ -375,3 +375,47 @@ export function tagText(node, count = 0) {
   const name = prompt ? (prompt.length > 26 ? `${prompt.slice(0, 25).trimEnd()}…` : prompt) : NODES[node.type].label;
   return count > 1 ? `${name} (${count})` : name;
 }
+
+/** Boxes whose tries come out different each time: one can simply be made again (graph_api.REMAKE). */
+export const REMAKE = ['picture', 'parts', 'model', 'repaint'];
+
+/** What can be done over for one try of box `id`: `note` (say what is wrong: pictures only, a 3D
+ *  engine reads no words) and `again` (the same box, a new seed). A file you gave takes neither. */
+export function redoChoices(graph, id, file) {
+  const node = graph.nodes.find((n) => n.id === id);
+  if (!node || node.settings?.file) return { note: false, again: false };
+  return { note: /\.(png|jpe?g|webp)$/i.test(String(file)), again: REMAKE.includes(node.type) };
+}
+
+/** A box's tries as the canvas shows them: the last run's, with this run's on top. A box made
+ *  again keeps its old tries beside the new; a try done over (`run.redo`) is swapped in its place
+ *  once it is made, keeping its label and what it replaced. A failed one leaves the old try. */
+export function mergeRun(before = {}, run = null) {
+  const now = run?.results || {};
+  if (run?.redo) {
+    const { node, file } = run.redo;
+    const fresh = (now[node] || []).find((r) => r.status === 'done' && r.file);
+    if (!fresh) return { ...before };
+    const { label: _drop, ...made } = fresh;
+    return { ...before, [node]: (before[node] || []).map((r) => (r.file === file
+      ? { ...made, ...(r.label ? { label: r.label } : {}), was: [...(r.was || []), file] } : r)) };
+  }
+  const joined = run?.again
+    ? Object.fromEntries(Object.entries(now).map(([k, v]) => [k, [...(before[k] || []).filter((r) => r.status === 'done'), ...v]]))
+    : now;
+  return { ...before, ...joined };
+}
+
+/** The graph once `run` ends: its results kept, and a try done over carried on by the lines and
+ *  the pick that carried the old one (as the server keeps it, graph_api._swap_try). */
+export function finishRun(graph, run) {
+  const results = mergeRun(graph.last_run?.results || {}, run);
+  const g = { ...clone(graph), last_run: { status: run.status, results } };
+  const { node, file } = run.redo || {};
+  const fresh = node && run.status === 'done' && (run.results?.[node] || []).find((r) => r.status === 'done' && r.file);
+  if (fresh) {
+    for (const e of g.edges) if (e.from === node && e.file === file) e.file = fresh.file;
+    for (const n of g.nodes) if (n.id === node && n.picked === file) n.picked = fresh.file;
+  }
+  return g;
+}

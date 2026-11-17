@@ -163,6 +163,26 @@ lives on the line (`"file"` on the edge), not the box, so each branch keeps its 
 is not run on its own; press its ▶. Run all makes everything fresh, so it does not use the
 tries on the lines.
 
+### Fix one try
+
+A try that came out wrong is done over **in its place**, from its quick view:
+
+- **What's wrong?** (pictures): say it ("make the cape dark red", "add a visor"), then **Fix
+  it**. The picture is drawn again from itself with that change, the rest kept
+  (`/api/image/fix`, the picture engine's edit). It works on any picture a box made: an
+  option, a picked-out part, a side view, a cut-out.
+- **Make this one again** (Picture, Pick out parts, 3D model, Repaint): the same box makes
+  that one try again with a new seed, for that part or prop alone.
+
+A 3D engine reads no words, so a 3D try only gets the second. To change how it looks, fix
+the picture it came from, then make it again, or pick another engine in the box. A tool box
+(Quad remesh, Cut out…) makes the same file each time, so only its pictures take a fix.
+
+The new try keeps the old one's name and place; the lines and the pick that carried the old
+one carry the new one, and the boxes below keep what they made until you run them. A fix
+that fails leaves the old try. The try remembers what it replaced (`"was"`). The run is
+`{"node", "mode": "only", "try": file, "note"?}` (`graph_api.plan_redo`).
+
 ### One box at a time
 
 Each box has a **▶** with **Run this box** and **Run from here**. `plan_from(graph, box,
@@ -206,6 +226,7 @@ too, for a sheet drawn as nine parts.
 answers with how the canvas would run, or why it can't yet. `canvas_status` names the
 Picture boxes waiting for a pick, so an agent can show the user the options and carry on.
 Box types and their settings come from the studio (`/api/graphs/types`), not a copy.
+`run_canvas(box_id=..., fix_try=file, note=...)` does one try over, as **Fix one try** above.
 
 ## Four views (Hunyuan3D-2mv)
 

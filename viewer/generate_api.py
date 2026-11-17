@@ -2898,12 +2898,15 @@ class Handler(SimpleHTTPRequestHandler):
             else:   # run: the whole graph, or {"node": id, "mode": "only" | "from" | "after"}
                 graph = graph_api.get_graph(OUTPUT_ROOT, parts[2])
                 node, mode = (body.get("node"), body.get("mode", "only")) if body.get("node") else (None, "all")
-                plan = self._graphs().plan(graph, node, mode)
+                # {"try": file, "note": what is wrong}: one try of that box done over, in its place
+                redo_try, note = (str(body["try"]), str(body.get("note") or "")) if body.get("try") and node else (None, None)
+                plan = self._graphs().plan(graph, node, mode, redo_try=redo_try, note=note)
                 # before the picture and the 3D model, not ten minutes later at Finish or the split
                 if any(set(s.steps) & activity_api.NEEDS_BLENDER for s in plan.stages) and find_blender() is None:
                     self._send_json(409, {"error": blender_missing_help(), "needs_blender": True})
                     return
                 run = self._graphs().start(graph, node=node, mode=mode, again=body.get("again") is True,
+                                           redo_try=redo_try, note=note,
                                            client=usage_api.source_of(self.headers.get(usage_api.CLIENT_HEADER)))
                 self._send_json(202, run.to_dict())
         except graph_api.Stale as exc:
@@ -3131,7 +3134,10 @@ class Handler(SimpleHTTPRequestHandler):
             self._create_back_job()
             return
         if parts == ["api", "image", "part"]:
-            self._create_part_job()
+            self._create_redraw_job("part")
+            return
+        if parts == ["api", "image", "fix"]:
+            self._create_redraw_job("fix")
             return
         if len(parts) == 3 and parts[:2] == ["api", "tool"] and parts[2] in {"cutout", "remesh", "unwrap", "export", "combine", "mirror"}:
             self._start_tool(parts[2])
@@ -3295,16 +3301,19 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self._send_json(202, {"job_id": job.id, "status_url": f"/api/tool/{job.id}/status"})
 
-    def _create_part_job(self) -> None:
-        """Pick out one part of a picture already in output/: {picture, part, seed?, engine?}. The
-        canvas's Pick out parts box asks once per part name (docs/canvas.md)."""
+    def _create_redraw_job(self, kind: str) -> None:
+        """Redraw a picture already in output/ from itself. `part`: pick out one part,
+        {picture, part, seed?, engine?} (the canvas's Pick out parts box asks once per name).
+        `fix`: change it as a note says, {picture, instruction, seed?, engine?} (a canvas try's
+        "What's wrong?"). docs/canvas.md."""
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length)) if 0 < length <= 16384 else {}
             picture = image_api.back_source(OUTPUT_ROOT, str(payload.get("picture", "")))
-            part = str(payload.get("part") or "")
-            image_api.part_prompt(part)   # an empty name is refused before anything is drawn
-            seed = int(payload.get("seed", 7))
+            # a part by name, or a fix as the note says; an empty one is refused before anything is drawn
+            text = str(payload.get("part" if kind == "part" else "instruction") or "")
+            (image_api.part_prompt if kind == "part" else image_api.fix_prompt)(text)
+            seed = int(payload.get("seed", 7 if kind == "part" else 11))
             engine = image_api.choose_engine(str(payload.get("engine") or "") or None, picture, edit=True,
                                              prefer=str(payload.get("prefer_engine") or "") or None)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -3323,7 +3332,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json(503, {"error": str(exc), "needs_setup": True, "missing": exc.missing})
             return
         try:
-            job = image_api.start_part(picture, part, seed, engine)
+            job = (image_api.start_part if kind == "part" else image_api.start_fix)(picture, text, seed, engine)
         except (ValueError, OSError) as exc:
             self._send_json(422, {"error": str(exc)})
             return

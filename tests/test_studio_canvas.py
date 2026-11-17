@@ -319,3 +319,31 @@ def test_four_views_runs_three_steps_on_one_box_and_its_3d_model_gets_the_four_v
     picked = _settings("""console.log(JSON.stringify([m.defaultsFor('model', { engines: [{ id: 'pixal3d' }] }, 'views'),
       m.defaultsFor('model', { engines: [{ id: 'pixal3d' }] }, 'picture')]))""")
     assert picked == [{"engine": "hunyuan_xiong"}, {"engine": "pixal3d"}]
+
+
+def test_a_try_is_fixed_by_saying_what_is_wrong_or_made_again():
+    out = _run("""const g = { nodes: [{ id: 'p', type: 'picture', settings: { prompt: 'x' } },
+        { id: 'g', type: 'picture', settings: { file: 'images/k.png' } }, { id: 'm', type: 'model', settings: {} },
+        { id: 'c', type: 'cutout', settings: {} }, { id: 'r', type: 'remesh', settings: {} }], edges: [] };
+      console.log(JSON.stringify([m.redoChoices(g, 'p', 'images/a.png'), m.redoChoices(g, 'g', 'images/k.png'),
+        m.redoChoices(g, 'm', 'x/m.glb'), m.redoChoices(g, 'c', 'images/c.png'), m.redoChoices(g, 'r', 'x/r.glb')]))""")
+    assert out == [{"note": True, "again": True}, {"note": False, "again": False}, {"note": False, "again": True},
+                   {"note": True, "again": False}, {"note": False, "again": False}]
+    assert ga.REMAKE == set(_run("console.log(JSON.stringify(m.REMAKE))"))
+
+
+def test_a_fixed_try_takes_the_old_ones_place_and_a_failed_one_leaves_it():
+    out = _run("""const before = { x: [{ status: 'done', file: 'a.png', label: 'helmet' }, { status: 'done', file: 'b.png', label: 'cape' }],
+                                   m: [{ status: 'done', file: 'm.glb', label: 'cape' }] };
+      const g = { nodes: [{ id: 'x', type: 'parts', settings: {}, picked: 'b.png' }, { id: 'm', type: 'model', settings: {} }],
+                  edges: [{ from: 'x', to: 'm', file: 'b.png' }], last_run: { results: before } };
+      const redo = { node: 'x', file: 'b.png' };
+      const done = m.finishRun(g, { status: 'done', redo, results: { x: [{ status: 'done', file: 'c.png' }] } });
+      const failed = m.mergeRun(before, { status: 'error', redo, results: { x: [{ status: 'error', error: 'no' }] } });
+      const again = m.mergeRun(before, { again: true, results: { m: [{ status: 'done', file: 'n.glb' }] } });
+      console.log(JSON.stringify({ done, failed, again }))""")
+    assert out["done"]["last_run"]["results"]["x"][1] == {"status": "done", "file": "c.png", "label": "cape", "was": ["b.png"]}
+    assert out["done"]["last_run"]["results"]["m"] == [{"status": "done", "file": "m.glb", "label": "cape"}]
+    assert out["done"]["edges"][0]["file"] == "c.png" and out["done"]["nodes"][0]["picked"] == "c.png"
+    assert out["failed"]["x"][1]["file"] == "b.png"
+    assert [r["file"] for r in out["again"]["m"]] == ["m.glb", "n.glb"]

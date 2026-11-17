@@ -59,6 +59,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agents can build and run canvases: `box_types`, `list_canvases`, `get_canvas`, `edit_canvas`,
   `save_canvas`, `check_canvas`, `run_canvas`, `canvas_status`, `cancel_canvas_run`.
 
+- Canvas: fix one try in its place. In a try's quick view, say what's wrong with a picture
+  ("make the cape dark red") and it is drawn again with that change; or **Make this one
+  again** for a new picture, part or 3D model. Lines that carried the old try carry the new
+  one. Agents: `run_canvas(fix_try=..., note=...)`.
+
 ### Fixed
 - Canvas engine menus say which engine each choice is: "Best detail · Pixal3D", "Fastest, rough ·
   Stable Fast 3D", with a line under the menu on what the chosen one is good for.
