@@ -75,7 +75,6 @@ Saved in `output/.graphs.json`, beside the run history (`.activity.jsonl`) and t
   ],
   "edges": [{"from": "n1", "to": "n2"}, {"from": "n2", "to": "n3"}],
   "groups": [{"id": "g1", "label": "Body", "nodes": ["n2", "n3"]}],
-  "view": {"x": 0, "y": 0, "k": 0.8},
   "last_run": {"status": "done", "results": {"n2": [{"file": "pixal3d/.../model.glb", "status": "done"}]}}
 }]}
 ```
@@ -83,7 +82,9 @@ Saved in `output/.graphs.json`, beside the run history (`.activity.jsonl`) and t
 - Every box has at most one line in; a Picture or Your 3D model has none. A box may have any
   number of lines out: that is the branching.
 - `picked` is the result that carries on, for a Picture asked for several options.
-- `groups` are the frames, `view` is where the board was left. Nothing else reads them.
+- `groups` are the frames. Where you left the board (zoom and pan) is kept in each browser, not
+  here: two tabs on one board would otherwise refuse each other's saves over a pan. `view`
+  is still read if present, and ignored.
 - `last_run` is what each box made last time. Running one box replaces only that box's part.
 - A half-drawn canvas saves fine; it is checked in full when it runs.
 - `updated` is the version. A save that brings an older one is refused (409), so the studio

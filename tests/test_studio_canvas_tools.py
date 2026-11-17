@@ -148,3 +148,16 @@ def test_every_shortcut_says_what_it_does():
 ])
 def test_a_wheel_event_zooms_or_pans(event, intent):
     assert _run("canvas-view", f"console.log(JSON.stringify(m.wheelIntent({json.dumps(event)})))") == intent
+
+
+def test_where_you_left_a_board_is_kept_in_this_browser_and_a_missing_store_is_fine():
+    out = _run("canvas-view", """const store = new Map();
+      const storage = { setItem: (k, v) => store.set(k, v), getItem: (k) => store.get(k) ?? null };
+      m.rememberView(storage, 'graph-1', { x: 10, y: -4, k: 9 });
+      m.rememberView(storage, null, { x: 1, y: 1, k: 1 });          // a board not saved yet keeps nothing
+      const broken = { setItem: () => { throw new Error('blocked'); }, getItem: () => { throw new Error('blocked'); } };
+      m.rememberView(broken, 'graph-1', { x: 0, y: 0, k: 1 });
+      store.set('assetfurnace.canvas.view.graph-2', '{"x": "a"}');
+      console.log(JSON.stringify([m.recallView(storage, 'graph-1'), m.recallView(storage, 'graph-2'), m.recallView(broken, 'graph-1'),
+        m.recallView(null, 'graph-1'), store.size]))""")
+    assert out == [{"x": 10, "y": -4, "k": 2.5}, None, None, None, 2]

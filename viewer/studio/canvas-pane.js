@@ -6,7 +6,7 @@
 import { NODES, NODE_W, PORT_Y, newGraph, addNode, removeNodes, moveNodes, setSetting, connect, canConnect, removeEdge,
   edgePath, starter, nodeState, runningNode, takersOf, addConnected, connectSelected, group, ungroup, renameGroup,
   groupBounds, pickResult, downstreamOf } from './canvas.js';
-import { identity, screenToBoard, zoomAt, zoomTo, zoomStep, panBy, wheelFactor, wheelIntent, fitAll, zoomPercent } from './canvas-view.js';
+import { identity, screenToBoard, zoomAt, zoomTo, zoomStep, panBy, wheelFactor, wheelIntent, fitAll, zoomPercent, rememberView, recallView } from './canvas-view.js';
 import { nodesInRect, toggle, addAll, keepExisting } from './canvas-select.js';
 import { createHistory, record, undo, redo } from './canvas-history.js';
 import { copyNodes, pasteNodes } from './canvas-clip.js';
@@ -261,7 +261,9 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     $('[data-pick]').innerHTML = `<option value="">New canvas</option>${saved.map((g) => `<option value="${esc(g.id)}" ${g.id === graph.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}`;
   }
 
-  const saveView = () => { graph = { ...graph, view: { ...view } }; saveSoon(); };
+  let storage = null;
+  try { storage = window.localStorage; } catch { /* storage blocked: the view is just not kept */ }
+  const saveView = () => rememberView(storage, graph.id, view);   // this browser's, never the shared file
   function setView(next) {
     view = next;
     renderView();
@@ -280,7 +282,8 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     cards.clear();
     renderPicker();
     render();
-    if (graph.view) { view = graph.view; renderView(); } else if (graph.nodes.length) fit();
+    const kept = recallView(storage, graph.id);
+    if (kept) { view = kept; renderView(); } else if (graph.nodes.length) fit();
   }
 
   // ---------------------------------------------------------------- saving
@@ -288,7 +291,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     clearTimeout(saveTimer);
     saveTimer = null;
     saving = saving.catch(() => {}).then(async () => {
-      const { last_run: _kept, ...body } = graph;   // the server keeps the last run itself
+      const { last_run: _kept, view: _mine, ...body } = graph;   // the server keeps the last run; the view is this browser's
       let stored;
       try {
         stored = await json(await post(fetchImpl, '/api/graphs', body));
@@ -301,7 +304,10 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       }
       const fresh = graph.id !== stored.id;
       graph = { ...graph, id: stored.id, updated: stored.updated };
-      if (fresh) { saved = [stored, ...saved.filter((g) => g.id !== stored.id)]; renderPicker(); }
+      if (fresh) rememberView(storage, stored.id, view);
+      // the list must follow every save: opening a board from an old copy of it was refused as stale
+      saved = [stored, ...saved.filter((g) => g.id !== stored.id)];
+      renderPicker();
       return graph;
     });
     return saving;
@@ -442,7 +448,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   }
 
   // ---------------------------------------------------------------- actions (buttons and keys)
-  const keepRun = (next) => ({ ...next, last_run: graph.last_run, updated: graph.updated, view: graph.view });
+  const keepRun = (next) => ({ ...next, last_run: graph.last_run, updated: graph.updated });
   const actions = {
     add: () => addMenu(board.clientWidth / 2 - 110, board.clientHeight / 4),
     pointer: () => { tool = 'pointer'; renderTools(); },
@@ -695,7 +701,11 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     if (!event.target.matches('[data-pick]')) return;
     if (saveTimer) await saveNow().catch(() => {});
     const id = event.target.value;
-    openGraph(id ? saved.find((g) => g.id === id) : newGraph());
+    let next = newGraph();
+    if (id) {
+      try { next = await json(await fetchImpl(`/api/graphs/${id}`)); } catch { next = saved.find((g) => g.id === id) || next; }
+    }
+    openGraph(next);
   });
 
   // ---------------------------------------------------------------- keys

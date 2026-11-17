@@ -64,3 +64,22 @@ export function wheelIntent({ deltaX = 0, deltaY = 0, deltaMode = 0, ctrlKey = f
   if (deltaMode === 1 || deltaMode === 2) return 'zoom';
   return deltaX === 0 && Number.isInteger(deltaY) && Math.abs(deltaY) >= 50 ? 'zoom' : 'pan';
 }
+
+// Where you left a board is yours, not the canvas's: two tabs (or a tab and an agent) on one board
+// must not refuse each other's saves over a pan. Kept in this browser; storage can be missing.
+const VIEW_KEY = (id) => `assetfurnace.canvas.view.${id}`;
+
+export function rememberView(storage, id, view) {
+  if (!id) return;
+  try { storage?.setItem(VIEW_KEY(id), JSON.stringify({ x: view.x, y: view.y, k: view.k })); } catch { /* private window */ }
+}
+
+/** The view this browser kept for a board, or null. */
+export function recallView(storage, id) {
+  try {
+    const v = JSON.parse(storage?.getItem(VIEW_KEY(id)) || 'null');
+    return v && [v.x, v.y, v.k].every(Number.isFinite) ? { x: v.x, y: v.y, k: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, v.k)) } : null;
+  } catch {
+    return null;
+  }
+}
