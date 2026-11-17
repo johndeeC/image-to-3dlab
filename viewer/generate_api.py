@@ -2803,7 +2803,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if any(set(s.steps) & activity_api.NEEDS_BLENDER for s in plan.stages) and find_blender() is None:
                     self._send_json(409, {"error": blender_missing_help(), "needs_blender": True})
                     return
-                run = self._graphs().start(graph, node=node, mode=mode,
+                run = self._graphs().start(graph, node=node, mode=mode, again=body.get("again") is True,
                                            client=usage_api.source_of(self.headers.get(usage_api.CLIENT_HEADER)))
                 self._send_json(202, run.to_dict())
         except graph_api.Stale as exc:

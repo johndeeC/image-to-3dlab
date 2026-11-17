@@ -148,7 +148,10 @@ def clean_graph(raw: Any) -> dict[str, Any]:
     for e in edges:
         if not (isinstance(e, dict) and NODE_ID.fullmatch(str(e.get("from", ""))) and NODE_ID.fullmatch(str(e.get("to", "")))):
             raise ValueError(f"not a line: {str(e)[:80]}")
-        clean_edges.append({"from": e["from"], "to": e["to"]})
+        edge = {"from": e["from"], "to": e["to"]}
+        if isinstance(e.get("file"), str) and _inside_output(e["file"]):
+            edge["file"] = e["file"]      # the result of `from` this line carries (a try dragged onto it)
+        clean_edges.append(edge)
     ids = {n["id"] for n in clean_nodes}
     groups = []
     for g in raw.get("groups") or []:
@@ -242,9 +245,9 @@ def delete_graph(output: Path, graph_id: str) -> None:
         _write(output, [g for g in graphs if g["id"] != graph_id])
 
 
-def _keep_run(output: Path, graph_id: str | None, last_run: dict[str, Any]) -> None:
+def _keep_run(output: Path, graph_id: str | None, last_run: dict[str, Any], *, again: bool = False) -> None:
     """Remember a run on its graph. Only the boxes this run touched are replaced, so running
-    one box keeps what the others made before."""
+    one box keeps what the others made before; with `again`, its new tries join the old ones."""
     if not graph_id:
         return
     with _LOCK:
@@ -252,7 +255,10 @@ def _keep_run(output: Path, graph_id: str | None, last_run: dict[str, Any]) -> N
         for g in graphs:
             if g["id"] == graph_id:
                 before = (g.get("last_run") or {}).get("results") or {}
-                g["last_run"] = {**last_run, "results": {**before, **last_run.get("results", {})}}
+                after = last_run.get("results", {})
+                if again:
+                    after = {k: [r for r in before.get(k, []) if r.get("status") == "done"] + v for k, v in after.items()}
+                g["last_run"] = {**last_run, "results": {**before, **after}}
                 _write(output, graphs)
                 return
 
@@ -311,6 +317,7 @@ class _Graph:
     children: dict[str, list[str]]
     root_of: dict[str, str]
     label: dict[str, str]
+    picks: dict[tuple[str, str], str] = field(default_factory=dict)   # (from, to) -> the result that line carries
 
 
 def _check(raw: Any, keep: set[str] | None = None, above: set[str] = frozenset()) -> _Graph:
@@ -329,6 +336,7 @@ def _check(raw: Any, keep: set[str] | None = None, above: set[str] = frozenset()
     label = {i: LABELS[n["type"]] for i, n in nodes.items()}
     parent: dict[str, str] = {}
     children: dict[str, list[str]] = {i: [] for i in nodes}
+    picks: dict[tuple[str, str], str] = {}
     for e in graph["edges"]:
         a, b = e["from"], e["to"]
         if keep is not None and (a not in nodes or b not in nodes):
@@ -345,6 +353,8 @@ def _check(raw: Any, keep: set[str] | None = None, above: set[str] = frozenset()
             raise ValueError(f"{label[b]} takes {takes}, and {label[a]} makes {TAKE_WORDS.get(made, 'nothing')}.")
         parent[b] = a
         children[a].append(b)
+        if e.get("file"):
+            picks[(a, b)] = e["file"]
     for i, n in nodes.items():
         s, kind = n["settings"], n["type"]
         if kind not in ROOTS and i not in parent:
@@ -373,7 +383,7 @@ def _check(raw: Any, keep: set[str] | None = None, above: set[str] = frozenset()
         if n["type"] == "split" and root["type"] == "picture" and not root["settings"].get("file") \
                 and root["settings"].get("goal", "character") != "set":
             raise ValueError("Split into props needs a sheet of nine: set its Picture to a sheet of nine.")
-    return _Graph(nodes, parent, children, root_of, label)
+    return _Graph(nodes, parent, children, root_of, label, picks)
 
 
 def _names(text: str) -> str:
@@ -505,12 +515,15 @@ def _descendants(raw: dict[str, Any], node_id: str) -> list[str]:
     return out
 
 
-def _chosen(g: _Graph, node_id: str, results: dict[str, list[dict[str, Any]]]) -> str:
-    """The one file a box hands on: what it was given, the result picked, or its only result."""
+def _chosen(g: _Graph, node_id: str, results: dict[str, list[dict[str, Any]]], child: str | None = None) -> str:
+    """The one file a box hands on to `child`: what it was given, the try dragged onto that line,
+    the result picked on the box, or its only result."""
     n = g.nodes[node_id]
     if n["type"] in ROOTS and n["settings"].get("file"):
         return n["settings"]["file"]
     done = [r["file"] for r in results.get(node_id, []) if r.get("status") == "done" and r.get("file")]
+    if g.picks.get((node_id, child)) in done:
+        return g.picks[(node_id, child)]
     if n.get("picked") in done:
         return n["picked"]
     if len(done) == 1:
@@ -520,14 +533,14 @@ def _chosen(g: _Graph, node_id: str, results: dict[str, list[dict[str, Any]]]) -
     raise ValueError(f"Pick one of {g.label[node_id]}'s {len(done)} results first.")
 
 
-def _seeds(g: _Graph, path: list[str], results: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """What runs starting just below `path` (the boxes above, first box first) begin from: one run,
-    or after a Split, one per prop that came through every box since."""
+def _seeds(g: _Graph, path: list[str], results: dict[str, list[dict[str, Any]]], below: str) -> list[dict[str, Any]]:
+    """What a run of box `below` begins from, given `path` (the boxes above it, first box first): one
+    run, or after a Split, one per prop that came through every box since."""
     split_at = max((i for i, b in enumerate(path) if g.nodes[b]["type"] == "split"), default=None)
     if split_at is None:
         made = {}
-        for b in path:
-            made[MADE_KEY[g.nodes[b]["type"]]] = _chosen(g, b, results)
+        for i, b in enumerate(path):
+            made[MADE_KEY[g.nodes[b]["type"]]] = _chosen(g, b, results, path[i + 1] if i + 1 < len(path) else below)
         return [{"made": made, "label": None}]
     seeds = []
     for prop in [r for r in results.get(path[split_at], []) if r.get("status") == "done" and r.get("file")]:
@@ -560,16 +573,15 @@ def plan_from(raw: Any, node_id: str, mode: str, results: dict[str, list[dict[st
     planner = _Planner(g, recipes)
     if mode == "after":
         starts = planner.step_children(node_id)
-        seeds = _seeds(g, [*up, node_id], results)
         if not starts:
             raise ValueError(f"Nothing comes after {g.label[node_id]}.")
-        for c in starts:
-            planner.walk(c, None, False, seeds=seeds)
+        for c in starts:   # each line may carry its own try
+            planner.walk(c, None, False, seeds=_seeds(g, [*up, node_id], results, c))
         return planner.plan()
     if g.nodes[node_id]["type"] in ROOTS:
         planner.walk(node_id, None, False, single=mode == "only")
     else:
-        planner.walk(node_id, None, False, seeds=_seeds(g, up, results), single=mode == "only")
+        planner.walk(node_id, None, False, seeds=_seeds(g, up, results, node_id), single=mode == "only")
     if mode == "only":
         planner.step_children(node_id)   # an Export below this box still lists what it makes
     return planner.plan()
@@ -642,6 +654,7 @@ class GraphRun:
     results: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     error: str = ""
     cancel_requested: bool = False
+    again: bool = False          # a box made again: its new tries join the old ones
     started: float = field(default_factory=time.time)
 
     def waiting_for_pick(self) -> list[str]:
@@ -657,7 +670,7 @@ class GraphRun:
                 "stage": self.stage, "stages": [s.to_dict() for s in self.plan.stages],
                 "plan": describe_plan(self.plan), "chains": list(self.chains),
                 "current_chain": self.current_chain, "results": results, "error": self.error,
-                "waiting_for_pick": self.waiting_for_pick(), "elapsed": round(time.time() - self.started, 1)}
+                "waiting_for_pick": self.waiting_for_pick(), "again": self.again, "elapsed": round(time.time() - self.started, 1)}
 
 
 class GraphRunner:
@@ -682,12 +695,14 @@ class GraphRunner:
         return plan_from(graph, node, mode, results, self.recipes)
 
     def start(self, graph: dict[str, Any], *, node: str | None = None, mode: str = "all", client: str | None = None,
-              background: bool = True, before_stage: Callable[[GraphRun, int], Any] | None = None) -> GraphRun:
+              again: bool = False, background: bool = True,
+              before_stage: Callable[[GraphRun, int], Any] | None = None) -> GraphRun:
         plan = self.plan(graph, node, mode)   # refused here, before anything starts
         with self.lock:
             if self.running() is not None:
                 raise RuntimeError("a canvas is already running; wait for it to finish")
-            run = GraphRun(graph_id=graph.get("id"), name=_clean_text(graph.get("name"), NAME_LIMIT) or "Canvas", plan=plan)
+            run = GraphRun(graph_id=graph.get("id"), name=_clean_text(graph.get("name"), NAME_LIMIT) or "Canvas", plan=plan,
+                           again=again and mode == "only")
             recent = sorted(self.runs.values(), key=lambda r: r.started)[-(KEEP_RUNS - 1):]
             self.runs = {r.id: r for r in recent} | {run.id: run}   # finished runs pile up otherwise
         work = lambda: self._run(run, client, before_stage)
@@ -746,7 +761,7 @@ class GraphRunner:
         finally:
             run.current_chain = None
             _keep_run(self.output, run.graph_id, {"status": run.status, "results": run.to_dict()["results"],
-                                                   "error": run.error, "finished": int(time.time())})
+                                                   "error": run.error, "finished": int(time.time())}, again=run.again)
 
     def _chain(self, run: GraphRun, stage: Stage, job: dict[str, Any], client: str | None) -> Chain | None:
         title = f"{run.name} · {job['label']}" if job["label"] else run.name

@@ -21,12 +21,12 @@ def test_operations_build_a_canvas_and_each_bad_one_says_which():
         {"add": "model", "after": "p", "settings": {"engine": "pixal3d"}},
         {"add": "finish", "after": "n2"},
         {"set": "n2", "settings": {"engine": "trellis"}}, {"set": "p", "settings": {"goal": None}},
-        {"disconnect": ["p", "n3"]}, {"connect": ["p", "n3"]}, {"pick": "p", "file": "images/a.png"},
+        {"disconnect": ["p", "n3"]}, {"connect": ["p", "n3"], "file": "images/b.png"}, {"pick": "p", "file": "images/a.png"},
         {"remove": "n3"}, {"rename": "Lamp"},
     ])
     assert [(n["id"], n["type"], n["x"], n["y"]) for n in g["nodes"]] == [("p", "picture", 40, 60), ("n2", "model", 300, 60),
                                                                         ("n4", "finish", 560, 60)]
-    assert g["edges"] == [{"from": "p", "to": "n2"}, {"from": "n2", "to": "n4"}]
+    assert g["edges"] == [{"from": "p", "to": "n2"}, {"from": "n2", "to": "n4"}]   # n3 went, with its line
     assert g["nodes"][0]["settings"] == {"prompt": "a lamp"} and g["nodes"][0]["picked"] == "images/a.png"
     assert g["nodes"][1]["settings"] == {"engine": "trellis"} and g["name"] == "Lamp"
     for bad, words in (({"add": "model", "after": "ghost"}, "no box ghost"), ({"remove": "zz"}, "no box zz"),

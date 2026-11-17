@@ -578,3 +578,40 @@ def test_running_one_box_and_a_stale_save_through_the_server(tmp_path, monkeypat
     finally:
         server.shutdown()
         server.server_close()
+
+
+# ---------------------------------------------------------------- tries: Again, and a try dragged onto a line
+def test_each_line_carries_the_try_dragged_onto_it():
+    g = graph([node("p", "picture", prompt="a lamp", goal="prop"), node("m1", "model", engine="sf3d"),
+               node("m2", "model", engine="pixal3d")], [("p", "m1"), ("p", "m2")])
+    g["edges"][0]["file"], g["edges"][1]["file"] = "images/a.png", "images/c.png"
+    results = {"p": [{"status": "done", "file": f"images/{x}.png"} for x in "abc"]}
+    one = ga.plan_from(g, "m1", "only", results, RECIPES).stages[0].seeds
+    two = ga.plan_from(g, "m2", "only", results, RECIPES).stages[0].seeds
+    after = [s.seeds[0]["made"]["picture"] for s in ga.plan_from(g, "p", "after", results, RECIPES).stages]
+    assert one[0]["made"] == {"picture": "images/a.png"} and two[0]["made"] == {"picture": "images/c.png"}
+    assert after == ["images/a.png", "images/c.png"]
+    assert ga.clean_graph({**g, "edges": [{"from": "p", "to": "m1", "file": "../x.png"}]})["edges"] == [{"from": "p", "to": "m1"}]
+
+
+def test_a_line_with_no_try_on_it_uses_the_box_pick_then_asks():
+    g = graph([node("p", "picture", prompt="a lamp", goal="prop"), node("m", "model", engine="sf3d")], [("p", "m")])
+    results = {"p": [{"status": "done", "file": "images/a.png"}, {"status": "done", "file": "images/b.png"}]}
+    with pytest.raises(ValueError, match="Pick one"):
+        ga.plan_from(g, "m", "only", results, RECIPES)
+    g["edges"][0]["file"] = "images/gone.png"            # a try that was since replaced: the box's pick decides
+    g["nodes"][0]["picked"] = "images/b.png"
+    assert ga.plan_from(g, "m", "only", results, RECIPES).stages[0].seeds[0]["made"] == {"picture": "images/b.png"}
+
+
+def test_again_adds_a_try_and_keeps_the_old_ones(tmp_path):
+    saved = ga.save_graph(tmp_path, {**CHARACTER, "id": None})
+    runner, _jobs = _graph_runner(tmp_path)
+    runner.start(saved, background=False)
+    first = ga.get_graph(tmp_path, saved["id"])["last_run"]["results"]["n3"]
+    run = runner.start(ga.get_graph(tmp_path, saved["id"]), node="n3", mode="only", again=True, background=False)
+    assert run.to_dict()["again"] is True
+    tries = ga.get_graph(tmp_path, saved["id"])["last_run"]["results"]["n3"]
+    assert tries[0] == first[0] and len(tries) == 2 and tries[1]["file"] != first[0]["file"]
+    runner.start(ga.get_graph(tmp_path, saved["id"]), node="n3", mode="only", background=False)   # not again: replaced
+    assert len(ga.get_graph(tmp_path, saved["id"])["last_run"]["results"]["n3"]) == 1

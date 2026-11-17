@@ -637,7 +637,7 @@ def apply_ops(graph: dict[str, Any], ops: list[dict[str, Any]]) -> dict[str, Any
     """The canvas with each operation applied in order. Raises StudioError naming the bad one.
 
     {"add": type, "id": optional, "after": box to join it to, "settings": {...}}
-    {"remove": id}   {"connect": [from, to]}   {"disconnect": [from, to]}
+    {"remove": id}   {"connect": [from, to], "file": optional try of `from` this line carries}   {"disconnect": [from, to]}
     {"set": id, "settings": {...}} (merged; null removes a setting)   {"pick": id, "file": path}
     {"rename": "new canvas name"}
     """
@@ -677,7 +677,7 @@ def apply_ops(graph: dict[str, Any], ops: list[dict[str, Any]]) -> dict[str, Any
                 raise StudioError(f"{where}: give two box ids that exist, [from, to]")
             g["edges"] = [e for e in g["edges"] if (e["from"], e["to"]) != tuple(pair)]
             if "connect" in op:
-                g["edges"].append({"from": pair[0], "to": pair[1]})
+                g["edges"].append({"from": pair[0], "to": pair[1], **({"file": op["file"]} if op.get("file") else {})})
         elif "set" in op:
             node = by_id(op["set"])
             if node is None:
@@ -713,12 +713,13 @@ def check_canvas(studio: Studio, *, canvas_id: str, box_id: str | None = None, m
     return _check_lines(studio, studio.get(f"api/graphs/{canvas_id}"), box_id, mode)
 
 
-def run_canvas(studio: Studio, *, canvas_id: str, box_id: str | None = None, mode: str = "all") -> dict[str, Any]:
+def run_canvas(studio: Studio, *, canvas_id: str, box_id: str | None = None, mode: str = "all",
+               again: bool = False) -> dict[str, Any]:
     if mode not in ("all", "only", "from", "after"):
         raise StudioError("mode is all, only (this box), from (this box and below) or after (below a picked picture)")
     if mode != "all" and not box_id:
         raise StudioError(f"mode {mode!r} needs box_id")
-    body = {"node": box_id, "mode": mode} if mode != "all" else {}
+    body = {"node": box_id, "mode": mode, "again": again} if mode != "all" else {}
     run = studio.post_json(f"api/graphs/{canvas_id}/run", body)
     return {"run_id": run["id"], "plan": run["plan"], "watch": "canvas_status with this run_id (wait_seconds up to 50)",
             "studio": studio.studio_link()}
@@ -1584,7 +1585,9 @@ def build_server(studio: Studio | None = None):
         """Build or change a canvas with operations, applied in order; canvas_id None starts a new one named
         `name`. Operations: {"add": type, "after": box_id, "settings": {...}} adds a box joined to box_id;
         {"remove": id}; {"connect": [from, to]}; {"disconnect": [from, to]}; {"set": id, "settings": {...}}
-        (null removes one); {"pick": id, "file": path} picks a Picture's option; {"rename": name}.
+        (null removes one); {"pick": id, "file": path} picks which of a box's tries carries on;
+        {"connect": [from, to], "file": path} joins them and makes that line carry one try of `from`;
+        {"rename": name}.
         Example: [{"add": "picture", "id": "p", "settings": {"prompt": "a brass lamp", "goal": "prop"}},
         {"add": "model", "after": "p", "settings": {"engine": "pixal3d"}}, {"add": "finish", "after": "n2"}].
         Returns the saved canvas and how it would run, or why it can't yet. box_types lists the types."""
@@ -1603,11 +1606,12 @@ def build_server(studio: Studio | None = None):
         return safe(lambda: check_canvas(studio, canvas_id=canvas_id, box_id=box_id, mode=mode))
 
     @server.tool(name="run_canvas", structured_output=False)
-    def tool_run_canvas(canvas_id: str, box_id: str | None = None, mode: str = "all"):
+    def tool_run_canvas(canvas_id: str, box_id: str | None = None, mode: str = "all", again: bool = False):
         """Run a saved canvas: mode all (every box), only (box_id alone, from what the boxes above it made last
         time), from (box_id and every box below it), after (the boxes below box_id; use once a Picture's option
-        is picked). Takes minutes; each straight line of boxes is one ordinary run. Watch with canvas_status."""
-        return safe(lambda: run_canvas(studio, canvas_id=canvas_id, box_id=box_id, mode=mode))
+        is picked). again=True with mode only adds a new try beside the box's old ones instead of replacing
+        them. Takes minutes; each straight line of boxes is one ordinary run. Watch with canvas_status."""
+        return safe(lambda: run_canvas(studio, canvas_id=canvas_id, box_id=box_id, mode=mode, again=again))
 
     @server.tool(name="canvas_status", structured_output=False)
     def tool_canvas_status(run_id: str | None = None, wait_seconds: int = 0):
