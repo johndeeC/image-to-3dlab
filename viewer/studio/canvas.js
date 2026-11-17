@@ -434,3 +434,14 @@ export function runBanner(run, graphId) {
   const where = here ? 'Running' : run.name ? `Running on “${run.name}”` : 'Running on another canvas';
   return { here, text: `${where}: ${doing} · ${time}` };
 }
+
+/** Where a line's wires start: from the try it carries; from every tile of a box whose results
+ *  all go on (a Split's props, picked-out parts, the sides of Four views), so they visibly
+ *  gather into the next box; else from the box. `tiles` are the box's option tiles ({file, port}). */
+export function lineStarts(graph, edge, tiles, boxPort) {
+  const carried = edge.file ? tiles.find((t) => t.file === edge.file) : null;
+  if (carried) return [carried.port];
+  const node = graph.nodes.find((n) => n.id === edge.from);
+  if ([...FANS, 'views'].includes(node?.type) && tiles.length) return tiles.map((t) => t.port);
+  return [boxPort(node)];
+}

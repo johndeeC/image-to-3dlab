@@ -6,7 +6,7 @@
 import { NODES, NODE_W, PORT_Y, newGraph, addNode, removeNodes, moveNodes, setSetting, connect, canConnect, removeEdge,
   edgePath, starter, nodeState, runningNode, takersOf, addConnected, connectSelected, group, ungroup, renameGroup,
   groupBounds, pickResult, downstreamOf, isChoice, edgeFile, useResult, addFromResult, tileFace, tagText,
-  optionTiles, makeRoom, curve, OPTION_W, OPTION_OFFSET, redoChoices, mergeRun, finishRun, runBanner } from './canvas.js';
+  optionTiles, makeRoom, curve, OPTION_W, OPTION_OFFSET, redoChoices, mergeRun, finishRun, runBanner, lineStarts } from './canvas.js';
 import { openPeek } from './canvas-peek.js';
 import { libraryChoices, assetIdsFor } from './canvas-library.js';
 import { identity, screenToBoard, zoomAt, zoomTo, zoomStep, panBy, wheelFactor, wheelIntent, fitAll, zoomPercent, rememberView, recallView, placeTip } from './canvas-view.js';
@@ -354,22 +354,22 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   }
 
   /** Where a line leaves: the option tile of the try it carries, or the box. */
-  function lineStart(from, file) {
-    const tile = file ? options.get(from)?.find((t) => t.file === file) : null;
-    if (tile) return tile.port;
-    const a = graph.nodes.find((n) => n.id === from);
-    return { x: a.x + NODE_W, y: a.y + PORT_Y };
-  }
+  const boxPort = (n) => ({ x: n.x + NODE_W, y: n.y + PORT_Y });
+  // a line being drawn: from the try dragged out, else from the box
+  const lineStart = (from, file) => lineStarts(graph, { from, file }, file ? options.get(from) || [] : [], boxPort)[0];
 
   function renderLines(extra = null) {
     const at = new Map(graph.nodes.map((n) => [n.id, n]));
     $('.canvas-lines').innerHTML = graph.edges.map((e) => {
       const a = at.get(e.from), b = at.get(e.to);
       if (!a || !b) return '';
-      const start = lineStart(e.from, e.file);
-      const d = curve(start.x, start.y, b.x, b.y + PORT_Y);
+      // a box whose tries all go on (parts, props, sides): one wire from each tile, gathering in
+      const starts = lineStarts(graph, e, options.get(e.from) || [], boxPort);
       const carries = e.file ? ' carries' : '';
-      return `<g class="edge${carries}" data-from="${esc(e.from)}" data-to="${esc(e.to)}"><path class="hit" d="${d}"><title>${e.file ? 'Carries one try. ' : ''}Click to remove this line</title></path><path class="wire" d="${d}"/></g>`;
+      return `<g class="edge${carries}" data-from="${esc(e.from)}" data-to="${esc(e.to)}">${starts.map((start) => {
+        const d = curve(start.x, start.y, b.x, b.y + PORT_Y);
+        return `<path class="hit" d="${d}"><title>${e.file ? 'Carries one try. ' : ''}Click to remove this line</title></path><path class="wire" d="${d}"/>`;
+      }).join('')}</g>`;
     }).join('') + [...options].map(([id, tiles]) => {   // faint ties: box -> each of its option tiles
       const a = at.get(id);
       return a ? tiles.map((t) => `<path class="tie" d="${curve(a.x + NODE_W, a.y + PORT_Y, t.x, t.y + OPTION_W / 2)}"/>`).join('') : '';

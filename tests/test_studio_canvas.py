@@ -358,3 +358,18 @@ def test_a_run_says_where_it_is_and_what_it_is_doing():
     assert out[1] == {"here": False, "text": "Running on “Knight parts”: 3D model, once for each of 3 parts · 1 min 23 s"}
     assert out[2] is None and out[3] is None
     assert out[4]["text"].startswith("Running on another canvas:")
+
+
+def test_lines_start_from_the_tiles_that_carry_on():
+    out = _run("""const g = { nodes: [{ id: 'x', type: 'parts', x: 0, y: 0, settings: {} }, { id: 'v', type: 'views', x: 0, y: 400, settings: {} },
+        { id: 'p', type: 'picture', x: 0, y: 800, settings: {} }, { id: 'm', type: 'model', x: 600, y: 0, settings: {} }], edges: [] };
+      const tiles = [{ file: 'a.png', port: { x: 300, y: 10 } }, { file: 'b.png', port: { x: 300, y: 120 } }];
+      const port = (n) => ({ x: n.x + 1, y: n.y + 2 });
+      console.log(JSON.stringify([
+        m.lineStarts(g, { from: 'x', to: 'm' }, tiles, port),               // every part goes on
+        m.lineStarts(g, { from: 'x', to: 'm', file: 'b.png' }, tiles, port), // one part dragged onto the line
+        m.lineStarts(g, { from: 'v', to: 'm' }, tiles, port),               // every side goes on
+        m.lineStarts(g, { from: 'p', to: 'm' }, tiles, port),               // options: the box's pick goes on
+        m.lineStarts(g, { from: 'x', to: 'm' }, [], port)]))""")
+    assert out == [[{"x": 300, "y": 10}, {"x": 300, "y": 120}], [{"x": 300, "y": 120}], [{"x": 300, "y": 10}, {"x": 300, "y": 120}],
+                   [{"x": 1, "y": 802}], [{"x": 1, "y": 2}]]

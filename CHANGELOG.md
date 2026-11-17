@@ -79,6 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cut out background works on generated pictures (their licence record was read wrong).
 - Canvas: opening the canvas while another one was running no longer showed that run's
   results on the wrong boxes. The quick view fits a short window, buttons and all.
+- Canvas: the line out of Pick out parts, Split into props or Four views now starts at each
+  of its tiles and gathers into the next box, since every one of them goes on.
 
 ## [0.5.11] - 2026-11-17
 
