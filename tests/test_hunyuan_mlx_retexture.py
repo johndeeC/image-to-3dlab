@@ -32,14 +32,15 @@ def test_a_model_is_read_as_one_mesh_and_an_empty_one_refused(tmp_path):
         rt.load_mesh(empty)
 
 
-def test_the_repainted_model_records_where_its_shape_came_from(tmp_path):
-    model = tmp_path / "knight.glb"
+def test_the_repainted_model_keeps_the_source_licence_and_the_paint_licence(tmp_path):
+    model, output = tmp_path / "knight.glb", tmp_path / "out.glb"
     model.write_bytes(b"glb")
-    model.with_suffix(".provenance.json").write_text(json.dumps({"models": [{"id": "pixal3d"}]}))
-    sidecar = tmp_path / "out.provenance.json"
-    sidecar.write_text(json.dumps({"models": [{"id": "hunyuan-paint"}]}))
-    rt.note_source(sidecar, model)
-    record = json.loads(sidecar.read_text())
-    assert record["models"] == [{"id": "hunyuan-paint"}]
-    assert record["derived_from"] == {"path": str(model), "provenance": {"models": [{"id": "pixal3d"}]}}
-    assert rt.source_record(tmp_path / "missing.glb") is None
+    output.write_bytes(b"painted")
+    model.with_suffix(".json").write_text(json.dumps({"license": {"name": "MIT", "conditions": []},
+                                                      "output": {"classification": "commercial-clear"}}))
+    paint = tmp_path / "out.provenance.json"
+    paint.write_text(json.dumps({"license": {"name": "Tencent Hunyuan Community", "conditions": ["not EU/UK/KR"]},
+                                 "output": {"classification": "territory-restricted"}}))
+    record = json.loads(rt.write_record(model, output, paint).read_text())
+    assert record["operation"] == "repaint" and record["license"]["name"] == "MIT + Tencent Hunyuan Community"
+    assert "not EU/UK/KR" in record["license"]["conditions"] and record["source_record"]["license"]["name"] == "MIT"

@@ -64,20 +64,13 @@ def load_mesh(path: Path):
     return trimesh.Trimesh(vertices=loaded.vertices, faces=loaded.faces, process=False)
 
 
-def source_record(model: Path) -> dict | None:
-    """The repainted model's own licence record, when it has one beside it."""
-    sidecar = model.with_suffix(".provenance.json")
-    try:
-        return json.loads(sidecar.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+def write_record(model: Path, output: Path, paint_sidecar: Path) -> Path:
+    """The repainted model's licence record: the source model's licences and the paint stage's, both
+    kept (provenance.write_derived_sidecar), since the shape came from one and the texture from the other."""
+    from image_to_3dlab.provenance import write_derived_sidecar
 
-
-def note_source(sidecar: Path, model: Path) -> None:
-    """Add the repainted model to the output's record: its shape came from there."""
-    record = json.loads(sidecar.read_text(encoding="utf-8"))
-    record["derived_from"] = {"path": str(model), "provenance": source_record(model)}
-    sidecar.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    paint = json.loads(paint_sidecar.read_text(encoding="utf-8"))
+    return write_derived_sidecar(model, output, operation="repaint", component_records=[paint])
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -95,12 +88,12 @@ def main(argv: list[str] | None = None) -> None:
               args.paint_tex, t0)
     shape_file.unlink(missing_ok=True)
     set_glb_generator(args.output)
-    sidecar = write_hunyuan_sidecar(
+    paint_sidecar = write_hunyuan_sidecar(
         args.output, args.image, backend=BACKEND, paint=True,
         parameters={"source_model": str(args.model), "paint_seed": args.paint_seed, "paint_res": args.paint_res,
                     "paint_steps": args.paint_steps, "paint_tex": args.paint_tex,
                     "decimation_target": args.decimation_target})
-    note_source(sidecar, args.model)
+    write_record(args.model, args.output, paint_sidecar)
     print(f"done ({time.time() - t0:.0f}s) -> {args.output}", flush=True)
 
 
