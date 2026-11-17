@@ -45,10 +45,16 @@ fit. A test checks the two lists agree, key for key and choice for choice.
 Each box is a **tile**: what it made, large, with a small coloured tag on top naming it (a
 Picture's tag is its first words), as on Tripo's canvas. The colour says what kind of step
 it is: drawing (blue), shape (purple), finishing (teal), moving (orange), files you bring
-(grey). Before it has made anything, a tile shows its own words. A box with several tries
-shows the one it hands on, with ‹ 2/3 › to step through them; a box whose results all carry
-on (a Split's props, and every box below a Split) shows them as a mosaic. Lines meet the
-tiles side-on, thin and dashed.
+(grey). Before it has made anything, a tile shows its own words. Lines meet the tiles
+side-on, thin and dashed.
+
+**Prompt → 4 pictures → carry on from each.** A box with several tries (a Picture asked for
+4, or Make another) lays each try out as a **tile of its own** in a column beside it, joined
+to it by faint lines, each with its own dot. Draw a line from any one's dot, or drag the
+picture itself, to make the next step from that one: one 3D model from picture 2, another
+from picture 4. The box shows its words, or the one picked. When the tries arrive, the
+boxes after it move right to make room. A box whose results all carry on together (a
+Split's props, and every box below a Split) shows them as a mosaic instead.
 
 Click a box to open the **side panel**: its settings, **Run this box**, **Make another**,
 **Run from here**, and every try. The tile itself stays a picture.

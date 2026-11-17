@@ -205,9 +205,40 @@ export function removeEdge(graph, from, to) {
 
 /** The SVG path of a line: from the right-hand dot of one box to the left-hand dot of the next. */
 export function edgePath(a, b) {
-  const x1 = a.x + NODE_W, y1 = a.y + PORT_Y, x2 = b.x, y2 = b.y + PORT_Y;
+  return curve(a.x + NODE_W, a.y + PORT_Y, b.x, b.y + PORT_Y);
+}
+
+/** The same curve between any two points (a line out of an option tile). */
+export function curve(x1, y1, x2, y2) {
   const d = Math.max(40, Math.abs(x2 - x1) / 2);
   return `M ${x1} ${y1} C ${x1 + d} ${y1}, ${x2 - d} ${y2}, ${x2} ${y2}`;
+}
+
+// A box with several tries (a Picture asked for 4, or Make another) lays each out as a tile of its
+// own in a column to its right, so you can carry on from any one: its size, gap, and distance.
+export const OPTION_W = 96;
+export const OPTION_GAP = 12;
+export const OPTION_OFFSET = 40;
+
+/** The option tiles of a box with tries: [{file, label, x, y, w, h, port: {x, y}}], or none. */
+export function optionTiles(graph, node, files) {
+  if (!files || files.length < 2 || !isChoice(graph, node.id)) return [];
+  const x = node.x + NODE_W + OPTION_OFFSET;
+  return files.map((f, i) => {
+    const y = node.y + i * (OPTION_W + OPTION_GAP);
+    return { file: f.file, label: f.label || `Try ${i + 1}`, x, y, w: OPTION_W, h: OPTION_W,
+      port: { x: x + OPTION_W, y: y + OPTION_W / 2 } };
+  });
+}
+
+/** Move everything after a box to the right, if needed, so `width` past its tile is free. */
+export function makeRoom(graph, id, width) {
+  const node = graph.nodes.find((n) => n.id === id);
+  const below = downstreamOf(graph, id);
+  if (!node || !below.length) return graph;
+  const nearest = Math.min(...graph.nodes.filter((n) => below.includes(n.id)).map((n) => n.x));
+  const dx = node.x + NODE_W + width - nearest;
+  return dx > 0 ? moveNodes(graph, below, dx, 0) : graph;
 }
 
 /** Ready-made boards to start from. `engines` are the ready 3D engines, best first. */
@@ -302,7 +333,14 @@ export function tileFace(graph, node, state) {
     const words = node.type === 'picture' ? (node.settings?.prompt || 'Describe it in the side panel') : NODES[node.type].hint;
     return { kind: 'empty', file: null, files: [], count: 0, tryIndex: -1, text: words };
   }
-  if (files.length > 1 && !isChoice(graph, node.id)) {
+  if (files.length > 1 && isChoice(graph, node.id)) {
+    // tries sit beside the box as option tiles: the box shows the picked one, or its own words
+    const picked = files.findIndex((f) => f.file === node.picked);
+    if (picked >= 0) return { kind: 'one', file: files[picked].file, files, count: files.length, tryIndex: picked, text: '' };
+    const words = node.type === 'picture' && node.settings?.prompt ? node.settings.prompt : `${files.length} tries: carry on from any one`;
+    return { kind: 'empty', file: null, files, count: files.length, tryIndex: -1, text: words };
+  }
+  if (files.length > 1) {   // a split's props, and every box below a split: they all carry on
     return { kind: 'mosaic', file: null, files: files.slice(0, 9), count: files.length, tryIndex: -1, text: '' };
   }
   const picked = files.findIndex((f) => f.file === node.picked);

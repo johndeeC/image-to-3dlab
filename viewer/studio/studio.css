@@ -603,3 +603,17 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .canvas-side .tag { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; }
 .canvas-side p.hint { margin: 0; font-size: 12px; }
 .canvas-side select, .canvas-side textarea, .canvas-side input[type="text"], .canvas-side input[type="number"] { width: 100%; }
+/* Option tiles: each try of a box (a Picture asked for 4) on its own, to carry on from any one */
+.canvas-options { position: absolute; left: 0; top: 0; }
+.rtile { position: absolute; left: 0; top: 0; width: 96px; height: 96px; border-radius: 10px; overflow: visible; cursor: grab;
+  background: #0c0a09; border: 1px solid var(--line-hi); box-shadow: 0 4px 14px #0008; }
+.rtile img { width: 100%; height: 100%; object-fit: cover; border-radius: 9px; display: block; pointer-events: none; }
+.rtile img.mark { width: 36%; height: auto; opacity: .3; position: absolute; inset: 0; margin: auto; object-fit: contain; }
+.rtile small { position: absolute; left: 5px; bottom: 3px; font-size: 10px; color: #fff; text-shadow: 0 1px 2px #000; pointer-events: none; }
+.rtile:hover { border-color: var(--flame); }
+.rtile.picked { border: 2px solid var(--ember); }
+.rtile.carried::after { content: ""; position: absolute; left: 6px; top: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--flame); }
+.rtile .port.out { position: absolute; right: -8px; top: 41px; width: 14px; height: 14px; border-radius: 50%; background: var(--raise);
+  border: 2px solid var(--line-hi); cursor: crosshair; }
+.rtile .port.out:hover { border-color: var(--ember); background: var(--ember); }
+.canvas-lines .tie { fill: none; stroke: #8a7e76; stroke-width: 1; opacity: .45; }

@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Canvas boxes are now preview tiles, as on Tripo's canvas: what each made, large, under a
   coloured tag, with a mosaic for a split's parts. Settings, runs and tries open in a side panel
   when you click a box. Drag one part out of a split to carry on from that part alone.
+- Canvas: prompt → 4 pictures → carry on from each. A box's tries (a Picture asked for 4, or
+  Make another) each get a tile of their own beside it, with their own dot: draw a line from
+  any one to make the next step from that picture.
 - Agents can build and run canvases: `box_types`, `list_canvases`, `get_canvas`, `edit_canvas`,
   `save_canvas`, `check_canvas`, `run_canvas`, `canvas_status`, `cancel_canvas_run`.
 

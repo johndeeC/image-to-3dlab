@@ -5,7 +5,8 @@
 
 import { NODES, NODE_W, PORT_Y, newGraph, addNode, removeNodes, moveNodes, setSetting, connect, canConnect, removeEdge,
   edgePath, starter, nodeState, runningNode, takersOf, addConnected, connectSelected, group, ungroup, renameGroup,
-  groupBounds, pickResult, downstreamOf, isChoice, edgeFile, useResult, addFromResult, tileFace, tagText } from './canvas.js';
+  groupBounds, pickResult, downstreamOf, isChoice, edgeFile, useResult, addFromResult, tileFace, tagText,
+  optionTiles, makeRoom, curve, OPTION_W, OPTION_OFFSET } from './canvas.js';
 import { openPeek } from './canvas-peek.js';
 import { identity, screenToBoard, zoomAt, zoomTo, zoomStep, panBy, wheelFactor, wheelIntent, fitAll, zoomPercent, rememberView, recallView } from './canvas-view.js';
 import { nodesInRect, toggle, addAll, keepExisting } from './canvas-select.js';
@@ -53,6 +54,8 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   let run = null, chain = null, timer = null, saveTimer = null, saving = Promise.resolve();
   let tool = 'pointer', spaceHeld = false, drag = null, menu = null, pastes = 0;
   const cards = new Map();   // box id -> its element
+  let options = new Map();   // box id -> its option tiles (optionTiles), one per try
+  const ROOM = OPTION_OFFSET + OPTION_W + 60;   // what a column of options needs before the next box
   const sizes = {};          // box id -> {w, h}, measured
 
   el.innerHTML = `<div class="canvas-top">
@@ -77,7 +80,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     </div>
     <p class="hint canvas-say" aria-live="polite"></p>
     <div class="canvas-board" tabindex="0" aria-label="Canvas board">
-      <div class="canvas-space"><div class="canvas-frames"></div><svg class="canvas-lines" aria-hidden="true"></svg><div class="canvas-nodes"></div></div>
+      <div class="canvas-space"><div class="canvas-frames"></div><svg class="canvas-lines" aria-hidden="true"></svg><div class="canvas-options"></div><div class="canvas-nodes"></div></div>
       <p class="hint canvas-empty">An empty board. Double-click it, press Tab or use + Add.</p>
       <div class="canvas-marquee" hidden></div>
       <div class="canvas-menu" role="menu" hidden></div>
@@ -262,7 +265,13 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       }
     }
     for (const [id, card] of cards) if (!seen.has(id)) { card.remove(); cards.delete(id); }
-    for (const [id, card] of cards) sizes[id] = { w: card.offsetWidth || NODE_W, h: card.offsetHeight || NODE_W };
+    refreshOptions();
+    for (const [id, card] of cards) {
+      const h = card.offsetHeight || NODE_W, tiles = options.get(id);
+      sizes[id] = tiles ? { w: NODE_W + OPTION_OFFSET + OPTION_W, h: Math.max(h, tiles.at(-1).y + OPTION_W - tiles[0].y) }
+        : { w: card.offsetWidth || NODE_W, h };
+    }
+    renderOptions();
     $('.canvas-empty').hidden = graph.nodes.length > 0;
     renderSide();
   }
@@ -297,14 +306,47 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     }
   }
 
+  function refreshOptions() {
+    options = new Map(graph.nodes.map((n) => [n.id, optionTiles(graph, n, nodeState(merged(), n.id).files)]).filter(([, t]) => t.length));
+  }
+
+  /** Each try of a box with several, as a tile of its own with its own dot to carry on from. */
+  function renderOptions() {
+    const box = $('.canvas-options');
+    const html = [...options].map(([id, tiles]) => {
+      const node = graph.nodes.find((n) => n.id === id);
+      const carried = new Set(graph.edges.filter((e) => e.from === id && e.file).map((e) => e.file));
+      return tiles.map((t) => `<div class="rtile${node.picked === t.file ? ' picked' : ''}${carried.has(t.file) ? ' carried' : ''}"
+          style="transform:translate(${t.x}px,${t.y}px)" data-node="${esc(id)}" data-result="${esc(t.file)}" data-name="${esc(t.label)}"
+          data-tip="${esc(`${t.label}: click to look closer; drag its dot (or it) to carry on from this one`)}">
+          ${thumbImg(t.file)}<small>${esc(t.label)}</small><span class="port out" data-rport></span></div>`).join('');
+    }).join('');
+    if (box.dataset.shown === html) return;
+    box.innerHTML = html;
+    box.dataset.shown = html;
+    box.querySelectorAll('[data-kit-file]').forEach((img) => on.thumb?.(img, img.dataset.kitFile));
+  }
+
+  /** Where a line leaves: the option tile of the try it carries, or the box. */
+  function lineStart(from, file) {
+    const tile = file ? options.get(from)?.find((t) => t.file === file) : null;
+    if (tile) return tile.port;
+    const a = graph.nodes.find((n) => n.id === from);
+    return { x: a.x + NODE_W, y: a.y + PORT_Y };
+  }
+
   function renderLines(extra = null) {
     const at = new Map(graph.nodes.map((n) => [n.id, n]));
     $('.canvas-lines').innerHTML = graph.edges.map((e) => {
       const a = at.get(e.from), b = at.get(e.to);
       if (!a || !b) return '';
-      const d = edgePath(a, b);
+      const start = lineStart(e.from, e.file);
+      const d = curve(start.x, start.y, b.x, b.y + PORT_Y);
       const carries = e.file ? ' carries' : '';
       return `<g class="edge${carries}" data-from="${esc(e.from)}" data-to="${esc(e.to)}"><path class="hit" d="${d}"><title>${e.file ? 'Carries one try. ' : ''}Click to remove this line</title></path><path class="wire" d="${d}"/></g>`;
+    }).join('') + [...options].map(([id, tiles]) => {   // faint ties: box -> each of its option tiles
+      const a = at.get(id);
+      return a ? tiles.map((t) => `<path class="tie" d="${curve(a.x + NODE_W, a.y + PORT_Y, t.x, t.y + OPTION_W / 2)}"/>`).join('') : '';
     }).join('') + (extra ? `<path class="wire draft" d="${extra}"/>` : '');
   }
 
@@ -357,7 +399,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   }
   function fit() {
     renderNodes();
-    setView(fitAll(graph.nodes, sizes, board.clientWidth, board.clientHeight));
+    setView(fitAll(graph.nodes, sizes, board.clientWidth, board.clientHeight));   // sizes include option columns
   }
 
   function openGraph(next) {
@@ -431,6 +473,10 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     graph = { ...graph, last_run: { status: run.status, results: merged().results } };
     run = null;
     chain = null;
+    // a box that now has several tries shows each as a tile: move what comes after it out of their way
+    let roomy = graph;
+    for (const n of graph.nodes) if (optionTiles(roomy, n, nodeState(merged(), n.id).files).length) roomy = makeRoom(roomy, n.id, ROOM);
+    if (roomy !== graph) apply(keepRun(roomy));
     render();
     on.ran?.();
   }
@@ -486,18 +532,19 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   }
   const additiveClick = (event) => event.shiftKey || event.metaKey || event.ctrlKey;
 
-  function takersMenu(from, sx, sy) {
+  function takersMenu(from, sx, sy, file = null) {
     const at = screenToBoard(view, sx, sy);
     const type = graph.nodes.find((n) => n.id === from)?.type;
     const items = takersOf(type).map((t) => [NODES[t].label, NODES[t].hint, () => {
-      const shown = shownTry(from);
+      const shown = file || shownTry(from);
       apply(shown ? addFromResult(graph, from, shown, t, at.x, at.y - PORT_Y, defaultsFor(t, tools))
         : addConnected(graph, from, t, at.x, at.y - PORT_Y, defaultsFor(t, tools)));
-      selection = [graph.nodes.at(-1).id];
+      selection = [];   // the new box stays in view; click it for its settings
       render();
     }]);
     if (!items.length) { say(`Nothing takes what ${NODES[type].label} makes.`, true); return; }
-    openMenu(sx, sy, 'Add the next box', items);
+    const name = file && options.get(from)?.find((o) => o.file === file)?.label;
+    openMenu(sx, sy, name ? `Make from ${name}` : 'Add the next box', items);
   }
 
   function runMenu(id, sx, sy) {
@@ -623,6 +670,17 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       board.setPointerCapture?.(event.pointerId);
       return;
     }
+    const option = event.target.closest('.rtile');
+    if (option && !(event.button === 1 || tool === 'hand' || spaceHeld)) {
+      drag = event.target.closest('[data-rport]')
+        ? { kind: 'line', from: option.dataset.node, file: option.dataset.result }
+        : { kind: 'result', from: option.dataset.node, file: option.dataset.result, name: option.dataset.name,
+          img: option.querySelector('img')?.src, sx: event.clientX, sy: event.clientY, moved: false };
+      event.preventDefault();
+      board.focus({ preventScroll: true });
+      board.setPointerCapture?.(event.pointerId);
+      return;
+    }
     const card = event.target.closest('.cnode');
     const additive = event.shiftKey || event.metaKey || event.ctrlKey;
     const pt = boardPoint(event);
@@ -663,9 +721,9 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     if (drag.kind === 'result') {
       if (!drag.moved && Math.hypot(event.clientX - drag.sx, event.clientY - drag.sy) < 6) return;
       drag.moved = true;
-      const a = graph.nodes.find((n) => n.id === drag.from);
+      const start = lineStart(drag.from, drag.file);
       const pt = boardPoint(event);
-      renderLines(edgePath(a, { x: pt.x, y: pt.y - PORT_Y }));
+      renderLines(curve(start.x, start.y, pt.x, pt.y));
       const r = board.getBoundingClientRect();
       let ghost = board.querySelector('.canvas-ghost');
       if (!ghost) {
@@ -690,12 +748,14 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
         const n = graph.nodes.find((x) => x.id === id);
         cards.get(id).style.transform = `translate(${n.x}px, ${n.y}px)`;
       }
+      refreshOptions();   // a box's option tiles go where it goes
+      renderOptions();
       renderLines();
       renderFrames();
     } else if (drag.kind === 'line') {
-      const a = graph.nodes.find((n) => n.id === drag.from);
+      const start = lineStart(drag.from, drag.file);
       const pt = boardPoint(event);
-      renderLines(edgePath(a, { x: pt.x, y: pt.y - PORT_Y }));
+      renderLines(curve(start.x, start.y, pt.x, pt.y));
     } else if (drag.kind === 'marquee') {
       const r = board.getBoundingClientRect();
       const box = $('.canvas-marquee');
@@ -741,7 +801,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       const type = graph.nodes.find((n) => n.id === was.from).type;
       const items = takersOf(type).map((t) => [NODES[t].label, NODES[t].hint, () => {
         apply(addFromResult(graph, was.from, was.file, t, at.x, at.y - PORT_Y, defaultsFor(t, tools)));
-        selection = [graph.nodes.at(-1).id];
+        selection = [];   // the new box stays in view; click it for its settings
         render();
         say(`A new ${NODES[t].label} box, starting from ${was.name || 'that one'}. Press its ▶ to make it.`);
       }]);
@@ -752,13 +812,14 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       renderLines();
       if (!target) {
         const r = board.getBoundingClientRect();
-        takersMenu(was.from, event.clientX - r.left, event.clientY - r.top);
+        takersMenu(was.from, event.clientX - r.left, event.clientY - r.top, was.file);
         return;
       }
       if (target.dataset.node === was.from) return;
-      const ok = canConnect(graph, was.from, target.dataset.node);
+      const joined = graph.edges.some((e) => e.from === was.from && e.to === target.dataset.node);
+      const ok = joined && was.file ? true : canConnect(graph, was.from, target.dataset.node);
       if (ok !== true) { say(ok, true); return; }
-      const shown = shownTry(was.from);
+      const shown = was.file || shownTry(was.from);
       apply(shown ? useResult(graph, was.from, shown, target.dataset.node) : connect(graph, was.from, target.dataset.node));
       say('Joined. Press Check to see how it will run.');
     }

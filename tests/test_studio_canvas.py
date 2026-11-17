@@ -235,7 +235,7 @@ def test_a_try_dragged_out_of_a_box_starts_the_next_box_from_it():
     assert out["choice"] == [True, True, False, False]      # a split's props, and the rigs below it, all carry on
 
 
-def test_a_tile_shows_the_pick_or_the_newest_try_a_mosaic_of_props_or_its_own_words():
+def test_a_tile_shows_its_one_result_a_mosaic_of_several_or_its_own_words():
     out = _run("""let g = m.newGraph('B');
       for (const t of ['picture', 'model', 'split', 'rig', 'asset']) g = m.addNode(g, t, 0, 0);
       g = m.connect(m.connect(m.connect(g, 'n1', 'n2'), 'n2', 'n3'), 'n3', 'n4');
@@ -254,8 +254,31 @@ def test_a_tile_shows_the_pick_or_the_newest_try_a_mosaic_of_props_or_its_own_wo
         tags: [m.tagText(node('n1'), 3), m.tagText(node('n2')), m.tagText(node('n3'), 9)], tones: m.NODES.finish.tone }))""")
     assert out["before"] == {"kind": "empty", "file": None, "files": [], "count": 0, "tryIndex": -1,
                              "text": "a very long description of a brass oil lantern"}
-    assert out["newest"] == ["c.png", 2, 3] and out["picked"] == ["a.png", 0]
+    # tries sit beside the box as their own tiles: the box shows its words, then the one picked
+    assert out["newest"] == [None, -1, 3] and out["picked"] == ["a.png", 0]
     assert out["props"] == ["mosaic", 9, 11] and out["rigs"] == "mosaic"      # every prop carries on: a mosaic
     assert out["given"] == ["one", "m/k.glb"]
     assert out["tags"] == ["a very long description o… (3)", "3D model", "Split into props (9)"]
     assert out["tones"] == "finish"
+
+
+def test_each_try_gets_a_tile_of_its_own_to_carry_on_from():
+    out = _run("""let g = m.newGraph('B');
+      for (const t of ['picture', 'model', 'finish', 'split']) g = m.addNode(g, t, 0, 0);
+      g = m.moveNode(g, 'n1', 40, 60); g = m.moveNode(g, 'n2', 290, 60); g = m.moveNode(g, 'n3', 540, 60);
+      g = m.connect(m.connect(g, 'n1', 'n2'), 'n2', 'n3');
+      const four = ['a', 'b', 'c', 'd'].map((x, i) => ({ file: x + '.png', label: i === 0 ? 'Option 1' : null }));
+      const tiles = m.optionTiles(g, g.nodes[0], four);
+      const room = m.makeRoom(g, 'n1', m.OPTION_OFFSET + m.OPTION_W + 60);
+      console.log(JSON.stringify({ tiles: tiles.map((t) => [t.file, t.label, t.x, t.y, t.port]),
+        one: m.optionTiles(g, g.nodes[0], four.slice(0, 1)), props: m.optionTiles(g, g.nodes[3], four),
+        moved: room.nodes.map((n) => n.x), again: m.makeRoom(room, 'n1', 196).nodes.map((n) => n.x),
+        curve: m.curve(0, 0, 100, 50) }))""")
+    w, gap = 96, 12
+    assert out["tiles"][0] == ["a.png", "Option 1", 40 + 160 + 40, 60, {"x": 240 + w, "y": 60 + w / 2}]
+    assert [t[1] for t in out["tiles"]] == ["Option 1", "Try 2", "Try 3", "Try 4"]
+    assert out["tiles"][3][3] == 60 + 3 * (w + gap)
+    assert out["one"] == [] and out["props"] == []            # one result needs no tile; a split's props are a mosaic
+    assert out["moved"] == [40, 396, 646, 0]                  # the 3D model and Finish moved right to make room
+    assert out["again"] == out["moved"]                       # there is room already: nothing moves
+    assert out["curve"] == "M 0 0 C 50 0, 50 50, 100 50"
