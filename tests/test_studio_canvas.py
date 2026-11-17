@@ -171,3 +171,40 @@ def test_up_and_down_the_lines():
       console.log(JSON.stringify({ up: m.upstreamOf(g, 'n3'), down: m.downstreamOf(g, 'n1'), picked: g.nodes[0].picked,
         unpicked: m.pickResult(g, 'n1', null).nodes[0].picked ?? null }))""")
     assert out == {"up": ["n2", "n1"], "down": ["n2", "n3", "n4"], "picked": "a.png", "unpicked": None}
+
+
+def _settings(body: str):
+    url = (REPO / "viewer" / "studio" / "canvas-settings.js").as_uri()
+    result = subprocess.run([NODE, "--input-type=module", "--eval", f"import * as m from {json.dumps(url)};\n{body}"],
+                            check=True, capture_output=True, text=True)
+    return json.loads(result.stdout)
+
+
+def test_every_box_setting_on_screen_is_one_the_server_keeps():
+    keys = _settings("console.log(JSON.stringify(m.settingKeys()))")
+    assert {k: sorted(v) for k, v in keys.items()} == {k: sorted(v) for k, v in ga.SETTINGS.items()}
+
+
+def test_every_choice_on_screen_is_a_value_the_server_keeps():
+    tools = {"engines": [{"id": "pixal3d", "label": "Pixal3D (C++/GGML)"}, {"id": "newthing", "label": "New"}],
+             "presets": [{"id": "walk", "label": "Walk"}], "pictureEngines": [{"id": "qwen-image", "label": "Qwen", "installed": True}]}
+    fields = _settings(f"""const t = {json.dumps(tools)};
+      console.log(JSON.stringify(Object.fromEntries(Object.entries(m.FIELDS).map(([type, fs]) => [type,
+        fs.filter((f) => f[3] === 'select').map((f) => [f[0], f[4](t)])]))))""")
+    for box, selects in fields.items():
+        for key, choices in selects:
+            for value, label in choices:
+                # named by what it does, never where it came from (CLAUDE.md "Studio text is for the user")
+                assert label and not any(w in str(label) for w in ("C++", "GGML", "Xiong", "dgrauet", "Pixal3D")), (box, key, label)
+                if value != "":
+                    assert ga.clean_settings(box, {key: value}) != {}, (box, key, value)
+    assert dict(fields["model"])["engine"] == [["pixal3d", "Best detail"], ["newthing", "New"]]
+
+
+def test_a_form_value_becomes_what_the_box_keeps():
+    out = _settings("""const f = (t, k) => m.FIELDS[t].find((x) => x[0] === k);
+      console.log(JSON.stringify([m.readField(f('finish', 'texture_size'), '512'), m.readField(f('finish', 'height_m'), '999'),
+        m.readField(f('finish', 'height_m'), '1.7'), m.readField(f('finish', 'surface_maps'), false), m.readField(f('picture', 'prompt'), ''),
+        m.toggleValue('surface_maps', {}), m.toggleValue('surface_maps', { surface_maps: false }),
+        m.defaultsFor('model', { engines: [{ id: 'sf3d' }] }), m.defaultsFor('move', { presets: [{ id: 't', take: true }, { id: 'walk' }] })]))""")
+    assert out == [512, "", 1.7, False, "", True, False, {"engine": "sf3d"}, {"move": "walk"}]
