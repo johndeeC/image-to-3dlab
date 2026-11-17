@@ -838,3 +838,20 @@ def test_a_3d_model_run_on_its_own_after_four_views_takes_every_side():
     assert stage.four_views and stage.seeds == [{"made": {"picture": "images/k.png", "left": "images/k__left.png",
                                                           "back": "images/k__back.png", "right": "images/k__right.png"},
                                                  "label": None}]
+
+
+def test_each_box_shows_the_file_its_own_step_made(tmp_path):
+    """A remesh and then an unwrap both write the run's "model": each box still shows its own, and
+    the model you gave shows itself, not what was made from it."""
+    (tmp_path / "m").mkdir()
+    (tmp_path / "m" / "k.glb").write_bytes(b"glb")
+    (tmp_path / "images").mkdir()
+    (tmp_path / "images" / "k.png").write_bytes(b"png")
+    g = graph([node("a", "asset", file="m/k.glb"), node("r", "remesh"), node("u", "unwrap"),
+               node("p", "picture", file="images/k.png"), node("c", "cutout")],
+              [("a", "r"), ("r", "u"), ("p", "c")])
+    runner, _jobs = _graph_runner(tmp_path)
+    results = runner.start(g, background=False).to_dict()["results"]
+    assert results["a"][0]["file"] == "m/k.glb"
+    assert results["r"][0]["file"] == "tools/t1/t1.glb" and results["u"][0]["file"] == "tools/t2/t2.glb"
+    assert results["p"][0]["file"] == "images/k.png" and results["c"][0]["file"] == "images/cut3/cut3.png"

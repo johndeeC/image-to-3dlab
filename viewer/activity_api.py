@@ -38,6 +38,11 @@ KIND = {"picture": "image", "back": "image", "model": "generate", "finished": "f
         "rigged": "animate", "animated": "animate", "part": "image", "repaint": "generate",
         **{step: "tool" for step in ("cutout", "remesh", "unwrap", "export", "combine")},
         "left": "image", "right": "image"}
+# The `made` key each step's file lands under. Several steps write the same one (a remesh, then an
+# unwrap, each "model"), so what each step made is also kept apart, in Chain.step_made.
+STEP_MADE = {"picture": "picture", "back": "back", "model": "model", "finished": "finished", "rigged": "rigged",
+             "animated": "animated", "split": "split", "part": "picture", "repaint": "model", "cutout": "picture",
+             "remesh": "model", "unwrap": "model", "combine": "model", "export": "export", "left": "left", "right": "right"}
 # The Finish choices a plan may carry (the same ones the Steps panel's Finish sends).
 MOVE_KEYS = ("speed", "arm_spread", "in_place")
 SPLIT_KEYS = ("names",)       # what a plan may tell the props job (props_api.normalise_names checks them)
@@ -114,6 +119,7 @@ class Chain:
     tool_settings: dict[str, Any] = field(default_factory=dict)      # step -> its choices: faces, size, format
     gather: list[str] = field(default_factory=list)                  # the models a "combine" step puts together
     four_views: bool = False                                         # the 3D model reads front, left, back, right (Hunyuan3D-2mv)
+    step_made: dict[str, str] = field(default_factory=dict)          # step -> the file that step made
     picture_settings: dict[str, Any] = field(default_factory=dict)  # size, steps, seed (the image job checks them)
     picture_engine: str | None = None                                # "flux" / "flux-light" / "qwen"; None = the default
     back_settings: dict[str, Any] = field(default_factory=dict)      # a back redraw: seed, what to change
@@ -320,6 +326,12 @@ class ChainRunner:
         return False
 
     def _record(self, chain: Chain, step: str, final: dict[str, Any]) -> None:
+        self._record_made(chain, step, final)
+        made = chain.made.get(STEP_MADE.get(step, ""))
+        if made:
+            chain.step_made[step] = made
+
+    def _record_made(self, chain: Chain, step: str, final: dict[str, Any]) -> None:
         event = final.get("last_event") or {}
         if step == "picture":
             chain.made["picture"] = final.get("picture")
@@ -531,12 +543,7 @@ class ChainRunner:
         record = {"time": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(self.now())), "chain": chain.id,
                   "title": chain.title, "prompt": chain.prompt, "want": chain.want, "step": step, "result": result,
                   "seconds": round(self.now() - started, 1), "note": note,
-                  "made": chain.made.get({"picture": "picture", "back": "back", "model": "model",
-                                          "finished": "finished", "rigged": "rigged",
-                                          "animated": "animated", "split": "split",
-                                          "part": "picture", "repaint": "model", "cutout": "picture",
-                                          "remesh": "model", "unwrap": "model", "combine": "model",
-                                          "export": "export", "left": "left", "right": "right"}.get(step, ""), None),
+                  "made": chain.step_made.get(step),
                   "log": str(log or "")[-3000:]}
         append_history(self.output, record)
 

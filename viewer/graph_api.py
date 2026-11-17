@@ -891,7 +891,7 @@ class GraphRunner:
                     chain = self._chain(run, stage, job, client)
                     if chain is None:
                         break
-                    self._results(run, stage, chain, job["label"])
+                    self._results(run, stage, chain, job["label"], job["made"])
                     if chain.status == "done":
                         made_by[stage.id].append({"made": {k: v for k, v in chain.made.items() if v}, "label": job["label"]})
                     else:
@@ -934,19 +934,22 @@ class GraphRunner:
             run.current_chain = None
             return chain
 
-    def _results(self, run: GraphRun, stage: Stage, chain: Chain, label: str | None) -> None:
+    def _results(self, run: GraphRun, stage: Stage, chain: Chain, label: str | None,
+                 given: dict[str, str] | None = None) -> None:
         """What each box of the stage made in this run, or why it did not."""
         for node_id in stage.nodes:
             kind = run.plan.types[node_id]
             if kind == "views":   # the three sides it drew, each its own result
                 for side in VIEW_STEPS:
-                    if side in chain.done and chain.made.get(side):
-                        self._add(run, node_id, {"status": "done", "file": chain.made[side], "label": f"{side} view"})
+                    if side in chain.done and chain.step_made.get(side):
+                        self._add(run, node_id, {"status": "done", "file": chain.step_made[side], "label": f"{side} view"})
                     elif chain.status != "done" and chain.current == side:
                         self._add(run, node_id, {"status": chain.status, "error": chain.error, "label": f"{side} view"})
                 continue
-            file = chain.made.get(MADE_KEY[kind])
             step = STEP.get(kind)
+            # each box its own step's file (a remesh and an unwrap both write "model"); a box with no
+            # step (a picture or model you gave) its own file
+            file = chain.step_made.get(step) if step in stage.steps else (given or {}).get(MADE_KEY[kind]) or chain.made.get(MADE_KEY[kind])
             if kind == "split" and step in chain.done:
                 for prop in split_props(self.output, file or ""):
                     self._add(run, node_id, {"status": "done", "file": prop, "label": PurePosixPath(prop).parent.name,
