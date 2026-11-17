@@ -20,6 +20,7 @@ import { thumbFile, createThumbCache, createThumbQueue } from './model-thumbs.js
 import { createThumbnailRenderer } from './model-thumb-renderer.js';
 import { gearPrompt, kitsWith, tryPlans } from './kit.js';
 import { openKitPane } from './kit-pane.js';
+import { openCanvasPane } from './canvas-pane.js';
 
 const $ = (id) => document.getElementById(id);
 const LOGO = './studio/mark.svg';
@@ -46,7 +47,7 @@ const kitThumbs = createThumbQueue({
   render: (file) => thumbRenderer.render(url(file)),
   cache: thumbCache,
   onThumb: ({ file }, data) => {
-    document.querySelectorAll('.kit-sheet [data-kit-file]').forEach((image) => {
+    document.querySelectorAll('.kit-sheet [data-kit-file], .canvas-sheet [data-kit-file]').forEach((image) => {
       if (image.dataset.kitFile !== file) return;
       image.src = data;
       image.classList.remove('mark');
@@ -753,6 +754,27 @@ async function useLibraryPicture(asset) {
 $('createBtn').addEventListener('click', () => {
   if (making && !making.failed && !making.finished) { showMaking(); return; }
   openCreateSheet();
+});
+
+// ------------------------------------------------------------------ Canvas (docs/canvas.md)
+/** The asset a canvas result belongs to: any of its files, or one of its split props. */
+function assetWithFile(file) {
+  return assets.find((a) => ['picture', 'model', 'finished', 'rigged'].some((k) => a[k] === file)
+    || (a.clips || []).some((c) => c.file === file) || (a.props || []).some((p) => p.file === file)) ?? null;
+}
+
+$('canvasBtn').addEventListener('click', () => {
+  openCanvasPane({ stage: $('stage'), tools: { engines, presets }, on: {
+    open: (file) => {
+      const asset = assetWithFile(file);
+      if (!asset) return;
+      show(asset);
+      const index = (asset.props || []).findIndex((p) => p.file === file);
+      if (index > 0) viewer.setClips(asset.props.map((p) => ({ name: p.name.replace(/[_-]/g, ' '), url: url(p.file), file: p.file })), { still: true, index });
+    },
+    thumb: (image, file) => { if (kitThumbs.offer({ file }) !== 'cached') kitThumbs.enqueue({ file }); },
+    ran: () => { void refreshAssets(); },
+  } });
 });
 
 const clock = (ms) => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };

@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   join its kit. The kit opens as one row of steps per member, with **Redo** or **×2–×4** on any
   step to make more tries and pick the one the kit uses, and every split prop shown at once.
   Agents get `list_kits`, `make_kit` and `add_to_kit`. See `docs/kits.md`.
+- **Canvas** (beside + Create): lay the steps out as boxes, join them with lines, press Run.
+  A plan can branch: one picture into two 3D engines, or a sheet of nine split into props that
+  each get rigged. Each straight line of boxes runs as one ordinary run, in the Library as
+  usual, and the run carries on with the tab closed. Boards are saved in `output/.graphs.json`.
+  See `docs/canvas.md`.
 
 ## [0.5.11] - 2026-11-17
 
