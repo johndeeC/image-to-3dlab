@@ -40,6 +40,19 @@ rest under **More settings** (`viewer/studio/canvas-settings.js`):
 The server keeps the same list (`graph_api.SETTINGS`) and drops any value that does not
 fit. A test checks the two lists agree, key for key and choice for choice.
 
+## How a box looks
+
+Each box is a **tile**: what it made, large, with a small coloured tag on top naming it (a
+Picture's tag is its first words), as on Tripo's canvas. The colour says what kind of step
+it is: drawing (blue), shape (purple), finishing (teal), moving (orange), files you bring
+(grey). Before it has made anything, a tile shows its own words. A box with several tries
+shows the one it hands on, with ‹ 2/3 › to step through them; a box whose results all carry
+on (a Split's props, and every box below a Split) shows them as a mosaic. Lines meet the
+tiles side-on, thin and dashed.
+
+Click a box to open the **side panel**: its settings, **Run this box**, **Make another**,
+**Run from here**, and every try. The tile itself stays a picture.
+
 ## Getting about and editing
 
 - **Zoom**: wheel, pinch, Cmd + / Cmd −, or the − 100% + buttons. **Fit** (Cmd 0) shows
@@ -123,7 +136,9 @@ A Picture with 2–4 options gives you tries from the start.
 **Drag** a try out of its box to carry on from it:
 
 - onto empty board, for a menu of only the boxes that take it (3D model, Front + back…).
-  The new box arrives joined, and its line carries that try;
+  The new box arrives joined, and its line carries that try. From a mosaic this takes one
+  part: a Rig dragged out of a Split's sword rigs the sword alone, even after Run all splits
+  the sheet again (the line keeps the part by its name);
 - onto a box that takes it, to join them, or to change which try that line carries.
 
 So one Picture box can feed Option 1 to one 3D model box and Option 3 to another. The try

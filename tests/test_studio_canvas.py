@@ -154,7 +154,7 @@ def test_frames_hold_each_box_once_and_come_off_cleanly():
       for (const t of ['picture', 'model', 'finish']) g = m.addNode(g, t, 0, 0);
       g = m.group(g, ['n1', 'n2'], 'Front'); g = m.group(g, ['n2', 'n3'], 'Back');
       const framed = g.groups;
-      const bounds = m.groupBounds(g.groups[1], [{ id: 'n2', x: 100, y: 100 }, { id: 'n3', x: 400, y: 50 }], { n2: { w: 200, h: 100 } }, 10);
+      const bounds = m.groupBounds(g.groups[1], [{ id: 'n2', x: 100, y: 100 }, { id: 'n3', x: 400, y: 50 }], { n2: { w: 200, h: 100 }, n3: { w: 210, h: 150 } }, 10);
       g = m.renameGroup(g, 'g2', '  Back half ');
       const named = g.groups[1].label;
       g = m.ungroup(g, ['n1']);
@@ -233,3 +233,29 @@ def test_a_try_dragged_out_of_a_box_starts_the_next_box_from_it():
     assert out["fresh"] == {"from": "n2", "to": "n7", "file": "m/2.glb"}
     assert out["refused"].startswith("Move takes a rigged model")
     assert out["choice"] == [True, True, False, False]      # a split's props, and the rigs below it, all carry on
+
+
+def test_a_tile_shows_the_pick_or_the_newest_try_a_mosaic_of_props_or_its_own_words():
+    out = _run("""let g = m.newGraph('B');
+      for (const t of ['picture', 'model', 'split', 'rig', 'asset']) g = m.addNode(g, t, 0, 0);
+      g = m.connect(m.connect(m.connect(g, 'n1', 'n2'), 'n2', 'n3'), 'n3', 'n4');
+      g = m.setSetting(g, 'n1', 'prompt', 'a very long description of a brass oil lantern');
+      const st = (...f) => ({ files: f.map((file) => ({ file })) });
+      const node = (id) => g.nodes.find((n) => n.id === id);
+      const before = m.tileFace(g, node('n1'), st());
+      const newest = m.tileFace(g, node('n1'), st('a.png', 'b.png', 'c.png'));
+      g = m.pickResult(g, 'n1', 'a.png');
+      const picked = m.tileFace(g, node('n1'), st('a.png', 'b.png', 'c.png'));
+      const props = m.tileFace(g, node('n3'), st(...'abcdefghijk'.split('').map((x) => x + '.glb')));
+      const rigs = m.tileFace(g, node('n4'), st('r1.glb', 'r2.glb')).kind;
+      const given = m.tileFace(g, m.setSetting(g, 'n5', 'file', 'm/k.glb').nodes[4], st());
+      console.log(JSON.stringify({ before, newest: [newest.file, newest.tryIndex, newest.count], picked: [picked.file, picked.tryIndex],
+        props: [props.kind, props.files.length, props.count], rigs, given: [given.kind, given.file],
+        tags: [m.tagText(node('n1'), 3), m.tagText(node('n2')), m.tagText(node('n3'), 9)], tones: m.NODES.finish.tone }))""")
+    assert out["before"] == {"kind": "empty", "file": None, "files": [], "count": 0, "tryIndex": -1,
+                             "text": "a very long description of a brass oil lantern"}
+    assert out["newest"] == ["c.png", 2, 3] and out["picked"] == ["a.png", 0]
+    assert out["props"] == ["mosaic", 9, 11] and out["rigs"] == "mosaic"      # every prop carries on: a mosaic
+    assert out["given"] == ["one", "m/k.glb"]
+    assert out["tags"] == ["a very long description o… (3)", "3D model", "Split into props (9)"]
+    assert out["tones"] == "finish"

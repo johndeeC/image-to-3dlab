@@ -5,15 +5,15 @@
 /** Every node: its name, its one-line hint, what it takes in, what it makes, and its runner step.
  *  tests/test_studio_canvas.py checks takes/makes/step against graph_api.py. */
 export const NODES = {
-  picture: { label: 'Picture', hint: 'Draws a picture from your words, or uses one you already made.', takes: [], makes: 'picture', step: 'picture' },
-  asset: { label: 'Your 3D model', hint: 'Starts from a 3D model already in your Library.', takes: [], makes: 'model', step: null },
-  back: { label: 'Front + back', hint: 'Draws the back too, so the 3D model is right all round. Best detail engine only.', takes: ['picture'], makes: 'pair', step: 'back' },
-  model: { label: '3D model', hint: 'Builds a 3D model from the picture.', takes: ['picture', 'pair'], makes: 'model', step: 'model' },
-  split: { label: 'Split into props', hint: 'Cuts a sheet of nine into separate game-ready props.', takes: ['model'], makes: 'props', step: 'split' },
-  finish: { label: 'Finish', hint: 'Makes the model game-ready: cleaner shape, lighter file.', takes: ['model'], makes: 'finished', step: 'finished' },
-  rig: { label: 'Rig', hint: 'Adds a skeleton so it can move. Humanoids work best.', takes: ['model', 'finished', 'props'], makes: 'rigged', step: 'rigged' },
-  move: { label: 'Move', hint: 'Plays a move on the rigged model.', takes: ['rigged'], makes: 'animated', step: 'animated' },
-  export: { label: 'Export', hint: 'Lists the files to take into your game.', takes: ['model', 'finished', 'rigged', 'animated', 'props'], makes: null, step: null },
+  picture: { tone: 'draw', label: 'Picture', hint: 'Draws a picture from your words, or uses one you already made.', takes: [], makes: 'picture', step: 'picture' },
+  asset: { tone: 'source', label: 'Your 3D model', hint: 'Starts from a 3D model already in your Library.', takes: [], makes: 'model', step: null },
+  back: { tone: 'draw', label: 'Front + back', hint: 'Draws the back too, so the 3D model is right all round. Best detail engine only.', takes: ['picture'], makes: 'pair', step: 'back' },
+  model: { tone: 'shape', label: '3D model', hint: 'Builds a 3D model from the picture.', takes: ['picture', 'pair'], makes: 'model', step: 'model' },
+  split: { tone: 'shape', label: 'Split into props', hint: 'Cuts a sheet of nine into separate game-ready props.', takes: ['model'], makes: 'props', step: 'split' },
+  finish: { tone: 'finish', label: 'Finish', hint: 'Makes the model game-ready: cleaner shape, lighter file.', takes: ['model'], makes: 'finished', step: 'finished' },
+  rig: { tone: 'move', label: 'Rig', hint: 'Adds a skeleton so it can move. Humanoids work best.', takes: ['model', 'finished', 'props'], makes: 'rigged', step: 'rigged' },
+  move: { tone: 'move', label: 'Move', hint: 'Plays a move on the rigged model.', takes: ['rigged'], makes: 'animated', step: 'animated' },
+  export: { tone: 'source', label: 'Export', hint: 'Lists the files to take into your game.', takes: ['model', 'finished', 'rigged', 'animated', 'props'], makes: null, step: null },
 };
 
 /** What a Picture is for: it picks the wording added to your words, and Finish's defaults. */
@@ -21,9 +21,10 @@ export const GOALS = { character: 'A character', prop: 'One prop', set: 'Sheet o
 
 const THING = { picture: 'a picture', pair: 'a front and back picture', model: 'a 3D model', finished: 'a game-ready model', rigged: 'a rigged model', animated: 'a moving model', props: 'props' };
 
-// A node's box: its width, and how far down its in and out dots sit.
-export const NODE_W = 210;
-export const PORT_Y = 22;
+// A box is a square preview tile: its width (and height), and how far down its in and out dots
+// sit (the middle, so lines meet tiles side-on).
+export const NODE_W = 160;
+export const PORT_Y = 80;
 
 const clone = (graph) => JSON.parse(JSON.stringify(graph));
 
@@ -286,4 +287,32 @@ export function useResult(graph, from, file, to) {
 export function addFromResult(graph, from, file, type, x, y, settings = {}) {
   const g = addConnected(graph, from, type, x, y, settings);
   return useResult(g, from, file, g.nodes.at(-1).id);
+}
+
+/**
+ * What a box's tile shows: one big preview, a mosaic of everything it made (a split's props, a
+ * box below a split), or, before it has made anything, its own words. `state` is nodeState's.
+ *   { kind: 'one' | 'mosaic' | 'empty', file, files, count, tryIndex, text }
+ */
+export function tileFace(graph, node, state) {
+  const files = state?.files || [];
+  const given = ['picture', 'asset'].includes(node.type) ? node.settings?.file : null;
+  if (!files.length) {
+    if (given) return { kind: 'one', file: given, files: [], count: 0, tryIndex: -1, text: '' };
+    const words = node.type === 'picture' ? (node.settings?.prompt || 'Describe it in the side panel') : NODES[node.type].hint;
+    return { kind: 'empty', file: null, files: [], count: 0, tryIndex: -1, text: words };
+  }
+  if (files.length > 1 && !isChoice(graph, node.id)) {
+    return { kind: 'mosaic', file: null, files: files.slice(0, 9), count: files.length, tryIndex: -1, text: '' };
+  }
+  const picked = files.findIndex((f) => f.file === node.picked);
+  const index = picked >= 0 ? picked : files.length - 1;   // the pick, or the newest try
+  return { kind: 'one', file: files[index].file, files, count: files.length, tryIndex: index, text: '' };
+}
+
+/** The coloured tag above a tile: the box's name, a Picture's first words, and how many tries. */
+export function tagText(node, count = 0) {
+  const prompt = node.type === 'picture' && !node.settings?.file ? String(node.settings?.prompt || '').trim() : '';
+  const name = prompt ? (prompt.length > 26 ? `${prompt.slice(0, 25).trimEnd()}…` : prompt) : NODES[node.type].label;
+  return count > 1 ? `${name} (${count})` : name;
 }

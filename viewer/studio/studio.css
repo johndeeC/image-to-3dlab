@@ -475,7 +475,7 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .canvas-sheet { display: flex; flex-direction: column; gap: 8px; place-items: stretch; padding: 12px 14px; overflow: hidden; }
 .canvas-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .canvas-top .canvas-name { flex: 1 1 160px; min-width: 0; font: 800 18px/1.2 var(--f-display); }
-.canvas-top select, .canvas-sheet .cnode select, .canvas-sheet .cnode input[type="text"], .canvas-sheet .cnode input[type="number"] {
+.canvas-top select, .canvas-side select, .canvas-side input[type="text"], .canvas-side input[type="number"] {
   background: var(--raise); border: 1px solid var(--line); border-radius: 8px; padding: 4px 7px; font-size: 12.5px; }
 .canvas-top select { max-width: 200px; }
 .canvas-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
@@ -486,14 +486,14 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .canvas-tools [aria-pressed="true"] { border-color: var(--ember); color: var(--bone); }
 .canvas-tools .zoom { font: 400 12px/1.4 var(--f-num); min-width: 52px; }   /* a number: the one place mono belongs */
 .canvas-say { margin: 0; min-height: 1.5em; font-size: 12.5px; }
-.canvas-say.bad, .cnode .bad, .canvas-picker .bad { color: var(--x); }
+.canvas-say.bad, .cnode .bad, .canvas-side .bad, .canvas-picker .bad { color: var(--x); }
 .canvas-board { position: relative; flex: 1; min-height: 240px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; outline: none;
   background: radial-gradient(circle, var(--line) 1px, transparent 1px) 0 0 / 22px 22px, #0c0a09; touch-action: none; }
 .canvas-board:focus-visible { border-color: var(--flame); }
 .canvas-board.hand, .canvas-board.hand * { cursor: grab !important; }
 .canvas-space { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
 .canvas-lines { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
-.canvas-lines .wire { fill: none; stroke: var(--line-hi); stroke-width: 2; }
+.canvas-lines .wire { fill: none; stroke: #8a7e76; stroke-width: 1.2; stroke-dasharray: 4 4; opacity: .75; }
 .canvas-lines .wire.draft { stroke: var(--ember); stroke-dasharray: 5 4; }
 .canvas-lines .hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }
 .canvas-lines .edge:hover .wire { stroke: var(--x); }
@@ -524,16 +524,16 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .cnode header b { flex: 1; }
 .cnode .x { border: 0; background: none; color: var(--ash); padding: 0 2px; line-height: 1; font-size: 14px; }
 .cnode .x:hover { color: var(--bone); }
-.cnode textarea { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; font-size: 12.5px; resize: vertical; }
-.cnode .cfield { display: grid; gap: 2px; font-size: 11.5px; color: var(--ash); }
-.cnode .cfield select, .cnode .cfield input { width: 100%; }
-.cnode .ccheck { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ash); }
-.cnode .cfile { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 12px; min-width: 0; }
-.cnode .cfile .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-.cnode .cmore summary { cursor: pointer; font-size: 12px; color: var(--ash); }
-.cnode .cmore[open] { display: grid; gap: 6px; }
-.cnode .hint { font-size: 11.5px; }
-.cnode .option[data-pick-file][aria-pressed="true"] { border: 2px solid var(--ember); }
+:is(.cnode, .canvas-side) textarea { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; font-size: 12.5px; resize: vertical; }
+:is(.cnode, .canvas-side) .cfield { display: grid; gap: 2px; font-size: 11.5px; color: var(--ash); }
+:is(.cnode, .canvas-side) .cfield select, :is(.cnode, .canvas-side) .cfield input { width: 100%; }
+:is(.cnode, .canvas-side) .ccheck { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ash); }
+:is(.cnode, .canvas-side) .cfile { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 12px; min-width: 0; }
+:is(.cnode, .canvas-side) .cfile .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+:is(.cnode, .canvas-side) .cmore summary { cursor: pointer; font-size: 12px; color: var(--ash); }
+:is(.cnode, .canvas-side) .cmore[open] { display: grid; gap: 6px; }
+:is(.cnode, .canvas-side) .hint { font-size: 11.5px; }
+:is(.cnode, .canvas-side) .option[data-pick-file][aria-pressed="true"] { border: 2px solid var(--ember); }
 .cnode .port { position: absolute; top: 15px; width: 14px; height: 14px; border-radius: 50%; background: var(--raise); border: 2px solid var(--line-hi); }
 .cnode .port.in { left: -8px; }
 .cnode .port.out { right: -8px; cursor: crosshair; }
@@ -551,14 +551,14 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 }
 
 /* Canvas results: each try a thumb to click (quick view) or drag out to carry on from */
-.cnode .tries { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
-.cnode .try { position: relative; padding: 0; aspect-ratio: 1; border: 1px solid var(--line); border-radius: 8px; background: #0c0a09; overflow: hidden; cursor: grab; }
-.cnode .try img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
-.cnode .try img.mark { width: 45%; height: auto; opacity: .35; object-fit: contain; margin: auto; position: absolute; inset: 0; }
-.cnode .try small { position: absolute; left: 3px; bottom: 2px; font-size: 10px; color: var(--bone); text-shadow: 0 1px 2px #000; }
-.cnode .try:hover { border-color: var(--flame); }
-.cnode .try.picked { border: 2px solid var(--ember); }
-.cnode .try.carried::after { content: ""; position: absolute; right: 4px; top: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--flame); }
+:is(.cnode, .canvas-side) .tries { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+:is(.cnode, .canvas-side) .try { position: relative; padding: 0; aspect-ratio: 1; border: 1px solid var(--line); border-radius: 8px; background: #0c0a09; overflow: hidden; cursor: grab; }
+:is(.cnode, .canvas-side) .try img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+:is(.cnode, .canvas-side) .try img.mark { width: 45%; height: auto; opacity: .35; object-fit: contain; margin: auto; position: absolute; inset: 0; }
+:is(.cnode, .canvas-side) .try small { position: absolute; left: 3px; bottom: 2px; font-size: 10px; color: var(--bone); text-shadow: 0 1px 2px #000; }
+:is(.cnode, .canvas-side) .try:hover { border-color: var(--flame); }
+:is(.cnode, .canvas-side) .try.picked { border: 2px solid var(--ember); }
+:is(.cnode, .canvas-side) .try.carried::after { content: ""; position: absolute; right: 4px; top: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--flame); }
 .canvas-lines .edge.carries .wire { stroke: var(--flame); stroke-dasharray: 2 4; }
 .canvas-ghost { position: absolute; z-index: 7; width: 56px; height: 56px; object-fit: cover; border-radius: 8px; border: 2px solid var(--ember); opacity: .85; pointer-events: none; }
 .canvas-peek { position: absolute; inset: 0; z-index: 8; display: grid; place-items: center; padding: 16px; background: #000a; }
@@ -568,3 +568,38 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .peek-stage { height: min(56vh, 460px); display: grid; place-items: center; background: #0c0a09; border-radius: 10px; overflow: hidden; }
 .peek-stage img { width: 100%; height: 100%; object-fit: contain; }
 .peek-stage canvas { width: 100% !important; height: 100% !important; cursor: grab; }
+
+/* Tiles: each box is its preview, a coloured tag above it (as on Tripo's canvas), settings in the side panel */
+.cnode.tile { padding: 0; gap: 0; width: 160px; border-radius: 14px; background: var(--raise); }
+.cnode.tile .tag { position: absolute; left: 0; top: -24px; max-width: 100%; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: grab; user-select: none; }
+.tag { color: #fff; background: var(--tone, #475569); }
+.tag.tone-draw { --tone: #2563eb; } .tag.tone-shape { --tone: #7c3aed; } .tag.tone-finish { --tone: #0d9488; }
+.tag.tone-move { --tone: #ea580c; } .tag.tone-source { --tone: #475569; }
+.cnode.tile .face { width: 160px; height: 160px; border-radius: 13px 13px 0 0; overflow: hidden; background: #0c0a09; cursor: grab; position: relative; }
+.cnode.tile .face img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.cnode.tile .face img.mark { width: 34%; height: auto; opacity: .3; position: absolute; inset: 0; margin: auto; object-fit: contain; }
+.cnode.tile .face .one { display: block; width: 100%; height: 100%; }
+.cnode.tile .face-words { margin: 0; padding: 14px; font-size: 12.5px; line-height: 1.45; color: var(--ash);
+  display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; }
+.cnode.tile.blank .face { background: repeating-linear-gradient(135deg, #0c0a09 0 10px, #120f0d 10px 20px); }
+.cnode.tile .mosaic { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; width: 100%; height: 100%; }
+.cnode.tile .mosaic.n1 { grid-template-columns: 1fr; }
+.cnode.tile .mosaic.n2, .cnode.tile .mosaic.n3, .cnode.tile .mosaic.n4 { grid-template-columns: repeat(2, 1fr); }
+.cnode.tile .mosaic .cell { position: relative; background: #17120f; overflow: hidden; cursor: grab; }
+.cnode.tile .mosaic .cell:hover { outline: 2px solid var(--flame); outline-offset: -2px; }
+.cnode.tile .tile-bar { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; font-size: 11px; color: var(--ash); }
+.cnode.tile .tile-bar .state { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cnode.tile .tile-bar .steps { display: inline-flex; align-items: center; gap: 2px; font: 400 11px/1 var(--f-num); }
+.cnode.tile .port { top: 73px; }
+.cnode.tile.done .tile-bar .state { color: var(--ok); }
+.cnode.tile.error .tile-bar .state { color: var(--x); }
+.cnode.tile.running .face { box-shadow: inset 0 0 0 2px var(--ember); }
+.canvas-side { position: absolute; z-index: 6; right: 10px; top: 10px; bottom: 10px; width: min(290px, 46%); overflow-y: auto;
+  display: grid; align-content: start; gap: 8px; padding: 12px; background: var(--panel); border: 1px solid var(--line-hi); border-radius: 12px; box-shadow: 0 10px 30px #000a; }
+.canvas-side .row { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.canvas-side .row.wrap { flex-wrap: wrap; justify-content: flex-start; }
+.canvas-side .row.end { justify-content: flex-end; }
+.canvas-side .tag { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; }
+.canvas-side p.hint { margin: 0; font-size: 12px; }
+.canvas-side select, .canvas-side textarea, .canvas-side input[type="text"], .canvas-side input[type="number"] { width: 100%; }
