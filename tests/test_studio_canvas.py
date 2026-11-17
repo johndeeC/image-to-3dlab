@@ -115,8 +115,8 @@ def test_a_setting_change_keeps_the_rest_and_an_empty_one_is_dropped():
 def test_a_line_dropped_on_the_board_offers_only_the_boxes_that_take_it():
     out = _run("""console.log(JSON.stringify({ model: m.takersOf('model'), picture: m.takersOf('picture'),
       export: m.takersOf('export'), back: m.takersOf('back') }))""")
-    assert out["model"] == ["split", "repaint", "finish", "rig", "export"]
-    assert out["picture"] == ["back", "parts", "model"]
+    assert out["model"] == ["split", "repaint", "remesh", "unwrap", "combine", "saveas", "finish", "rig", "export"]
+    assert out["picture"] == ["back", "parts", "model", "cutout"]
     assert out["export"] == [] and out["back"] == ["model"]
 
 

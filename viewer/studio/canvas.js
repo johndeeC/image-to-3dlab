@@ -12,6 +12,11 @@ export const NODES = {
   model: { tone: 'shape', label: '3D model', hint: 'Builds a 3D model from the picture.', takes: ['picture', 'pair'], makes: 'model', step: 'model' },
   split: { tone: 'shape', label: 'Split into props', hint: 'Cuts a sheet of nine into separate game-ready props.', takes: ['model'], makes: 'props', step: 'split' },
   repaint: { tone: 'finish', label: 'Repaint', hint: 'Paints the model again from a picture: a new look on the same shape.', takes: ['model', 'finished', 'props'], makes: 'model', step: 'repaint' },
+  cutout: { tone: 'draw', label: 'Cut out background', hint: 'Takes the background off a picture, leaving just the subject.', takes: ['picture'], makes: 'picture', step: 'cutout' },
+  remesh: { tone: 'shape', label: 'Quad remesh', hint: 'Rebuilds the surface as tidy four-sided faces, keeping its look. Smooth subjects fare best.', takes: ['model', 'finished', 'props'], makes: 'model', step: 'remesh' },
+  unwrap: { tone: 'shape', label: 'UV unwrap', hint: 'Lays the texture out in large clean pieces, easier to paint over. Shape untouched.', takes: ['model', 'finished', 'props'], makes: 'model', step: 'unwrap' },
+  combine: { tone: 'shape', label: 'Put together', hint: 'Puts every model coming in into one file, side by side, to arrange in Blender.', takes: ['model', 'finished', 'props'], makes: 'model', step: 'combine' },
+  saveas: { tone: 'source', label: 'Save as', hint: 'Saves the model as FBX, OBJ or USDZ for other tools.', takes: ['model', 'finished', 'rigged', 'animated', 'props'], makes: null, step: 'export' },
   finish: { tone: 'finish', label: 'Finish', hint: 'Makes the model game-ready: cleaner shape, lighter file.', takes: ['model'], makes: 'finished', step: 'finished' },
   rig: { tone: 'move', label: 'Rig', hint: 'Adds a skeleton so it can move. Humanoids work best.', takes: ['model', 'finished', 'props'], makes: 'rigged', step: 'rigged' },
   move: { tone: 'move', label: 'Move', hint: 'Plays a move on the rigged model.', takes: ['rigged'], makes: 'animated', step: 'animated' },
@@ -338,6 +343,10 @@ export function tileFace(graph, node, state) {
     if (given) return { kind: 'one', file: given, files: [], count: 0, tryIndex: -1, text: '' };
     const words = node.type === 'picture' ? (node.settings?.prompt || 'Describe it in the side panel') : NODES[node.type].hint;
     return { kind: 'empty', file: null, files: [], count: 0, tryIndex: -1, text: words };
+  }
+  if (node.type === 'saveas' && files.length) {   // a file to download, not a picture or a model to show
+    return { kind: 'empty', file: null, files, count: files.length, tryIndex: -1,
+      text: `Saved: ${files.map((f) => String(f.file).split('/').pop()).join(', ')}` };
   }
   if (files.length > 1 && node.type === 'parts') {   // the parts sit beside it as tiles
     return { kind: 'empty', file: null, files, count: files.length, tryIndex: -1, text: `${files.length} parts: carry on from any one, or all` };

@@ -172,6 +172,7 @@ class FakeJobs:
         self.output, self.fail = output, fail
         self.started: list[str] = []
         self.parts: list[str] = []
+        self.bodies: list[dict] = []
         self.jobs: dict[str, str] = {}
 
     def __call__(self, method, path, body, content_type, headers=None):
@@ -180,8 +181,11 @@ class FakeJobs:
         if method == "POST":
             kind = {"/api/image": "picture", "/api/generate": "model", "/api/finish": "finished",
                     "/api/animate/rig": "rigged", "/api/animate/play": "animated", "/api/props": "split",
-                    "/api/image/part": "part"}[path]
+                    "/api/image/part": "part", "/api/tool/cutout": "cutout", "/api/tool/remesh": "remesh",
+                    "/api/tool/unwrap": "unwrap", "/api/tool/export": "export", "/api/tool/combine": "combine"}[path]
             self.started.append(kind)
+            if kind in ("cutout", "remesh", "unwrap", "export", "combine"):
+                self.bodies.append(json.loads(body))
             if kind == "part":
                 self.parts.append(json.loads(body)["part"])
             job_id = f"job-{len(self.started)}"
@@ -196,6 +200,12 @@ class FakeJobs:
                 "model": f"sf3d/m{n}/model.glb", "finished": f"finish/f{n}.glb",
                 "rigged": f"animate/r{n}/rigged.glb", "animated": f"animate/r{n}/walk.glb"}
         event = {"phase": "done", "message": "done", "overall_pct": 100}
+        if kind in ("cutout", "remesh", "unwrap", "export", "combine"):
+            file = {"cutout": f"images/cut{n}/cut{n}.png", "export": f"exports/e{n}/e{n}.fbx"}.get(kind, f"tools/t{n}/t{n}.glb")
+            (self.output / file).parent.mkdir(parents=True, exist_ok=True)
+            (self.output / file).write_bytes(b"x")
+            key = {"cutout": "picture", "export": "file"}.get(kind, "model")
+            return 200, {"status": "done", "last_event": {"phase": kind, "message": "done"}, "log_tail": "ok", key: file}
         if kind == "split":
             folder = self.output / "props" / "s__props__20261116-101010"
             for name in ("axe", "sword"):
@@ -732,3 +742,55 @@ def test_a_repaint_with_no_picture_on_its_line_must_be_given_one():
                          node("s3", "split"), node("r", "repaint")], [("s1", "s2"), ("s2", "s3"), ("s3", "r")])
     with pytest.raises(ValueError, match="Repaint: pick a picture"):
         ga.plan_graph(below_split, RECIPES)
+
+
+# ---------------------------------------------------------------- tool boxes: cut out, remesh, unwrap, save as, put together
+def test_tool_boxes_run_in_line_each_from_what_the_box_before_made(tmp_path):
+    g = graph([node("p", "picture", prompt="a lamp", goal="prop"), node("c", "cutout"), node("m", "model", engine="sf3d"),
+               node("r", "remesh", faces=8000, size=1024), node("u", "unwrap", size=2048), node("s", "saveas", format="obj")],
+              [("p", "c"), ("c", "m"), ("m", "r"), ("r", "u"), ("u", "s")])
+    assert ga.plan_graph(g, RECIPES).stages[0].steps == ["picture", "cutout", "model", "remesh", "unwrap", "export"]
+    runner, jobs = _graph_runner(tmp_path)
+    run = runner.start(g, background=False)
+    assert run.status == "done", run.error
+    cut, remesh, unwrap, export = jobs.bodies
+    assert cut == {"picture": "images/p.png"}
+    assert remesh == {"model": "sf3d/m3/model.glb", "faces": 8000, "size": 1024}
+    assert unwrap == {"model": "tools/t4/t4.glb", "size": 2048}            # unwraps what the remesh made
+    assert export == {"model": "tools/t5/t5.glb", "format": "obj"}
+    results = run.to_dict()["results"]
+    assert results["c"][0]["file"] == "images/cut2/cut2.png" and results["s"][0]["file"] == "exports/e6/e6.fbx"
+
+
+def test_put_together_gathers_every_part_into_one_run(tmp_path):
+    g = graph([node("p", "picture", file="images/knight.png"), node("x", "parts", names="helmet, shield, cape"),
+               node("m", "model", engine="sf3d"), node("t", "combine")], [("p", "x"), ("x", "m"), ("m", "t")])
+    plan = ga.plan_graph(g, RECIPES)
+    assert [s.steps for s in plan.stages] == [[], ["part"], ["model"], ["combine"]]
+    assert ga.describe_plan(plan)[-1] == "Run 3, once with everything from run 2: Put together"
+    runner, jobs = _graph_runner(tmp_path)
+    run = runner.start(g, background=False)
+    assert run.status == "done", run.error
+    assert jobs.started == ["part", "part", "part", "model", "model", "model", "combine"]
+    assert jobs.bodies[-1] == {"models": ["sf3d/m4/model.glb", "sf3d/m5/model.glb", "sf3d/m6/model.glb"]}
+    assert len(run.to_dict()["results"]["t"]) == 1
+
+
+def test_put_together_after_a_split_takes_every_prop(tmp_path):
+    g = graph([node("s1", "picture", prompt="nine swords", goal="set"), node("s2", "model", engine="sf3d"),
+               node("s3", "split"), node("t", "combine")], [("s1", "s2"), ("s2", "s3"), ("s3", "t")])
+    runner, jobs = _graph_runner(tmp_path)
+    run = runner.start(g, background=False)
+    assert run.status == "done", run.error
+    assert jobs.bodies[-1] == {"models": ["props/s__props__20261116-101010/finished/axe/axe_LOD0.glb",
+                                          "props/s__props__20261116-101010/finished/sword/sword_LOD0.glb"]}
+
+
+def test_a_dropped_glb_is_kept_where_the_library_finds_models_and_anything_else_refused(tmp_path):
+    kept = ga.keep_model_upload(tmp_path, "My Knight.glb", b"glTF" + b"\0" * 20)
+    folder = kept.split("/")[1]
+    assert kept == f"uploads/{folder}/{folder}.glb" and folder.startswith("my-knight__")
+    assert (tmp_path / kept).read_bytes().startswith(b"glTF")
+    for name, body in (("x.fbx", b"glTF"), ("x.glb", b"not a glb"), ("x.glb", b"")):
+        with pytest.raises(ValueError):
+            ga.keep_model_upload(tmp_path, name, body)

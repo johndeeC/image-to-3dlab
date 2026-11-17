@@ -64,6 +64,19 @@ export const FIELDS = {
   repaint: [
     ['file', 'Paint from', 'A picture of the new look. Leave it empty to paint from the picture the model was made from.', 'file'],
   ],
+  cutout: [],
+  remesh: [
+    ['faces', 'Faces', 'How many four-sided faces to rebuild it with (500 to 200,000).', 'number', [500, 200000]],
+    ['size', 'Texture size', 'Bigger is sharper and a bigger file. 512 suits a phone.', 'select', () => [['', '2048 (usual)'], [512, '512'], [1024, '1024'], [4096, '4096']], true],
+  ],
+  unwrap: [
+    ['size', 'Texture size', 'Bigger is sharper and a bigger file. 512 suits a phone.', 'select', () => [['', '2048 (usual)'], [512, '512'], [1024, '1024'], [4096, '4096']]],
+  ],
+  combine: [],
+  saveas: [
+    ['format', 'File type', 'FBX keeps a rig and its moves; OBJ is shape and texture; USDZ is for Apple devices.', 'select',
+      () => [['', 'FBX (usual)'], ['obj', 'OBJ'], ['usdz', 'USDZ']]],
+  ],
   model: [
     ['engine', 'Engine', 'Which engine builds the 3D model.', 'select', (t) => (t.engines || []).map((e) => [e.id, words(ENGINE_WORDS, e.id, e.label)])],
   ],

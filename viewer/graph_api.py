@@ -41,17 +41,24 @@ _LOCK = threading.Lock()     # the server answers on threads; one write at a tim
 # What each box is called, what it takes in, what it makes, and its runner step.
 # viewer/studio/canvas.js has the same table; tests/test_studio_canvas.py checks they agree.
 LABELS = {"picture": "Picture", "asset": "Your 3D model", "back": "Front + back", "parts": "Pick out parts", "model": "3D model", "repaint": "Repaint",
+          "cutout": "Cut out background", "remesh": "Quad remesh", "unwrap": "UV unwrap", "saveas": "Save as",
+          "combine": "Put together",
           "split": "Split into props", "finish": "Finish", "rig": "Rig", "move": "Move", "export": "Export"}
 TAKES = {"picture": (), "asset": (), "back": ("picture",), "parts": ("picture",), "model": ("picture", "pair"),
-         "repaint": ("model", "finished", "props"), "split": ("model",),
+         "repaint": ("model", "finished", "props"), "cutout": ("picture",),
+         "remesh": ("model", "finished", "props"), "unwrap": ("model", "finished", "props"),
+         "saveas": ("model", "finished", "rigged", "animated", "props"), "combine": ("model", "finished", "props"), "split": ("model",),
          "finish": ("model",), "rig": ("model", "finished", "props"), "move": ("rigged",),
          "export": ("model", "finished", "rigged", "animated", "props")}
-MAKES = {"picture": "picture", "asset": "model", "back": "pair", "parts": "picture", "model": "model", "repaint": "model", "split": "props",
+MAKES = {"picture": "picture", "asset": "model", "back": "pair", "parts": "picture", "model": "model", "repaint": "model",
+         "cutout": "picture", "remesh": "model", "unwrap": "model", "saveas": None, "combine": "model", "split": "props",
          "finish": "finished", "rig": "rigged", "move": "animated", "export": None}
-STEP = {"picture": "picture", "back": "back", "parts": "part", "model": "model", "repaint": "repaint", "split": "split", "finish": "finished",
+STEP = {"picture": "picture", "back": "back", "parts": "part", "model": "model", "repaint": "repaint",
+        "cutout": "cutout", "remesh": "remesh", "unwrap": "unwrap", "saveas": "export", "combine": "combine", "split": "split", "finish": "finished",
         "rig": "rigged", "move": "animated"}
 # the runner's `made` key each box's file lands under (split: the folder its props went to)
-MADE_KEY = {"picture": "picture", "asset": "model", "back": "back", "parts": "picture", "model": "model", "repaint": "model", "split": "split",
+MADE_KEY = {"picture": "picture", "asset": "model", "back": "back", "parts": "picture", "model": "model", "repaint": "model",
+            "cutout": "picture", "remesh": "model", "unwrap": "model", "saveas": "export", "combine": "model", "split": "split",
             "finish": "finished", "rig": "rigged", "move": "animated"}
 ROOTS = ("picture", "asset")
 # Boxes whose results all carry on, each its own run below: a Split's props, a Pick out parts' parts.
@@ -72,6 +79,11 @@ SETTINGS: dict[str, dict[str, tuple]] = {
     "back": {},
     "parts": {"names": ("text",)},
     "repaint": {"file": ("path",)},
+    "cutout": {},
+    "remesh": {"faces": ("int", 500, 200_000), "size": ("choice", 512, 1024, 2048, 4096)},
+    "unwrap": {"size": ("choice", 512, 1024, 2048, 4096)},
+    "saveas": {"format": ("choice", "fbx", "obj", "usdz")},
+    "combine": {},
     "model": {"engine": ("text",)},
     "split": {"names": ("text",)},
     "finish": {"detail": ("choice", *FINISH_DETAILS), "pixel_match": ("bool",),
@@ -283,6 +295,8 @@ class Stage:
     only_prop: str | None = None # ... or for just this one, by name (one prop dragged onto the line)
     parts: list[str] = field(default_factory=list)   # a Pick out parts box: one run per part, by name
     paint_from: str | None = None   # a Repaint box's own picture (else the picture the model was made from)
+    tool_settings: dict[str, dict[str, Any]] = field(default_factory=dict)   # step -> Quad remesh / UV unwrap / Save as choices
+    gather: bool = False            # Put together: one run, with every model the stage before made
     only_part: str | None = None # below Pick out parts: just this part (one dragged onto the line)
     want: str = "character"
     prompt: str | None = None
@@ -494,6 +508,10 @@ class _Planner:
                 stage.parts = part_names(s["names"])
             elif kind == "repaint" and s.get("file"):
                 stage.paint_from = s["file"]
+            elif kind in ("remesh", "unwrap", "saveas"):
+                stage.tool_settings[STEP[kind]] = dict(s)   # by step: a remesh and an unwrap on one line each keep their own
+            elif kind == "combine":
+                stage.gather = True
             elif kind == "split":
                 stage.want = "set"
                 if s.get("names"):
@@ -506,8 +524,8 @@ class _Planner:
                 stage.first_move = s["move"]
                 stage.move_settings = {k: s[k] for k in ("speed", "in_place") if k in s}
             nexts = self.step_children(at)
-            if single or kind in FANS or stage.count > 1 or len(nexts) != 1 or g.nodes[nexts[0]]["type"] == "parts":
-                break     # a Pick out parts box runs once per part: it starts a stage of its own
+            if single or kind in FANS or stage.count > 1 or len(nexts) != 1 or g.nodes[nexts[0]]["type"] in ("parts", "combine"):
+                break     # Pick out parts runs once per part and Put together once for all: each a stage of its own
             at = nexts[0]
         if not single:
             for c in self.step_children(at):
@@ -657,6 +675,8 @@ def describe_plan(plan: Plan) -> list[str]:
             lines.append(f"{run}, once for each prop{since}: {names}")
         elif after and after.parts:
             lines.append(f"{run}, once for each part{since}: {names}")
+        elif stage.gather:
+            lines.append(f"{run}, once with everything{since}: {names}")
         elif since:
             lines.append(f"{run}, from what run {index[after.id]} made: {names}")
         else:
@@ -669,6 +689,13 @@ def instances(stage: Stage, parent_runs: list[dict[str, Any]], props_of: Callabl
     for, or once per seed it was given), once per run of the stage before (keeping its label), for
     a stage after a Split once per prop that split made, and for Pick out parts once per part.
     Each starts from `made`. `parent_runs` are the stage before's runs: {"made", "label"}."""
+    if stage.gather:   # Put together: one run with every model above it
+        runs = stage.seeds if stage.seeds is not None else parent_runs
+        files: list[str] = []
+        for run in runs:
+            made = run["made"]
+            files += props_of(made["split"]) or [] if made.get("split") else [made.get("finished") or made.get("model")]
+        return [{"made": {}, "label": None, "gather": [f for f in files if f]}]
     if stage.seeds is not None:
         if stage.parts:   # one Pick out parts box run on its own: each part from the picture it was given
             return [{"made": dict(s["made"]), "label": name, "part": name} for s in stage.seeds for name in stage.parts]
@@ -869,7 +896,8 @@ class GraphRunner:
                           picture_settings=picture, finish_settings=dict(stage.finish_settings),
                           split_settings=dict(stage.split_settings), rig_settings=dict(stage.rig_settings),
                           move_settings=dict(stage.move_settings), made=made, client=client,
-                          part_name=job.get("part"),
+                          part_name=job.get("part"), tool_settings=dict(stage.tool_settings),
+                          gather=list(job.get("gather") or []),
                           model_seed=self.random() if {"model", "repaint"} & set(stage.steps) else None)
             run.current_chain = chain.id
             try:
@@ -916,6 +944,24 @@ class GraphRunner:
 
 UPLOAD_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 UPLOAD_LIMIT = 50 * 1024 * 1024
+MODEL_UPLOAD_LIMIT = 300 * 1024 * 1024
+
+
+def keep_model_upload(output: Path, name: str, data: bytes) -> str:
+    """A GLB dropped on a Your 3D model box, kept as `uploads/<name>__<id>/<same>.glb`: its own
+    folder, so the Library lists it as a model like any other. Returns that path."""
+    if Path(name or "").suffix.lower() != ".glb":
+        raise ValueError("Pick a GLB model (other types can be saved as GLB in Blender).")
+    if not data or len(data) > MODEL_UPLOAD_LIMIT:
+        raise ValueError("That model is empty or over 300 MB.")
+    if data[:4] != b"glTF":
+        raise ValueError("That file is not a GLB model we can read.")
+    stem = re.sub(r"[^a-z0-9]+", "-", Path(name).stem.lower()).strip("-")[:40] or "model"
+    folder = f"{stem}__{os.urandom(4).hex()}"
+    path = output / "uploads" / folder / f"{folder}.glb"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return f"uploads/{folder}/{folder}.glb"
 
 
 def keep_upload(output: Path, name: str, data: bytes) -> str:

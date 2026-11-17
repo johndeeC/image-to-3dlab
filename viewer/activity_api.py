@@ -25,12 +25,17 @@ from usage_api import CLIENT_HEADER
 HISTORY_NAME = ".activity.jsonl"
 TERMINAL = {"done", "error", "cancelled"}
 STALL_SECONDS = 180
-STEPS = ("picture", "back", "model", "finished", "split", "rigged", "animated", "part", "repaint")
+STEPS = ("picture", "back", "model", "finished", "split", "rigged", "animated", "part", "repaint",
+         "cutout", "remesh", "unwrap", "export", "combine")
+# The short tool jobs (viewer/tool_jobs.py): what each reads from `made`, in order of preference.
+TOOL_STEPS = {"cutout", "remesh", "unwrap", "export", "combine"}
 LABELS = {"picture": "Picture", "back": "Back picture", "model": "3D model", "finished": "Finish",
           "split": "Split into props", "rigged": "Rig", "animated": "Animate", "skin": "Skin",
-          "part": "Pick out a part", "repaint": "Repaint"}
+          "part": "Pick out a part", "repaint": "Repaint", "cutout": "Cut out background",
+          "remesh": "Quad remesh", "unwrap": "UV unwrap", "export": "Save as", "combine": "Put together"}
 KIND = {"picture": "image", "back": "image", "model": "generate", "finished": "finish", "split": "props",
-        "rigged": "animate", "animated": "animate", "part": "image", "repaint": "generate"}
+        "rigged": "animate", "animated": "animate", "part": "image", "repaint": "generate",
+        **{step: "tool" for step in ("cutout", "remesh", "unwrap", "export", "combine")}}
 # The Finish choices a plan may carry (the same ones the Steps panel's Finish sends).
 MOVE_KEYS = ("speed", "arm_spread", "in_place")
 SPLIT_KEYS = ("names",)       # what a plan may tell the props job (props_api.normalise_names checks them)
@@ -104,6 +109,8 @@ class Chain:
     engine: str | None = None
     first_move: str | None = None
     part_name: str | None = None                                     # the part a "part" step picks out (the canvas)
+    tool_settings: dict[str, Any] = field(default_factory=dict)      # step -> its choices: faces, size, format
+    gather: list[str] = field(default_factory=list)                  # the models a "combine" step puts together
     picture_settings: dict[str, Any] = field(default_factory=dict)  # size, steps, seed (the image job checks them)
     picture_engine: str | None = None                                # "flux" / "flux-light" / "qwen"; None = the default
     back_settings: dict[str, Any] = field(default_factory=dict)      # a back redraw: seed, what to change
@@ -318,10 +325,14 @@ class ChainRunner:
         elif step == "part":
             # the part is the picture from here on: the 3D model and Finish work from it
             chain.made["picture"] = final.get("picture")
-        elif step == "repaint":
-            # the repainted model is the model from here on; the old finished one would be rigged instead
+        elif step in ("repaint", "remesh", "unwrap", "combine"):
+            # the new model is the model from here on; an older finished one would be rigged instead
             chain.made["model"] = final.get("model")
             chain.made.pop("finished", None)
+        elif step == "cutout":
+            chain.made["picture"] = final.get("picture")
+        elif step == "export":
+            chain.made["export"] = final.get("file")
         elif step == "model":
             chain.made["model"] = final.get("model")
         elif step == "finished":
@@ -416,6 +427,8 @@ class ChainRunner:
             body = {"picture": chain.made["picture"], "part": chain.part_name, "prefer_engine": chain.picture_engine,
                     **({"seed": chain.picture_settings["seed"]} if "seed" in chain.picture_settings else {})}
             return kind, self._post("/api/image/part", json.dumps(body).encode(), "application/json")
+        if step in TOOL_STEPS:
+            return kind, self._post(f"/api/tool/{step}", json.dumps(self._tool_body(chain, step)).encode(), "application/json")
         if step == "repaint":
             mesh = chain.made.get("finished") or chain.made.get("model")
             if not mesh or not (chain.made.get("picture") or chain.upload):
@@ -470,6 +483,27 @@ class ChainRunner:
             return kind, self._post("/api/props", body, ctype)
         raise ValueError(f"unknown step {step}")
 
+    @staticmethod
+    def _tool_body(chain: Chain, step: str) -> dict[str, Any]:
+        """What a tool job is given: the picture or model the chain has made so far, and its choices."""
+        made, s = chain.made, chain.tool_settings.get(step, {})
+        if step == "cutout":
+            if not made.get("picture"):
+                raise ValueError("Cutting out needs a picture, and there is none yet")
+            return {"picture": made["picture"]}
+        if step == "combine":
+            if len(chain.gather) < 2:
+                raise ValueError("Putting together needs two or more models")
+            return {"models": list(chain.gather)}
+        model = (made.get("animated") or made.get("rigged") if step == "export" else None) or made.get("finished") or made.get("model")
+        if not model:
+            raise ValueError("This step needs a 3D model, and there is none yet")
+        if step == "export":
+            return {"model": model, "format": s.get("format", "fbx")}
+        if step == "remesh":
+            return {"model": model, "faces": s.get("faces", 20000), "size": s.get("size", 2048)}
+        return {"model": model, "size": s.get("size", 2048)}
+
     def _post(self, path: str, body: bytes, content_type: str) -> dict[str, Any]:
         client = getattr(self, "_client", None)
         extra = {"headers": {CLIENT_HEADER: client}} if client else {}
@@ -486,7 +520,9 @@ class ChainRunner:
                   "made": chain.made.get({"picture": "picture", "back": "back", "model": "model",
                                           "finished": "finished", "rigged": "rigged",
                                           "animated": "animated", "split": "split",
-                                          "part": "picture", "repaint": "model"}.get(step, ""), None),
+                                          "part": "picture", "repaint": "model", "cutout": "picture",
+                                          "remesh": "model", "unwrap": "model", "combine": "model",
+                                          "export": "export"}.get(step, ""), None),
                   "log": str(log or "")[-3000:]}
         append_history(self.output, record)
 

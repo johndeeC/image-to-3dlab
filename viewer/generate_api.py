@@ -46,6 +46,7 @@ import preview_api
 import request_utils
 import skins_api
 import studio_auth
+import tool_jobs
 import usage_api
 from activity_api import ChainRunner, chain_from_form, read_history
 from assets_api import assets_payload, list_assets
@@ -1325,6 +1326,7 @@ class JobManager:
 
 
 JOBS = JobManager()
+TOOL_JOBS = tool_jobs.ToolJobs()   # the canvas's short tool jobs: cut out, remesh, unwrap, save as, put together
 
 
 def _phase_for_tqdm(job: Job, label: str, step: int) -> str:
@@ -2837,13 +2839,14 @@ class Handler(SimpleHTTPRequestHandler):
         if parts == ["api", "graphs", "upload"]:
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                if not 0 < length <= graph_api.UPLOAD_LIMIT + 64 * 1024:
-                    self._refuse(413, "That picture is empty or over 50 MB.")
+                if not 0 < length <= graph_api.MODEL_UPLOAD_LIMIT + 64 * 1024:
+                    self._refuse(413, "That file is empty or too large (pictures up to 50 MB, models up to 300 MB).")
                     return
                 form = parse_multipart(self.headers.get("Content-Type", ""), self.rfile.read(length))
                 upload = form.get("file") or {}
-                self._send_json(200, {"file": graph_api.keep_upload(OUTPUT_ROOT, upload.get("filename") or "",
-                                                                      upload.get("data") or b"")})
+                name, data = upload.get("filename") or "", upload.get("data") or b""
+                keep = graph_api.keep_model_upload if Path(name).suffix.lower() == ".glb" else graph_api.keep_upload
+                self._send_json(200, {"file": keep(OUTPUT_ROOT, name, data)})
             except ValueError as exc:
                 self._send_json(422, {"error": str(exc)})
             return
@@ -3104,6 +3107,13 @@ class Handler(SimpleHTTPRequestHandler):
         if parts == ["api", "image", "part"]:
             self._create_part_job()
             return
+        if len(parts) == 3 and parts[:2] == ["api", "tool"] and parts[2] in {"cutout", "remesh", "unwrap", "export", "combine"}:
+            self._start_tool(parts[2])
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "tool"] and parts[3] == "cancel":
+            ok = TOOL_JOBS.cancel(parts[2])
+            self._send_json(200 if ok else 404, {"cancelled": ok})
+            return
         if parts == ["api", "image", "brush"]:
             self._create_brush_job()
             return
@@ -3229,6 +3239,32 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json(202, {"job_id": job.id, "settings": job.settings,
                               "events_url": f"/api/image/{job.id}/events",
                               "status_url": f"/api/image/{job.id}/status"})
+
+    def _start_tool(self, kind: str) -> None:
+        """A short tool job on files already in output/ (viewer/tool_jobs.py): cut out a picture's
+        background, quad-remesh or re-unwrap a model, save it as FBX/OBJ/USDZ, put parts together."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(length)) if 0 < length <= 65536 else {}
+            if not isinstance(body, dict):
+                raise ValueError("send a JSON object")
+            blender = find_blender() if kind != "cutout" else None
+            work = {
+                "cutout": lambda: tool_jobs.cutout_work(OUTPUT_ROOT, str(body.get("picture", ""))),
+                "remesh": lambda: tool_jobs.remesh_work(OUTPUT_ROOT, str(body.get("model", "")),
+                                                        int(body.get("faces", 20000)), int(body.get("size", 2048)), blender),
+                "unwrap": lambda: tool_jobs.unwrap_work(OUTPUT_ROOT, str(body.get("model", "")), int(body.get("size", 2048)), blender),
+                "export": lambda: tool_jobs.export_work(OUTPUT_ROOT, str(body.get("model", "")), str(body.get("format", "")), blender),
+                "combine": lambda: tool_jobs.combine_work(OUTPUT_ROOT, body.get("models"), blender),
+            }[kind]()
+            job = TOOL_JOBS.start(kind, work)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        except RuntimeError as exc:
+            self._send_json(409, {"error": str(exc)})
+            return
+        self._send_json(202, {"job_id": job.id, "status_url": f"/api/tool/{job.id}/status"})
 
     def _create_part_job(self) -> None:
         """Pick out one part of a picture already in output/: {picture, part, seed?, engine?}. The
@@ -3729,6 +3765,10 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parts == ["api", "graphs"]:
             self._send_json(200, {"graphs": graph_api.list_graphs(OUTPUT_ROOT)})
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "tool"] and parts[3] == "status":
+            job = TOOL_JOBS.get(parts[2])
+            self._send_json(200 if job else 404, job.payload() if job else {"error": "no such tool job"})
             return
         if parts == ["api", "graphs", "types"]:
             self._send_json(200, graph_api.box_types())
