@@ -110,3 +110,88 @@ it is not in this first cut.
   A `run_graph` tool would take the same JSON.
 - Results are not filed into a kit.
 - Nodes are not run one at a time from the canvas; Run runs the whole graph.
+
+## Next: closing the gaps with Tripo's canvas
+
+Advice taken before round two (a second opinion, read from the code only). The decisions:
+
+**Keep the hand-rolled board, no library.** A canvas holds up to 60 boxes and each box
+has one line in, so the graph is a forest. Zoom and pan are one CSS `transform`; tidying
+is a short tree layout. Boxes hold real form controls, which libraries that draw on a
+`<canvas>` (LiteGraph) cannot. The others need a framework or a bundler (React Flow, Rete),
+or own their own data model (Drawflow). The studio has no build step.
+
+**Pure modules, thin page.** Each is a plain ES module that Node tests import:
+
+| File | What it holds |
+|------|---------------|
+| `canvas.js` | the graph: add, connect, remove, `takersOf`, `addConnected`, groups, picks |
+| `canvas-view.js` | zoom and pan: `zoomAt`, `panBy`, `fitAll`, `screenToBoard` |
+| `canvas-select.js` | `nodesInRect`, selection toggles |
+| `canvas-history.js` | undo and redo; a drag or a typed word is one step |
+| `canvas-clip.js` | copy and paste with new ids, inner lines kept |
+| `canvas-layout.js` | `tidy`: a left-to-right tree layout |
+| `canvas-keys.js` | the shortcuts table; the shortcuts panel is drawn from it |
+| `canvas-settings.js` | each box's settings, one table checked against the server's list |
+
+`canvas-pane.js` only turns events into actions and patches boxes by id, not rebuilding
+them all on each change.
+
+**Server.** A box's **Run** and **Run from here** are `plan_from(graph, node, mode)`. It
+starts from what the box's parents made last time (their picked file), so the runner is
+unchanged. A Picture asked for 2–4 options ends its stage like a Split. The boxes after it
+wait until you pick one, and picking runs from there. The 3D model and the split get their
+own settings, passed to the routes that already check them. The format goes to
+`schema: 2`. Schema 1 still reads; the new parts are only additions: `groups`, `picked`,
+`view`, and typed settings.
+
+**Order.** One small commit each, test first:
+
+1. patch boxes by id; fix the fonts and the narrow width
+2. zoom and pan
+3. selection
+4. undo and redo
+5. add a box: double-click, Tab, the + menu, a line dropped on empty board
+6. copy and paste, connect selected, tidy, hide lines
+7. per-box run on the server
+8. per-box Run buttons
+9. box settings
+10. picture options
+11. agent tools
+12. groups and the shortcuts panel
+13. new box types
+
+**New boxes, and what backs them:**
+
+| Box | Backed by |
+|-----|-----------|
+| From Library (picture or model) | a Picture's `file`; a model root seeds `made["model"]` |
+| Front + back | the `back` step (`/api/image/back`); only Pixal3D uses the back |
+| Parts by name | Split into props with names (`props_api.normalise_names`) |
+| Cut out background | `image_to_3dlab.matte.cut_out`; needs a small job route first |
+| New look | skins (`/api/skins`); not one-shot, it asks you to approve pictures |
+
+No local engine yet, so these are designs only and nothing is downloaded. The user picks
+the backend, the route and the size first. The licences and sizes below have not been
+checked against each project's own page yet; check them before choosing.
+
+| Box | Candidates |
+|-----|------------|
+| Quad remesh | Blender's QuadriFlow (ships with Blender), Instant Meshes (BSD-3, a few MB) |
+| UV unwrap | `scripts/blender_reunwrap_bake.py` and xatlas, both already here |
+| Re-texture | Hunyuan3D-Paint 2.1 (several GB; **not licensed in the EU, UK or South Korea**), MV-Adapter (Apache-2.0, about 7 GB) |
+| Split a model into parts | Blender's loose parts (no weights), PartField (**non-commercial**), Hunyuan3D-Part (**same region limits**) |
+
+"Remove lighting" is not something any engine here says it does, so it stays off the
+3D model box until one does.
+
+**Agents.** `list_canvases`, `get_canvas`, `save_canvas`, `edit_canvas` (a list of add,
+remove, connect, set and pick operations), `check_canvas`, `run_canvas`, `canvas_status`,
+`cancel_canvas_run` and `box_types`. A save checks the canvas has not changed since it was
+read, so the studio tab and an agent don't overwrite each other.
+
+**In-studio chat: a proposal, not built.** A side panel sends your words and the canvas to
+a model and gets `edit_canvas` operations back. The model is yours: a local server or a key
+you paste; the studio ships none. "Ask first" shows the changes to accept; "Go ahead" applies
+and runs them. An "Instructions" box is the same call for one box. Same operations as the
+agent tools, so one code path and one set of tests.
