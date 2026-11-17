@@ -581,6 +581,13 @@ def read_model_record(glb: Path) -> dict[str, Any] | None:
     return None
 
 
+def _output_class(record: dict[str, Any]) -> str | None:
+    """A record's output classification, wherever its schema keeps it (models: output.classification;
+    pictures keep `output` as a path and the class beside it)."""
+    output = record.get("output")
+    return (output.get("classification") if isinstance(output, dict) else None) or record.get("classification")
+
+
 def write_derived_sidecar(
     source: Path, output: Path, *, operation: str,
     source_record: dict[str, Any] | None = None,
@@ -594,7 +601,8 @@ def write_derived_sidecar(
                "conditions": ["Verify the source model's licence before use."]}
     origin = source_record or {}
     licence = copy.deepcopy(origin.get("license") or unknown)
-    classification = (origin.get("output") or {}).get("classification") or origin.get("classification") or "unverified"
+    # a picture's record keeps its output as a plain path: only a structured one carries a class
+    classification = _output_class(origin) or "unverified"
     records = [origin, *component_records]
     if component_records:
         licences = [r.get("license") or unknown for r in records]
@@ -605,8 +613,7 @@ def write_derived_sidecar(
                     conditions.append(term)
         licence = {"name": " + ".join(str(item.get("name", "Unverified")) if isinstance(item, dict)
                                        else str(item) for item in licences), "conditions": conditions}
-        classes = {(r.get("output") or {}).get("classification") or r.get("classification") or "unverified"
-                   for r in records}
+        classes = {_output_class(r) or "unverified" for r in records}
         classification = classes.pop() if len(classes) == 1 else "unverified"
     if classification == "unverified":
         licence = {**licence, "verified": False} if isinstance(licence, dict) else {"name": licence, "verified": False}

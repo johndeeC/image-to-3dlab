@@ -410,3 +410,17 @@ def test_derived_unknown_source_stays_unverified_and_write_failure_propagates(tm
     monkeypatch.setattr(Path, "replace", fail_replace)
     with pytest.raises(OSError, match="disk full"):
         p.write_derived_sidecar(source, output, operation="keep")
+
+
+def test_a_picture_record_with_a_plain_output_path_can_be_derived_from(tmp_path):
+    """Cutting a picture out kept failing here: a picture's record has `output` as a path, not a dict."""
+    from image_to_3dlab import provenance as p
+
+    source, output = tmp_path / "pic.png", tmp_path / "pic_cut.png"
+    source.write_bytes(b"png")
+    output.write_bytes(b"cut")
+    record = {"license": {"name": "Apache-2.0", "conditions": []}, "output": "images/pic.png",
+              "classification": "commercial-clear"}
+    sidecar = p.write_derived_sidecar(source, output, operation="cutout", source_record=record)
+    written = json.loads(sidecar.read_text())
+    assert written["output"]["classification"] == "commercial-clear" and written["license"]["name"] == "Apache-2.0"
