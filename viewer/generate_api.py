@@ -3617,6 +3617,9 @@ class Handler(SimpleHTTPRequestHandler):
         if parts == ["api", "graphs"]:
             self._send_json(200, {"graphs": graph_api.list_graphs(OUTPUT_ROOT)})
             return
+        if parts == ["api", "graphs", "types"]:
+            self._send_json(200, graph_api.box_types())
+            return
         if len(parts) == 3 and parts[:2] == ["api", "graphs"]:
             try:
                 self._send_json(200, graph_api.get_graph(OUTPUT_ROOT, parts[2]))

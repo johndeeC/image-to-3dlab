@@ -164,7 +164,8 @@ def test_the_server_registers_every_tool():
                      "model_info", "show_in_folder", "export_roblox", "report_bug", "make_skin", "skin_status", "skin_picture",
                      "approve_skin_picture", "redo_skin_picture", "build_skin", "cancel_skin", "export_skins",
                      "usage_counts", "brush_back", "picture_status", "back_versions",
-                     "list_kits", "make_kit", "add_to_kit"}
+                     "list_kits", "make_kit", "add_to_kit", "box_types", "list_canvases", "get_canvas", "edit_canvas",
+                     "save_canvas", "check_canvas", "run_canvas", "canvas_status", "cancel_canvas_run"}
 
 
 # --------------------------------------------------------------------------- create

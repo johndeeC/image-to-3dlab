@@ -830,3 +830,18 @@ def keep_upload(output: Path, name: str, data: bytes) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return relative
+
+
+def box_types() -> dict[str, Any]:
+    """Every box type for agents: its name, what it takes and makes, and the settings it keeps."""
+    def kind(spec: tuple) -> Any:
+        if spec[0] == "choice":
+            return {"one_of": list(spec[1:])}
+        if spec[0] in ("int", "float"):
+            return {spec[0]: [spec[1], spec[2]]}
+        return spec[0]
+    return {"types": {t: {"label": LABELS[t], "takes": list(TAKES[t]), "makes": MAKES[t],
+                          "settings": {k: kind(v) for k, v in SETTINGS[t].items()}} for t in LABELS},
+            "notes": ["A canvas starts at a picture or asset box; every other box has exactly one line in.",
+                      "A Picture with count 2-4 makes options; the boxes below wait until one is picked.",
+                      "A box after a split runs once for each prop."]}

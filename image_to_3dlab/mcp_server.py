@@ -56,12 +56,8 @@ STUDIO_ONLY = {
     "api/kits/*/swap": "which try a kit uses is the user's pick, in the kit pane",
     "api/kits/*/name": "renaming is the user's choice",
     "api/kits/*/delete": "deleting a kit is the user's call, made in the studio",
-    "api/graphs": "the canvas is a person's drawing board; agents run the same steps with create and continue_asset",
-    "api/graphs/check": "part of drawing on the canvas",
     "api/graphs/upload": "a person drops a picture on a Picture box; agents give image_path to create",
-    "api/graphs/*/run": "runs a canvas the person drew; agents run the same steps with create and continue_asset",
     "api/graphs/*/delete": "deleting a canvas is the user's call, made in the studio",
-    "api/graph-runs/*/cancel": "stops a canvas run the person started, from the canvas",
     "api/skins/*/discard": "deleting a skin is the user's call, made in the studio",
     "api/blender/install": "installs an app; the Setup page asks first",
     "api/gltfpack/install": "installs a tool; the Setup page asks first",
@@ -89,7 +85,8 @@ STUDIO_ONLY = {
 USED = {"api/chains", "api/chains/*/cancel", "api/setup/*/download", "api/reveal", "api/roblox-export", "api/bug-report", "api/usage",
         "api/skins", "api/skins/*/try", "api/skins/*/approve", "api/skins/*/build", "api/skins/build/*/cancel",
         "api/image/brush", "api/image/versions/use", "api/image/versions/delete",
-        "api/kits", "api/kits/*/add"}
+        "api/kits", "api/kits/*/add",
+        "api/graphs", "api/graphs/check", "api/graphs/*/run", "api/graph-runs/*/cancel"}
 
 
 class StudioError(RuntimeError):
@@ -573,6 +570,185 @@ def add_to_kit(studio: Studio, *, kit_id: str, asset_id: str) -> dict[str, Any]:
     find_asset(studio, asset_id, assets)
     kit = studio.post_json(f"api/kits/{kit_id}/add", {"asset": asset_id})
     return kit_summary(kit, assets, studio)
+
+
+# --------------------------------------------------------------------------- canvases
+# A canvas is the studio's board of step boxes (docs/canvas.md). Agents build and run the same
+# JSON the studio's Canvas pane draws; box types and their settings are read from the studio.
+ADD_GAP_X, ADD_GAP_Y = 260, 200
+
+
+def box_types(studio: Studio) -> dict[str, Any]:
+    return studio.get("api/graphs/types")
+
+
+def canvas_summary(graph: dict[str, Any]) -> dict[str, Any]:
+    last = graph.get("last_run") or {}
+    return {"id": graph["id"], "name": graph["name"], "updated": graph.get("updated"), "boxes": len(graph["nodes"]),
+            "last_run": last.get("status")}
+
+
+def box_results(graph: dict[str, Any], results: dict[str, list[dict[str, Any]]] | None = None) -> dict[str, Any]:
+    """Each box with what it made last (files, or why not), so an agent can read a canvas at a glance."""
+    results = results if results is not None else (graph.get("last_run") or {}).get("results") or {}
+    out = {}
+    for n in graph["nodes"]:
+        rows = results.get(n["id"], [])
+        files = [r["file"] for r in rows if r.get("status") == "done" and r.get("file")]
+        out[n["id"]] = {"type": n["type"], "settings": n.get("settings", {}), "picked": n.get("picked"),
+                        "status": next((r["status"] for r in rows if r.get("status") != "done"), "done" if files else None),
+                        "files": files, "errors": [r.get("error") for r in rows if r.get("error")]}
+    return out
+
+
+def list_canvases(studio: Studio) -> dict[str, Any]:
+    return {"canvases": [canvas_summary(g) for g in studio.get("api/graphs")["graphs"]]}
+
+
+def get_canvas(studio: Studio, *, canvas_id: str) -> dict[str, Any]:
+    graph = studio.get(f"api/graphs/{canvas_id}")
+    return {"canvas": {k: v for k, v in graph.items() if k != "last_run"}, "boxes": box_results(graph),
+            "studio": studio.studio_link()}
+
+
+def _check_lines(studio: Studio, graph: dict[str, Any], box_id: str | None = None, mode: str = "all") -> dict[str, Any]:
+    try:
+        body = {"graph": graph, "node": box_id, "mode": mode} if box_id else graph
+        return {"plan": studio.post_json("api/graphs/check", body)["plan"]}
+    except StudioError as exc:
+        return {"cannot_run_yet": str(exc)}
+
+
+def save_canvas(studio: Studio, *, canvas: dict[str, Any]) -> dict[str, Any]:
+    """Save a whole canvas. Keep `updated` from get_canvas: the studio refuses a save over a newer one."""
+    saved = studio.post_json("api/graphs", canvas)
+    return {"canvas": saved, **_check_lines(studio, saved)}
+
+
+def _free_id(graph: dict[str, Any]) -> str:
+    taken = {n["id"] for n in graph["nodes"]}
+    k = len(taken) + 1
+    while f"n{k}" in taken:
+        k += 1
+    return f"n{k}"
+
+
+def apply_ops(graph: dict[str, Any], ops: list[dict[str, Any]]) -> dict[str, Any]:
+    """The canvas with each operation applied in order. Raises StudioError naming the bad one.
+
+    {"add": type, "id": optional, "after": box to join it to, "settings": {...}}
+    {"remove": id}   {"connect": [from, to]}   {"disconnect": [from, to]}
+    {"set": id, "settings": {...}} (merged; null removes a setting)   {"pick": id, "file": path}
+    {"rename": "new canvas name"}
+    """
+    g = json.loads(json.dumps(graph))
+    g.setdefault("edges", [])
+    g.setdefault("nodes", [])
+    by_id = lambda i: next((n for n in g["nodes"] if n["id"] == i), None)
+    for index, op in enumerate(ops):
+        where = f"operation {index + 1} ({json.dumps(op)[:80]})"
+        if not isinstance(op, dict):
+            raise StudioError(f"{where}: each operation is an object")
+        if "add" in op:
+            new_id = str(op.get("id") or _free_id(g))
+            if by_id(new_id):
+                raise StudioError(f"{where}: there is already a box {new_id}")
+            parent = by_id(op["after"]) if op.get("after") else None
+            if op.get("after") and parent is None:
+                raise StudioError(f"{where}: no box {op['after']} to add it after")
+            if parent:
+                siblings = sum(1 for e in g["edges"] if e["from"] == parent["id"])
+                x, y = parent["x"] + ADD_GAP_X, parent["y"] + siblings * ADD_GAP_Y
+            else:
+                x, y = 40, max((n["y"] for n in g["nodes"]), default=-ADD_GAP_Y + 60) + ADD_GAP_Y
+            g["nodes"].append({"id": new_id, "type": op["add"], "x": x, "y": y, "settings": dict(op.get("settings") or {})})
+            if parent:
+                g["edges"].append({"from": parent["id"], "to": new_id})
+        elif "remove" in op:
+            if not by_id(op["remove"]):
+                raise StudioError(f"{where}: no box {op['remove']}")
+            g["nodes"] = [n for n in g["nodes"] if n["id"] != op["remove"]]
+            g["edges"] = [e for e in g["edges"] if op["remove"] not in (e["from"], e["to"])]
+            for gr in g.get("groups", []):
+                gr["nodes"] = [i for i in gr["nodes"] if i != op["remove"]]
+        elif "connect" in op or "disconnect" in op:
+            pair = op.get("connect") or op.get("disconnect")
+            if not (isinstance(pair, list) and len(pair) == 2 and by_id(pair[0]) and by_id(pair[1])):
+                raise StudioError(f"{where}: give two box ids that exist, [from, to]")
+            g["edges"] = [e for e in g["edges"] if (e["from"], e["to"]) != tuple(pair)]
+            if "connect" in op:
+                g["edges"].append({"from": pair[0], "to": pair[1]})
+        elif "set" in op:
+            node = by_id(op["set"])
+            if node is None:
+                raise StudioError(f"{where}: no box {op['set']}")
+            for key, value in (op.get("settings") or {}).items():
+                if value is None:
+                    node["settings"].pop(key, None)
+                else:
+                    node["settings"][key] = value
+        elif "pick" in op:
+            node = by_id(op["pick"])
+            if node is None:
+                raise StudioError(f"{where}: no box {op['pick']}")
+            node["picked"] = op.get("file")
+        elif "rename" in op:
+            g["name"] = str(op["rename"])
+        else:
+            raise StudioError(f"{where}: use add, remove, connect, disconnect, set, pick or rename")
+    return g
+
+
+def edit_canvas(studio: Studio, *, canvas_id: str | None = None, ops: list[dict[str, Any]],
+                name: str = "Canvas") -> dict[str, Any]:
+    """Change a canvas by operations (or start one when canvas_id is None), save it, and say how it
+    would run. The save carries the version it read, so a change made in the studio meanwhile is not lost."""
+    graph = studio.get(f"api/graphs/{canvas_id}") if canvas_id else {"name": name, "nodes": [], "edges": []}
+    graph.pop("last_run", None)
+    saved = studio.post_json("api/graphs", apply_ops(graph, ops))
+    return {"canvas": saved, **_check_lines(studio, saved), "studio": studio.studio_link()}
+
+
+def check_canvas(studio: Studio, *, canvas_id: str, box_id: str | None = None, mode: str = "all") -> dict[str, Any]:
+    return _check_lines(studio, studio.get(f"api/graphs/{canvas_id}"), box_id, mode)
+
+
+def run_canvas(studio: Studio, *, canvas_id: str, box_id: str | None = None, mode: str = "all") -> dict[str, Any]:
+    if mode not in ("all", "only", "from", "after"):
+        raise StudioError("mode is all, only (this box), from (this box and below) or after (below a picked picture)")
+    if mode != "all" and not box_id:
+        raise StudioError(f"mode {mode!r} needs box_id")
+    body = {"node": box_id, "mode": mode} if mode != "all" else {}
+    run = studio.post_json(f"api/graphs/{canvas_id}/run", body)
+    return {"run_id": run["id"], "plan": run["plan"], "watch": "canvas_status with this run_id (wait_seconds up to 50)",
+            "studio": studio.studio_link()}
+
+
+def canvas_status(studio: Studio, *, run_id: str | None = None, wait_seconds: int = 0,
+                  sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+    if not run_id:
+        running = studio.get("api/graph-runs").get("running")
+        if running is None:
+            return {"status": "idle", "note": "No canvas is running."}
+        run_id = running["id"]
+    run = studio.get(f"api/graph-runs/{run_id}")
+    deadline = time.time() + max(0, min(int(wait_seconds), WAIT_LIMIT))
+    stage = run.get("stage")
+    while run.get("status") == "running" and time.time() < deadline and run.get("stage") == stage:
+        sleep(2)
+        run = studio.get(f"api/graph-runs/{run_id}")
+    out = {"run_id": run_id, "status": run["status"], "plan": run["plan"], "now": (run["plan"] or [None])[min(run["stage"], len(run["plan"]) - 1)] if run["plan"] else None,
+           "results": {k: [{x: r[x] for x in ("status", "file", "label", "error") if r.get(x)} for r in v] for k, v in run["results"].items()},
+           "error": run.get("error") or None}
+    if run.get("waiting_for_pick"):
+        out["waiting_for_pick"] = run["waiting_for_pick"]
+        out["next"] = ("Show the user the pictures (preview needs an asset id; the files are in results), then "
+                       "edit_canvas with {'pick': box, 'file': ...} and run_canvas(box_id=box, mode='after').")
+    return out
+
+
+def cancel_canvas_run(studio: Studio, *, run_id: str) -> dict[str, Any]:
+    return studio.post_json(f"api/graph-runs/{run_id}/cancel", {})
 
 
 # The file each step starts from, so a reply can say which model it is working on.
@@ -1385,6 +1561,65 @@ def build_server(studio: Studio | None = None):
     def tool_add_to_kit(kit_id: str, asset_id: str):
         """File a prop set or prop under a kit (list_kits shows the kits). Adding one twice keeps it once."""
         return safe(lambda: add_to_kit(studio, kit_id=kit_id, asset_id=asset_id))
+
+    @server.tool(name="box_types", structured_output=False)
+    def tool_box_types():
+        """The canvas's box types: what each takes in and makes, and the settings it keeps (with allowed
+        values). Read this before building a canvas with edit_canvas."""
+        return safe(lambda: box_types(studio))
+
+    @server.tool(name="list_canvases", structured_output=False)
+    def tool_list_canvases():
+        """The canvases saved in the studio (boards of step boxes joined by lines), newest first."""
+        return safe(lambda: list_canvases(studio))
+
+    @server.tool(name="get_canvas", structured_output=False)
+    def tool_get_canvas(canvas_id: str):
+        """One canvas: its boxes, lines and frames, plus what each box made last time (files, errors, the
+        picked picture). Keep its `updated` if you will save_canvas it."""
+        return safe(lambda: get_canvas(studio, canvas_id=canvas_id))
+
+    @server.tool(name="edit_canvas", structured_output=False)
+    def tool_edit_canvas(ops: list[dict], canvas_id: str | None = None, name: str = "Canvas"):
+        """Build or change a canvas with operations, applied in order; canvas_id None starts a new one named
+        `name`. Operations: {"add": type, "after": box_id, "settings": {...}} adds a box joined to box_id;
+        {"remove": id}; {"connect": [from, to]}; {"disconnect": [from, to]}; {"set": id, "settings": {...}}
+        (null removes one); {"pick": id, "file": path} picks a Picture's option; {"rename": name}.
+        Example: [{"add": "picture", "id": "p", "settings": {"prompt": "a brass lamp", "goal": "prop"}},
+        {"add": "model", "after": "p", "settings": {"engine": "pixal3d"}}, {"add": "finish", "after": "n2"}].
+        Returns the saved canvas and how it would run, or why it can't yet. box_types lists the types."""
+        return safe(lambda: edit_canvas(studio, canvas_id=canvas_id, ops=ops, name=name))
+
+    @server.tool(name="save_canvas", structured_output=False)
+    def tool_save_canvas(canvas: dict):
+        """Save a whole canvas as JSON (the shape get_canvas returns). Refused if someone saved it since you read
+        it; read it again then. Prefer edit_canvas for small changes."""
+        return safe(lambda: save_canvas(studio, canvas=canvas))
+
+    @server.tool(name="check_canvas", structured_output=False)
+    def tool_check_canvas(canvas_id: str, box_id: str | None = None, mode: str = "all"):
+        """How a canvas (or one box, mode only/from/after) would run, as plain lines, or why it can't yet.
+        Runs nothing."""
+        return safe(lambda: check_canvas(studio, canvas_id=canvas_id, box_id=box_id, mode=mode))
+
+    @server.tool(name="run_canvas", structured_output=False)
+    def tool_run_canvas(canvas_id: str, box_id: str | None = None, mode: str = "all"):
+        """Run a saved canvas: mode all (every box), only (box_id alone, from what the boxes above it made last
+        time), from (box_id and every box below it), after (the boxes below box_id; use once a Picture's option
+        is picked). Takes minutes; each straight line of boxes is one ordinary run. Watch with canvas_status."""
+        return safe(lambda: run_canvas(studio, canvas_id=canvas_id, box_id=box_id, mode=mode))
+
+    @server.tool(name="canvas_status", structured_output=False)
+    def tool_canvas_status(run_id: str | None = None, wait_seconds: int = 0):
+        """A canvas run: status, the plan, what each box made so far. wait_seconds (up to 50) waits for the
+        next run of the plan to start or the whole to end. waiting_for_pick names Picture boxes whose options
+        the user should choose from."""
+        return safe(lambda: canvas_status(studio, run_id=run_id, wait_seconds=wait_seconds))
+
+    @server.tool(name="cancel_canvas_run", structured_output=False)
+    def tool_cancel_canvas_run(run_id: str):
+        """Stop a canvas run after the step that is running. Everything finished is kept."""
+        return safe(lambda: cancel_canvas_run(studio, run_id=run_id))
 
     @server.tool(name="brush_back", structured_output=False)
     def tool_brush_back(asset_id: str, mask_path: str, change: str, picture_engine: str | None = None,
