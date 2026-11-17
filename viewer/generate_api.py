@@ -36,6 +36,7 @@ import activity_api
 import backend_catalog
 import bug_report_api
 import fixspot_api
+import graph_api
 import hf_api
 import image_api
 import kits_api
@@ -2749,6 +2750,49 @@ class Handler(SimpleHTTPRequestHandler):
             cls._chain_runner = ChainRunner(OUTPUT_ROOT, activity_api.local_request(f"http://{host}:{port}", cls.studio_token))
         return cls._chain_runner
 
+    _graph_runner: ClassVar[graph_api.GraphRunner | None] = None
+
+    def _graphs(self) -> graph_api.GraphRunner:
+        """The canvas runner: a graph's stages, one after another, through the same chain runner."""
+        cls = type(self)
+        if cls._graph_runner is None:
+            cls._graph_runner = graph_api.GraphRunner(OUTPUT_ROOT, self._chains())
+        return cls._graph_runner
+
+    def _graphs_post(self, parts: list[str]) -> None:
+        """The canvas (docs/canvas.md): POST /api/graphs saves one, /api/graphs/check reads one as
+        runs, /api/graphs/<id>/run runs a saved one, /delete removes it, /api/graph-runs/<id>/cancel."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(length)) if 0 < length <= 512 * 1024 else {}
+        except (ValueError, json.JSONDecodeError):
+            self._send_json(400, {"error": "send the canvas as JSON"})
+            return
+        try:
+            if parts == ["api", "graphs"]:
+                self._send_json(200, graph_api.save_graph(OUTPUT_ROOT, body))
+            elif parts == ["api", "graphs", "check"]:
+                self._send_json(200, {"plan": graph_api.describe_plan(self._graphs().plan(body))})
+            elif parts[3] == "delete":
+                graph_api.delete_graph(OUTPUT_ROOT, parts[2])
+                self._send_json(200, {"id": parts[2], "deleted": True})
+            elif parts[:2] == ["api", "graph-runs"]:
+                ok = self._graphs().cancel(parts[2])
+                self._send_json(200 if ok else 404, {"cancelled": ok})
+            else:   # run
+                graph = graph_api.get_graph(OUTPUT_ROOT, parts[2])
+                plan = self._graphs().plan(graph)
+                # before the picture and the 3D model, not ten minutes later at Finish or the split
+                if any(set(s.steps) & activity_api.NEEDS_BLENDER for s in plan.stages) and find_blender() is None:
+                    self._send_json(409, {"error": blender_missing_help(), "needs_blender": True})
+                    return
+                run = self._graphs().start(graph, client=usage_api.source_of(self.headers.get(usage_api.CLIENT_HEADER)))
+                self._send_json(202, run.to_dict())
+        except RuntimeError as exc:
+            self._send_json(409, {"error": str(exc)})
+        except ValueError as exc:
+            self._send_json(422, {"error": str(exc)})
+
     def send_response(self, code, message=None) -> None:
         self._status_code = int(code)   # what note_request counts a POST by
         super().send_response(code, message)
@@ -2810,6 +2854,18 @@ class Handler(SimpleHTTPRequestHandler):
         parts = self._path_parts()
         if parts == ["api", "kits"]:
             self._kits_post(None, "make")
+            return
+        if parts == ["api", "graphs"]:
+            self._graphs_post(parts)
+            return
+        if parts == ["api", "graphs", "check"]:
+            self._graphs_post(parts)
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "graphs"] and parts[3] in {"run", "delete"}:
+            self._graphs_post(parts)
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "graph-runs"] and parts[3] == "cancel":
+            self._graphs_post(parts)
             return
         if len(parts) == 4 and parts[:2] == ["api", "kits"] and parts[3] in {"add", "remove", "swap", "name", "delete"}:
             self._kits_post(parts[2], parts[3])
@@ -3534,6 +3590,23 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parts == ["api", "kits"]:
             self._send_json(200, {"kits": kits_api.list_kits(OUTPUT_ROOT)})
+            return
+        if parts == ["api", "graphs"]:
+            self._send_json(200, {"graphs": graph_api.list_graphs(OUTPUT_ROOT)})
+            return
+        if len(parts) == 3 and parts[:2] == ["api", "graphs"]:
+            try:
+                self._send_json(200, graph_api.get_graph(OUTPUT_ROOT, parts[2]))
+            except ValueError as exc:
+                self._send_json(404, {"error": str(exc)})
+            return
+        if parts == ["api", "graph-runs"]:
+            running = self._graphs().running()
+            self._send_json(200, {"running": running.to_dict() if running else None})
+            return
+        if len(parts) == 3 and parts[:2] == ["api", "graph-runs"]:
+            run = self._graphs().runs.get(parts[2])
+            self._send_json(200 if run else 404, run.to_dict() if run else {"error": "This canvas run is no longer known (the studio was restarted)."})
             return
         if parts == ["api", "assets"]:
             try:

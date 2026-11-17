@@ -321,6 +321,9 @@ class ChainRunner:
                 chain.note = event.get("message") or "This rig does not fit the preset moves."
         elif step == "animated":
             chain.made["animated"] = event.get("path")  # the move's own GLB, so an agent can hand it over
+        elif step == "split" and event.get("directory"):
+            # the folder its props went to: the canvas runs the steps after a split once per prop
+            chain.made["split"] = f"props/{event['directory']}"
 
     # ------------------------------------------------------------------ starting each step
     def _file(self, relative: str) -> tuple[str, bytes]:
@@ -457,7 +460,7 @@ class ChainRunner:
                   "seconds": round(self.now() - started, 1), "note": note,
                   "made": chain.made.get({"picture": "picture", "back": "back", "model": "model",
                                           "finished": "finished", "rigged": "rigged",
-                                          "animated": "animated"}.get(step, ""), None),
+                                          "animated": "animated", "split": "split"}.get(step, ""), None),
                   "log": str(log or "")[-3000:]}
         append_history(self.output, record)
 
