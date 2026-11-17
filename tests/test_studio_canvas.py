@@ -38,8 +38,9 @@ def test_adding_nodes_gives_each_a_new_id_and_a_place():
       g = m.removeNode(g, 'n1');
       g = m.addNode(g, 'finish', -50, 9);
       console.log(JSON.stringify(g))""")
-    assert [(n["id"], n["type"], n["x"], n["y"]) for n in g["nodes"]] == [("n2", "model", 300, 20), ("n3", "finish", 0, 9)]
-    assert g["nodes"][0]["settings"] == {"engine": "sf3d"} and g["schema"] == 1 and g["id"] is None
+    # a board pans and zooms, so a box may sit left of or above where it started
+    assert [(n["id"], n["type"], n["x"], n["y"]) for n in g["nodes"]] == [("n2", "model", 300, 20), ("n3", "finish", -50, 9)]
+    assert g["nodes"][0]["settings"] == {"engine": "sf3d"} and g["schema"] == 2 and g["id"] is None
 
 
 def test_a_line_only_joins_nodes_that_fit():
@@ -67,7 +68,7 @@ def test_a_line_that_would_loop_back_is_refused():
       g = m.addNode(g, 'model', 0, 0); g = m.addNode(g, 'finish', 0, 0); g = m.addNode(g, 'rig', 0, 0);
       g = m.connect(g, 'n1', 'n2');
       console.log(JSON.stringify([m.canConnect(g, 'n2', 'n1'), m.canConnect(g, 'n1', 'n3')]))""")
-    assert out[0] in ("The lines would go round in a loop.", "3D model takes a picture, and Finish makes a game-ready model.")
+    assert out[0] == "The lines would go round in a loop." or "Finish makes a game-ready model" in out[0]
     assert out[1] is True
 
 
@@ -107,3 +108,66 @@ def test_a_setting_change_keeps_the_rest_and_an_empty_one_is_dropped():
       g = m.setSetting(g, 'n1', 'prompt', 'a fox'); g = m.setSetting(g, 'n1', 'goal', '');
       console.log(JSON.stringify(g.nodes[0].settings))""")
     assert g == {"prompt": "a fox"}
+
+
+def test_a_line_dropped_on_the_board_offers_only_the_boxes_that_take_it():
+    out = _run("""console.log(JSON.stringify({ model: m.takersOf('model'), picture: m.takersOf('picture'),
+      export: m.takersOf('export'), back: m.takersOf('back') }))""")
+    assert out["model"] == ["split", "finish", "rig", "export"]
+    assert out["picture"] == ["back", "model"]
+    assert out["export"] == [] and out["back"] == ["model"]
+
+
+def test_a_box_added_from_a_dropped_line_comes_already_joined():
+    g = _run("""let g = m.addNode(m.newGraph('B'), 'picture', 0, 0);
+      g = m.addConnected(g, 'n1', 'model', 300, 0, { engine: 'sf3d' });
+      console.log(JSON.stringify(g))""")
+    assert g["nodes"][1]["settings"] == {"engine": "sf3d"} and g["edges"] == [{"from": "n1", "to": "n2"}]
+
+
+def test_moving_and_removing_several_boxes_never_changes_the_graph_it_was_given():
+    out = _run("""let g = m.newGraph('B');
+      for (const t of ['picture', 'model', 'finish']) g = m.addNode(g, t, 0, 0);
+      g = m.connect(m.connect(g, 'n1', 'n2'), 'n2', 'n3');
+      g = m.group(g, ['n2', 'n3'], 'Body');
+      const moved = m.moveNodes(g, ['n1', 'n2'], 10, -5);
+      const gone = m.removeNodes(g, ['n2', 'n3']);
+      console.log(JSON.stringify({ old: g.nodes.map((n) => [n.x, n.y]), moved: moved.nodes.map((n) => [n.x, n.y]),
+        edges: gone.edges, groups: gone.groups }))""")
+    assert out["old"] == [[0, 0], [0, 0], [0, 0]]
+    assert out["moved"] == [[10, -5], [10, -5], [0, 0]]
+    assert out["edges"] == [] and out["groups"] == []        # an emptied frame goes with its boxes
+
+
+def test_join_selected_links_left_to_right_where_it_fits():
+    out = _run("""let g = m.newGraph('B');
+      g = m.addNode(g, 'finish', 600, 0); g = m.addNode(g, 'picture', 0, 0); g = m.addNode(g, 'model', 300, 0); g = m.addNode(g, 'move', 900, 0);
+      const { graph, made } = m.connectSelected(g, ['n1', 'n2', 'n3', 'n4']);
+      console.log(JSON.stringify({ edges: graph.edges, made }))""")
+    assert out["edges"] == [{"from": "n2", "to": "n3"}, {"from": "n3", "to": "n1"}] and out["made"] == 2   # Move takes no Finish
+
+
+def test_frames_hold_each_box_once_and_come_off_cleanly():
+    out = _run("""let g = m.newGraph('B');
+      for (const t of ['picture', 'model', 'finish']) g = m.addNode(g, t, 0, 0);
+      g = m.group(g, ['n1', 'n2'], 'Front'); g = m.group(g, ['n2', 'n3'], 'Back');
+      const framed = g.groups;
+      const bounds = m.groupBounds(g.groups[1], [{ id: 'n2', x: 100, y: 100 }, { id: 'n3', x: 400, y: 50 }], { n2: { w: 200, h: 100 } }, 10);
+      g = m.renameGroup(g, 'g2', '  Back half ');
+      const named = g.groups[1].label;
+      g = m.ungroup(g, ['n1']);
+      console.log(JSON.stringify({ framed, bounds, named, left: g.groups }))""")
+    assert out["framed"] == [{"id": "g1", "label": "Front", "nodes": ["n1"]}, {"id": "g2", "label": "Back", "nodes": ["n2", "n3"]}]
+    assert out["bounds"] == {"x": 90, "y": 20, "w": 530, "h": 190}
+    assert out["named"] == "Back half"
+    assert out["left"] == [{"id": "g2", "label": "Back half", "nodes": ["n2", "n3"]}]
+
+
+def test_up_and_down_the_lines():
+    out = _run("""let g = m.newGraph('B');
+      for (const t of ['picture', 'model', 'finish', 'rig']) g = m.addNode(g, t, 0, 0);
+      g = m.connect(m.connect(m.connect(g, 'n1', 'n2'), 'n2', 'n3'), 'n2', 'n4');
+      g = m.pickResult(g, 'n1', 'a.png');
+      console.log(JSON.stringify({ up: m.upstreamOf(g, 'n3'), down: m.downstreamOf(g, 'n1'), picked: g.nodes[0].picked,
+        unpicked: m.pickResult(g, 'n1', null).nodes[0].picked ?? null }))""")
+    assert out == {"up": ["n2", "n1"], "down": ["n2", "n3", "n4"], "picked": "a.png", "unpicked": None}

@@ -32,6 +32,7 @@ KIND = {"picture": "image", "back": "image", "model": "generate", "finished": "f
         "rigged": "animate", "animated": "animate"}
 # The Finish choices a plan may carry (the same ones the Steps panel's Finish sends).
 MOVE_KEYS = ("speed", "arm_spread", "in_place")
+SPLIT_KEYS = ("names",)       # what a plan may tell the props job (props_api.normalise_names checks them)
 RIG_KEYS = ("bone_names",)   # what a plan may tell the rig job (autorig_api checks the value)
 # Every Detail choice the studio and agents offer must be able to pass (mcp_server.FINISH_DETAILS):
 # "high" and "hero" were dropped here, so an agent asking for them got a plain Finish.
@@ -109,6 +110,7 @@ class Chain:
     finish_settings: dict[str, Any] = field(default_factory=dict)    # detail and Pixel Match (the finish job checks them)
     move_settings: dict[str, Any] = field(default_factory=dict)      # speed, arm_spread, in_place (the animate job checks them)
     rig_settings: dict[str, Any] = field(default_factory=dict)       # bone_names (the rig job checks it)
+    split_settings: dict[str, Any] = field(default_factory=dict)     # names of the props (the props job checks them)
     made: dict[str, str | None] = field(default_factory=dict)       # picture/model/finished/rigged paths
     upload: tuple[str, bytes] | None = None                          # (file name, bytes) when the user gave a file
     back_upload: tuple[str, bytes] | None = None                     # the user's own back picture, for front + back
@@ -441,7 +443,8 @@ class ChainRunner:
         if step == "split":
             if not chain.made.get("model"):
                 raise ValueError("Splitting needs the prop sheet's 3D model")
-            body, ctype = multipart({"generated": chain.made["model"], "settings": "{}"}, {})
+            settings = {k: v for k, v in chain.split_settings.items() if k in SPLIT_KEYS}
+            body, ctype = multipart({"generated": chain.made["model"], "settings": json.dumps(settings)}, {})
             return kind, self._post("/api/props", body, ctype)
         raise ValueError(f"unknown step {step}")
 

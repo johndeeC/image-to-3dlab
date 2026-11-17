@@ -27,7 +27,13 @@ from pathlib import Path
 from typing import Any
 
 from image_to_3dlab import __version__, host
-from image_to_3dlab.agent_plan import compose_prompt, plan_for, refusal, stop_after
+from image_to_3dlab.agent_plan import (
+    FINISH_DETAILS,
+    compose_prompt,
+    plan_for,
+    refusal,
+    stop_after,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 DEFAULT_URL = "http://127.0.0.1:8777"
@@ -52,6 +58,7 @@ STUDIO_ONLY = {
     "api/kits/*/delete": "deleting a kit is the user's call, made in the studio",
     "api/graphs": "the canvas is a person's drawing board; agents run the same steps with create and continue_asset",
     "api/graphs/check": "part of drawing on the canvas",
+    "api/graphs/upload": "a person drops a picture on a Picture box; agents give image_path to create",
     "api/graphs/*/run": "runs a canvas the person drew; agents run the same steps with create and continue_asset",
     "api/graphs/*/delete": "deleting a canvas is the user's call, made in the studio",
     "api/graph-runs/*/cancel": "stops a canvas run the person started, from the canvas",
@@ -299,11 +306,6 @@ def want_for(asset: dict[str, Any]) -> str:
 
 
 # Finish's Detail choices, as the Steps panel offers them (tests check the two lists agree).
-FINISH_DETAILS: dict[str, dict[str, Any]] = {
-    "light": {"faces": 10000}, "game": {"faces": 20000}, "more": {"faces": 40000},
-    "high": {"faces": 50000, "high_detail": True}, "hero": {"faces": 32000, "hero": True},
-    "full": {"keep_mesh": True},
-}
 STEPS_AFTER_FINISH = ("rigged", "animated")
 
 

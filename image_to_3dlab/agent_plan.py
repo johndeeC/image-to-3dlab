@@ -20,6 +20,12 @@ ALLOWED: dict[str, dict[str, bool | str]] = {
     "model": {"picture": "Start from an idea to make a picture.", "prop": True,
               "set": "Upload the 3×3 sheet as a picture instead.", "character": True},
 }
+# Finish's Detail choices, by name (the studio's Steps panel menu; the canvas's Finish box).
+FINISH_DETAILS: dict[str, dict[str, Any]] = {
+    "light": {"faces": 10000}, "game": {"faces": 20000}, "more": {"faces": 40000},
+    "high": {"faces": 50000, "high_detail": True}, "hero": {"faces": 32000, "hero": True},
+    "full": {"keep_mesh": True},
+}
 FULL = {
     "picture": ["picture"],
     "prop": ["picture", "model", "finished"],

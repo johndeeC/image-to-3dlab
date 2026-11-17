@@ -6,7 +6,9 @@
  *  tests/test_studio_canvas.py checks takes/makes/step against graph_api.py. */
 export const NODES = {
   picture: { label: 'Picture', hint: 'Draws a picture from your words, or uses one you already made.', takes: [], makes: 'picture', step: 'picture' },
-  model: { label: '3D model', hint: 'Builds a 3D model from the picture.', takes: ['picture'], makes: 'model', step: 'model' },
+  asset: { label: 'Your 3D model', hint: 'Starts from a 3D model already in your Library.', takes: [], makes: 'model', step: null },
+  back: { label: 'Front + back', hint: 'Draws the back too, so the 3D model is right all round. Best detail engine only.', takes: ['picture'], makes: 'pair', step: 'back' },
+  model: { label: '3D model', hint: 'Builds a 3D model from the picture.', takes: ['picture', 'pair'], makes: 'model', step: 'model' },
   split: { label: 'Split into props', hint: 'Cuts a sheet of nine into separate game-ready props.', takes: ['model'], makes: 'props', step: 'split' },
   finish: { label: 'Finish', hint: 'Makes the model game-ready: cleaner shape, lighter file.', takes: ['model'], makes: 'finished', step: 'finished' },
   rig: { label: 'Rig', hint: 'Adds a skeleton so it can move. Humanoids work best.', takes: ['model', 'finished', 'props'], makes: 'rigged', step: 'rigged' },
@@ -17,7 +19,7 @@ export const NODES = {
 /** What a Picture is for: it picks the wording added to your words, and Finish's defaults. */
 export const GOALS = { character: 'A character', prop: 'One prop', set: 'Sheet of nine', picture: 'Just a picture' };
 
-const THING = { picture: 'a picture', model: 'a 3D model', finished: 'a game-ready model', rigged: 'a rigged model', animated: 'a moving model', props: 'props' };
+const THING = { picture: 'a picture', pair: 'a front and back picture', model: 'a 3D model', finished: 'a game-ready model', rigged: 'a rigged model', animated: 'a moving model', props: 'props' };
 
 // A node's box: its width, and how far down its in and out dots sit.
 export const NODE_W = 210;
@@ -26,7 +28,7 @@ export const PORT_Y = 22;
 const clone = (graph) => JSON.parse(JSON.stringify(graph));
 
 export function newGraph(name = 'Untitled canvas') {
-  return { schema: 1, id: null, name, nodes: [], edges: [] };
+  return { schema: 2, id: null, name, nodes: [], edges: [], groups: [] };
 }
 
 /** A new node at (x, y), with the next free id. */
@@ -36,22 +38,123 @@ export function addNode(graph, type, x, y, settings = {}) {
   const used = new Set(g.nodes.map((n) => n.id));
   let k = g.nodes.reduce((top, n) => Math.max(top, Number(String(n.id).replace(/^n/, '')) || 0), 0) + 1;
   while (used.has(`n${k}`)) k += 1;
-  g.nodes.push({ id: `n${k}`, type, x: Math.max(0, Math.round(x)), y: Math.max(0, Math.round(y)), settings: { ...settings } });
+  g.nodes.push({ id: `n${k}`, type, x: Math.round(x), y: Math.round(y), settings: { ...settings } });
   return g;
 }
 
 export function removeNode(graph, id) {
+  return removeNodes(graph, [id]);
+}
+
+/** Remove boxes, their lines, and their place in any group (an emptied group goes too). */
+export function removeNodes(graph, ids) {
+  const gone = new Set(ids);
   const g = clone(graph);
-  g.nodes = g.nodes.filter((n) => n.id !== id);
-  g.edges = g.edges.filter((e) => e.from !== id && e.to !== id);
+  g.nodes = g.nodes.filter((n) => !gone.has(n.id));
+  g.edges = g.edges.filter((e) => !gone.has(e.from) && !gone.has(e.to));
+  g.groups = (g.groups || []).map((gr) => ({ ...gr, nodes: gr.nodes.filter((id) => !gone.has(id)) })).filter((gr) => gr.nodes.length);
   return g;
 }
 
 export function moveNode(graph, id, x, y) {
   const g = clone(graph);
   const node = g.nodes.find((n) => n.id === id);
-  if (node) Object.assign(node, { x: Math.max(0, Math.round(x)), y: Math.max(0, Math.round(y)) });
+  if (node) Object.assign(node, { x: Math.round(x), y: Math.round(y) });
   return g;
+}
+
+/** Move several boxes by the same amount. */
+export function moveNodes(graph, ids, dx, dy) {
+  const moving = new Set(ids);
+  const g = clone(graph);
+  for (const n of g.nodes) if (moving.has(n.id)) Object.assign(n, { x: Math.round(n.x + dx), y: Math.round(n.y + dy) });
+  return g;
+}
+
+/** The box types that can take what this type makes, for the menu a dropped line opens. */
+export function takersOf(type) {
+  const makes = NODES[type]?.makes;
+  return makes ? Object.keys(NODES).filter((t) => NODES[t].takes.includes(makes)) : [];
+}
+
+/** A new box of `type` at (x, y), already joined to `from`. Its id is the last box's. */
+export function addConnected(graph, from, type, x, y, settings = {}) {
+  const g = addNode(graph, type, x, y, settings);
+  return connect(g, from, g.nodes.at(-1).id);
+}
+
+/** Join the chosen boxes left to right, each to the next where it fits. Returns the graph and how many lines it drew. */
+export function connectSelected(graph, ids) {
+  const order = graph.nodes.filter((n) => ids.includes(n.id)).sort((a, b) => a.x - b.x || a.y - b.y);
+  let g = graph, made = 0;
+  for (let i = 1; i < order.length; i += 1) {
+    if (canConnect(g, order[i - 1].id, order[i].id) === true) { g = connect(g, order[i - 1].id, order[i].id); made += 1; }
+  }
+  return { graph: g, made };
+}
+
+/** Put boxes in a labelled frame. A box is in one frame at most, so it leaves any other. */
+export function group(graph, ids, label = 'Group') {
+  const g = clone(graph);
+  const inside = new Set(ids.filter((id) => g.nodes.some((n) => n.id === id)));
+  if (!inside.size) return g;
+  g.groups = (g.groups || []).map((gr) => ({ ...gr, nodes: gr.nodes.filter((id) => !inside.has(id)) })).filter((gr) => gr.nodes.length);
+  let k = g.groups.reduce((top, gr) => Math.max(top, Number(String(gr.id).replace(/^g/, '')) || 0), 0) + 1;
+  while (g.groups.some((gr) => gr.id === `g${k}`)) k += 1;
+  g.groups.push({ id: `g${k}`, label, nodes: [...inside] });
+  return g;
+}
+
+/** Take the frames off these boxes (or these frames). The boxes stay. */
+export function ungroup(graph, ids) {
+  const g = clone(graph);
+  const hit = new Set(ids);
+  g.groups = (g.groups || []).filter((gr) => !hit.has(gr.id) && !gr.nodes.some((id) => hit.has(id)));
+  return g;
+}
+
+export function renameGroup(graph, groupId, label) {
+  const g = clone(graph);
+  const found = (g.groups || []).find((gr) => gr.id === groupId);
+  if (found && String(label).trim()) found.label = String(label).trim().slice(0, 60);
+  return g;
+}
+
+/** The rectangle around a frame's boxes, with room for its label. `sizes` maps id -> {w, h}. */
+export function groupBounds(gr, nodes, sizes = {}, pad = 18) {
+  const inside = nodes.filter((n) => gr.nodes.includes(n.id));
+  if (!inside.length) return null;
+  const size = (n) => sizes[n.id] || { w: NODE_W, h: 150 };
+  const x = Math.min(...inside.map((n) => n.x)) - pad, y = Math.min(...inside.map((n) => n.y)) - pad - 20;
+  const right = Math.max(...inside.map((n) => n.x + size(n).w)) + pad, bottom = Math.max(...inside.map((n) => n.y + size(n).h)) + pad;
+  return { x, y, w: right - x, h: bottom - y };
+}
+
+/** Which of a box's results flows on (a Picture asked for several options). */
+export function pickResult(graph, id, file) {
+  const g = clone(graph);
+  const node = g.nodes.find((n) => n.id === id);
+  if (node) { if (file) node.picked = file; else delete node.picked; }
+  return g;
+}
+
+/** Every box above this one, nearest first. */
+export function upstreamOf(graph, id) {
+  const parent = new Map(graph.edges.map((e) => [e.to, e.from]));
+  const out = [];
+  for (let at = parent.get(id); at && !out.includes(at); at = parent.get(at)) out.push(at);
+  return out;
+}
+
+/** Every box below this one. */
+export function downstreamOf(graph, id) {
+  const out = [];
+  const queue = [id];
+  while (queue.length) {
+    const at = queue.shift();
+    for (const e of graph.edges) if (e.from === at && !out.includes(e.to) && e.to !== id) { out.push(e.to); queue.push(e.to); }
+  }
+  return out;
 }
 
 /** Change one setting; an empty value removes it. */

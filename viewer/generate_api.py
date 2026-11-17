@@ -2761,7 +2761,21 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _graphs_post(self, parts: list[str]) -> None:
         """The canvas (docs/canvas.md): POST /api/graphs saves one, /api/graphs/check reads one as
-        runs, /api/graphs/<id>/run runs a saved one, /delete removes it, /api/graph-runs/<id>/cancel."""
+        runs, /api/graphs/upload keeps a picture for a Picture box, /api/graphs/<id>/run runs a saved
+        one ({node, mode} for one box), /delete removes it, /api/graph-runs/<id>/cancel stops a run."""
+        if parts == ["api", "graphs", "upload"]:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= graph_api.UPLOAD_LIMIT + 64 * 1024:
+                    self._refuse(413, "That picture is empty or over 50 MB.")
+                    return
+                form = parse_multipart(self.headers.get("Content-Type", ""), self.rfile.read(length))
+                upload = form.get("file") or {}
+                self._send_json(200, {"file": graph_api.keep_upload(OUTPUT_ROOT, upload.get("filename") or "",
+                                                                      upload.get("data") or b"")})
+            except ValueError as exc:
+                self._send_json(422, {"error": str(exc)})
+            return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             body = json.loads(self.rfile.read(length)) if 0 < length <= 512 * 1024 else {}
@@ -2772,22 +2786,28 @@ class Handler(SimpleHTTPRequestHandler):
             if parts == ["api", "graphs"]:
                 self._send_json(200, graph_api.save_graph(OUTPUT_ROOT, body))
             elif parts == ["api", "graphs", "check"]:
-                self._send_json(200, {"plan": graph_api.describe_plan(self._graphs().plan(body))})
+                graph = body.get("graph", body) if isinstance(body, dict) else body
+                node, mode = (body.get("node"), body.get("mode", "all")) if "graph" in body else (None, "all")
+                self._send_json(200, {"plan": graph_api.describe_plan(self._graphs().plan(graph, node, mode))})
             elif parts[3] == "delete":
                 graph_api.delete_graph(OUTPUT_ROOT, parts[2])
                 self._send_json(200, {"id": parts[2], "deleted": True})
             elif parts[:2] == ["api", "graph-runs"]:
                 ok = self._graphs().cancel(parts[2])
                 self._send_json(200 if ok else 404, {"cancelled": ok})
-            else:   # run
+            else:   # run: the whole graph, or {"node": id, "mode": "only" | "from" | "after"}
                 graph = graph_api.get_graph(OUTPUT_ROOT, parts[2])
-                plan = self._graphs().plan(graph)
+                node, mode = (body.get("node"), body.get("mode", "only")) if body.get("node") else (None, "all")
+                plan = self._graphs().plan(graph, node, mode)
                 # before the picture and the 3D model, not ten minutes later at Finish or the split
                 if any(set(s.steps) & activity_api.NEEDS_BLENDER for s in plan.stages) and find_blender() is None:
                     self._send_json(409, {"error": blender_missing_help(), "needs_blender": True})
                     return
-                run = self._graphs().start(graph, client=usage_api.source_of(self.headers.get(usage_api.CLIENT_HEADER)))
+                run = self._graphs().start(graph, node=node, mode=mode,
+                                           client=usage_api.source_of(self.headers.get(usage_api.CLIENT_HEADER)))
                 self._send_json(202, run.to_dict())
+        except graph_api.Stale as exc:
+            self._send_json(409, {"error": str(exc), "stale": True})
         except RuntimeError as exc:
             self._send_json(409, {"error": str(exc)})
         except ValueError as exc:
@@ -2859,6 +2879,9 @@ class Handler(SimpleHTTPRequestHandler):
             self._graphs_post(parts)
             return
         if parts == ["api", "graphs", "check"]:
+            self._graphs_post(parts)
+            return
+        if parts == ["api", "graphs", "upload"]:
             self._graphs_post(parts)
             return
         if len(parts) == 4 and parts[:2] == ["api", "graphs"] and parts[3] in {"run", "delete"}:

@@ -104,7 +104,7 @@ def test_the_plan_reads_as_plain_lines():
     ([node("p", "picture", goal="prop")], [], "Picture: describe it"),
     ([node("p", "picture", prompt="x"), node("q", "teleport")], [], "unknown node"),
     ([node("p", "picture", prompt="x"), node("p", "model", engine="sf3d")], [], "twice"),
-    ([node("p", "picture", prompt="x")], [("p", "ghost")], "missing node"),
+    ([node("p", "picture", prompt="x")], [("p", "ghost")], "missing box"),
     ([node("p", "picture", prompt="x"), node("q", "picture", prompt="y"), node("m", "model", engine="sf3d")],
      [("p", "m"), ("q", "m")], "one line in"),
     ([node("p", "picture", prompt="x"), node("q", "picture", prompt="y")], [("p", "q")], "takes no line in"),
@@ -115,8 +115,8 @@ def test_the_plan_reads_as_plain_lines():
     ([node("p", "picture", prompt="x", goal="prop"), node("m", "model", engine="sf3d"), node("s", "split")],
      [("p", "m"), ("m", "s")], "sheet of nine"),
     ([node("p", "picture", prompt="x"), node("x", "export")], [("p", "x")], "Export takes a 3D model"),
-    ([node("p", "picture", prompt="x", goal="planet")], [], "Picture is for"),
-    ([node("p", "picture", file="../etc/passwd")], [], "not a file in output"),
+    ([node("p", "picture", file="../etc/passwd")], [], "describe it"),   # a path outside output/ is dropped
+    ([node("a", "asset")], [], "pick one from the Library"),
 ])
 def test_a_graph_that_cannot_run_says_why(nodes, edges, words):
     with pytest.raises(ValueError, match=words):
@@ -301,7 +301,7 @@ def test_saving_gives_a_new_graph_an_id_and_keeps_it_next_time(tmp_path):
     again = ga.save_graph(tmp_path, {**first, "name": "Renamed"}, now=lambda: 20)
     assert again["id"] == first["id"]
     assert [g["name"] for g in ga.list_graphs(tmp_path)] == ["Renamed"]
-    assert json.loads((tmp_path / ga.GRAPHS_NAME).read_text())["graphs"][0]["schema"] == 1
+    assert json.loads((tmp_path / ga.GRAPHS_NAME).read_text())["graphs"][0]["schema"] == 2
 
 
 def test_a_half_drawn_graph_saves_but_junk_does_not(tmp_path):
@@ -366,6 +366,207 @@ def test_the_canvas_routes_end_to_end(tmp_path, monkeypatch):
         assert call(f"graphs/{saved['id']}")[1]["last_run"]["status"] == "done"
         assert call(f"graphs/{saved['id']}/delete", {})[1]["deleted"] is True
         assert call("graphs/graph-00000000/run", {})[0] == 422
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# ---------------------------------------------------------------- round two: settings, picks, one box at a time
+def test_a_box_keeps_only_settings_that_fit_and_schema_1_still_reads():
+    old = {"schema": 1, "name": "old", "nodes": [node("f", "finish", detail="more", texture_size="1024", pixel_match="false",
+                                                      height_m="999", cleanup="sideways", junk=1)], "edges": []}
+    g = ga.clean_graph(old)
+    assert g["schema"] == 2 and g["groups"] == []
+    assert g["nodes"][0]["settings"] == {"detail": "more", "texture_size": 1024, "pixel_match": False}
+
+
+def test_groups_picks_and_the_view_are_kept_and_junk_is_dropped():
+    g = ga.clean_graph({"name": "x", "nodes": [node("a", "picture", prompt="x"), node("b", "model", engine="sf3d")],
+                        "edges": [], "groups": [{"id": "g1", "label": "  Head  ", "nodes": ["a", "ghost"]},
+                                                {"id": "g2", "nodes": ["ghost"]}, {"id": "bad", "nodes": ["a"]}],
+                        "view": {"x": 10, "y": -5, "k": 9}})
+    g2 = ga.clean_graph({**g, "nodes": [{**g["nodes"][0], "picked": "images/a.png"}, {**g["nodes"][1], "picked": "/etc/x"}]})
+    assert g["groups"] == [{"id": "g1", "label": "Head", "nodes": ["a"]}]
+    assert g["view"] == {"x": 10.0, "y": -5.0, "k": 2.5}
+    assert g2["nodes"][0]["picked"] == "images/a.png" and "picked" not in g2["nodes"][1]
+
+
+def test_a_save_from_a_stale_copy_is_refused(tmp_path):
+    first = ga.save_graph(tmp_path, {"name": "x", "nodes": [], "edges": []}, now=lambda: 10)
+    ga.save_graph(tmp_path, {**first, "name": "agent's edit"}, now=lambda: 10)   # same second: still a new version
+    with pytest.raises(ga.Stale):
+        ga.save_graph(tmp_path, {**first, "name": "the tab's old copy"}, now=lambda: 11)
+    assert ga.list_graphs(tmp_path)[0]["name"] == "agent's edit"
+
+
+def test_box_settings_reach_the_run_as_create_would_send_them():
+    g = graph([node("p", "picture", prompt="a lamp", goal="prop", shape="tall", picture_engine="qwen-image"),
+               node("m", "model", engine="sf3d"),
+               node("f", "finish", detail="hero", pixel_match=False, texture_size=512, surface_maps=False, cleanup="fast"),
+               node("r", "rig", bone_names="unity"), node("v", "move", move="walk", speed=1.5, in_place=False)],
+              [("p", "m"), ("m", "f"), ("f", "r"), ("r", "v")])
+    stage = ga.plan_graph(g, RECIPES).stages[0]
+    assert stage.picture_settings == {"width": 832, "height": 1216} and stage.picture_engine == "qwen-image"
+    assert stage.finish_settings == {"upright": True, "faces": 32000, "hero": True, "skip_photo": True,
+                                     "texture_size": 512, "drop_surface_maps": True, "cleanup": "fast"}
+    assert stage.rig_settings == {"bone_names": "unity"}
+    assert stage.move_settings == {"speed": 1.5, "in_place": False}
+
+
+def test_split_names_go_to_the_props_job_one_per_line():
+    g = graph([node("s1", "picture", prompt="a knight's parts", goal="set"), node("s2", "model", engine="sf3d"),
+               node("s3", "split", names="head, left hand,\nhelmet")], [("s1", "s2"), ("s2", "s3")])
+    assert ga.plan_graph(g, RECIPES).stages[0].split_settings == {"names": "head\nleft-hand\nhelmet"}
+
+
+def test_a_split_sends_its_names(tmp_path):
+    jobs = FakeJobs(tmp_path)
+    sent = []
+    runner = aa.ChainRunner(tmp_path, lambda *a, **k: (sent.append(a), jobs(*a, **k))[1], poll=0, sleep=lambda s: None)
+    runner.submit(aa.Chain(title="x", steps=["split"], made={"model": "m.glb"}, split_settings={"names": "a\nb", "junk": 1}),
+                  background=False)
+    body = next(a[2] for a in sent if a[1] == "/api/props").decode()
+    assert '{"names": "a\\nb"}' in body
+
+
+def test_your_own_3d_model_starts_a_run_without_a_picture():
+    g = graph([node("a", "asset", file="sf3d/m/model.glb", goal="prop"), node("f", "finish")], [("a", "f")])
+    stage = ga.plan_graph(g, RECIPES).stages[0]
+    assert stage.steps == ["finished"] and stage.made == {"model": "sf3d/m/model.glb"} and stage.want == "prop"
+
+
+def test_front_and_back_sits_between_the_picture_and_the_3d_model():
+    g = graph([node("p", "picture", prompt="a knight"), node("b", "back"), node("m", "model", engine="pixal3d")],
+              [("p", "b"), ("b", "m")])
+    assert ga.plan_graph(g, RECIPES).stages[0].steps == ["picture", "back", "model"]
+    with pytest.raises(ValueError, match="Front \\+ back takes a picture"):
+        ga.plan_graph(graph([node("p", "picture", prompt="x"), node("m", "model", engine="sf3d"), node("b", "back")],
+                            [("p", "m"), ("m", "b")]), RECIPES)
+
+
+def test_a_picture_with_options_runs_each_and_what_follows_waits_for_a_pick(tmp_path):
+    g = graph([node("p", "picture", prompt="a lamp", goal="prop", count=3), node("m", "model", engine="sf3d"),
+               node("f", "finish")], [("p", "m"), ("m", "f")])
+    plan = ga.plan_graph(g, RECIPES)
+    assert [s.steps for s in plan.stages] == [["picture"], ["model", "finished"]]
+    assert ga.describe_plan(plan)[0] == "Run 1: Picture (3 options to pick from)"
+    runner, jobs = _graph_runner(tmp_path)
+    run = runner.start(g, background=False)
+    assert jobs.started == ["picture", "picture", "picture"] and run.status == "done"
+    out = run.to_dict()
+    assert [r["label"] for r in out["results"]["p"]] == ["Option 1", "Option 2", "Option 3"]
+    assert out["results"]["m"] == [{"status": "waiting"}] and out["waiting_for_pick"] == ["p"]
+
+
+def test_after_a_pick_the_boxes_below_run_from_the_picked_picture(tmp_path):
+    g = graph([node("p", "picture", prompt="a lamp", goal="prop", count=2), node("m", "model", engine="sf3d"),
+               node("f", "finish")], [("p", "m"), ("m", "f")])
+    results = {"p": [{"status": "done", "file": "images/a.png", "label": "Option 1"},
+                     {"status": "done", "file": "images/b.png", "label": "Option 2"}]}
+    with pytest.raises(ValueError, match="Pick one of Picture's 2 results first"):
+        ga.plan_from(g, "p", "after", results, RECIPES)
+    g["nodes"][0]["picked"] = "images/b.png"
+    plan = ga.plan_from(g, "p", "after", results, RECIPES)
+    assert [(s.steps, s.seeds) for s in plan.stages] == [(["model", "finished"], [{"made": {"picture": "images/b.png"}, "label": None}])]
+
+
+def test_one_box_runs_from_what_its_parents_made_last_time():
+    results = {"n1": [{"status": "done", "file": "images/k.png"}], "n2": [{"status": "done", "file": "m/k.glb"}],
+               "n3": [{"status": "done", "file": "finish/k.glb"}]}
+    only = ga.plan_from(CHARACTER, "n3", "only", results, RECIPES)
+    assert [(s.steps, s.seeds) for s in only.stages] == [(["finished"], [{"made": {"picture": "images/k.png", "model": "m/k.glb"}, "label": None}])]
+    below = ga.plan_from(CHARACTER, "n3", "from", results, RECIPES)
+    assert below.stages[0].steps == ["finished", "rigged", "animated"]
+    with pytest.raises(ValueError, match="Run Finish first"):
+        ga.plan_from(CHARACTER, "n4", "only", {k: v for k, v in results.items() if k != "n3"}, RECIPES)
+    assert ga.plan_from(CHARACTER, "n1", "only", {}, RECIPES).stages[0].steps == ["picture"]
+
+
+def test_one_box_below_a_split_runs_once_per_prop_that_got_that_far():
+    results = {"s3": [{"status": "done", "file": "props/a/axe_LOD0.glb", "label": "axe"},
+                      {"status": "done", "file": "props/a/bow_LOD0.glb", "label": "bow"}]}
+    plan = ga.plan_from(SHEET, "s4", "only", results, RECIPES)
+    assert plan.stages[0].seeds == [{"made": {"finished": "props/a/axe_LOD0.glb"}, "label": "axe"},
+                                    {"made": {"finished": "props/a/bow_LOD0.glb"}, "label": "bow"}]
+    assert plan.stages[0].want == "prop"
+    assert ga.describe_plan(plan) == ["Run 1, once for each of 2 props: Rig"]
+
+
+def test_running_one_box_ignores_a_half_drawn_branch_elsewhere():
+    g = graph([node("p", "picture", prompt="x"), node("m", "model", engine="sf3d"), node("v", "move")],
+              [("p", "m"), ("p", "v")])   # the Move is wrong, and not part of this run
+    with pytest.raises(ValueError):
+        ga.plan_graph(g, RECIPES)
+    plan = ga.plan_from(g, "m", "only", {"p": [{"status": "done", "file": "images/x.png"}]}, RECIPES)
+    assert plan.stages[0].steps == ["model"]
+
+
+def test_running_one_box_keeps_what_the_other_boxes_made(tmp_path):
+    saved = ga.save_graph(tmp_path, {**CHARACTER, "id": None})
+    runner, jobs = _graph_runner(tmp_path)
+    runner.start(saved, background=False)
+    again = ga.get_graph(tmp_path, saved["id"])
+    run = runner.start(again, node="n3", mode="only", background=False)
+    assert jobs.started[-1:] == ["finished"] and run.status == "done"
+    last = ga.get_graph(tmp_path, saved["id"])["last_run"]["results"]
+    assert last["n1"] == [{"status": "done", "file": "images/p.png"}]       # kept from the first run
+    assert last["n3"] == [{"status": "done", "file": "finish/f6.glb"}]      # this run's own
+
+
+def test_a_dropped_picture_is_kept_under_uploads_and_anything_else_refused(tmp_path):
+    import io
+
+    from PIL import Image
+
+    data = io.BytesIO()
+    Image.new("RGB", (8, 8)).save(data, "PNG")
+    kept = ga.keep_upload(tmp_path, "My Orc!.png", data.getvalue())
+    assert kept.startswith("images/uploads/my-orc__") and (tmp_path / kept).read_bytes() == data.getvalue()
+    for name, body in (("x.exe", data.getvalue()), ("x.png", b"not a picture"), ("x.png", b"")):
+        with pytest.raises(ValueError):
+            ga.keep_upload(tmp_path, name, body)
+
+
+def test_running_one_box_and_a_stale_save_through_the_server(tmp_path, monkeypatch):
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+
+    import generate_api as api
+
+    monkeypatch.setattr(api, "OUTPUT_ROOT", tmp_path)
+    monkeypatch.setattr(api, "find_blender", lambda: Path("/Applications/Blender.app"))
+    runner, jobs = _graph_runner(tmp_path)
+    monkeypatch.setattr(api.Handler, "_graph_runner", runner)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), api.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_port}/api"
+
+    def call(url, body=None):
+        request = urllib.request.Request(f"{base}/{url}", data=json.dumps(body).encode() if body is not None else None,
+                                         headers={"Content-Type": "application/json", "X-AssetFurnace-Request": "studio"})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read())
+    try:
+        saved = call("graphs", {**CHARACTER, "id": None})[1]
+        assert call(f"graphs/{saved['id']}/run", {"node": "n3", "mode": "only"}) [0] == 422   # nothing made yet
+        assert call("graphs/check", {"graph": saved, "node": "n1", "mode": "only"})[1] == {"plan": ["Run 1: Picture"]}
+        status, run = call(f"graphs/{saved['id']}/run", {"node": "n1", "mode": "only"})
+        assert status == 202
+        for _ in range(200):
+            run = call(f"graph-runs/{run['id']}")[1]
+            if run["status"] != "running":
+                break
+            threading.Event().wait(0.02)
+        assert jobs.started == ["picture"]
+        newer = call("graphs", {**saved, "name": "renamed"})[1]
+        status, refused = call("graphs", {**saved, "name": "old copy"})
+        assert status == 409 and refused["stale"] is True
+        assert call(f"graphs/{saved['id']}")[1]["name"] == newer["name"] == "renamed"
     finally:
         server.shutdown()
         server.server_close()
