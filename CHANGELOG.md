@@ -46,6 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Canvas: picking **Your 3D model** from the Library shows every model each asset has, rendered:
   the raw 3D model (and which engine made it), the finished one (and its detail), the rigged one,
   and a split's props, with a search box.
+- Canvas: **Repaint** a model from a picture (a new look on the same shape), with the Hunyuan3D-MLX
+  paint stage already set up for the fast-and-clean engine; also `scripts/hunyuan_mlx_retexture.py`.
+- Canvas: **Cut out background**, **Quad remesh**, **UV unwrap**, **Save as** (FBX, OBJ, USDZ) and
+  **Put together** (every model coming in, side by side in one file) boxes. None runs a new model:
+  they use the background remover and the repo's headless Blender scripts.
+- Canvas: upload a GLB onto **Your 3D model**, and keep a box's models in a kit from its side panel.
 - Agents can build and run canvases: `box_types`, `list_canvases`, `get_canvas`, `edit_canvas`,
   `save_canvas`, `check_canvas`, `run_canvas`, `canvas_status`, `cancel_canvas_run`.
 

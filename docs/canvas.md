@@ -14,9 +14,15 @@ Each run lands in the Library and the activity history like any other.
 | Box | Takes | Makes | Runner step |
 |-----|-------|-------|-------------|
 | Picture | nothing: a description, or a picture you upload or pick from the Library | a picture | `picture` (skipped for one you gave) |
-| Your 3D model | nothing: a model picked from the Library | a 3D model | none; it starts the run with that file |
+| Your 3D model | nothing: a model picked from the Library, or a GLB you upload | a 3D model | none; it starts the run with that file |
 | Front + back | a picture | a front and back picture | `back`; only the Best detail engine uses the back |
 | Pick out parts | a picture | each part you name, redrawn on its own | `part`, once per name (`/api/image/part`) |
+| Cut out background | a picture | the picture with its background taken off | `cutout` (the background remover; `/api/tool/cutout`) |
+| Repaint | a model, a game-ready model, or props | the same shape, painted again from a picture | `repaint`: the Hunyuan3D-MLX paint stage (`scripts/hunyuan_mlx_retexture.py`) |
+| Quad remesh | a model, a game-ready model, or props | the shape rebuilt as tidy four-sided faces, texture carried over | `remesh` (`scripts/blender_retopo_bake.py`) |
+| UV unwrap | a model, a game-ready model, or props | the texture laid out in large clean pieces | `unwrap` (`scripts/blender_reunwrap_bake.py`) |
+| Put together | every model coming in | one file with each model side by side | `combine`, once with everything (`scripts/blender_combine_parts.py`) |
+| Save as | any model | an FBX, OBJ or USDZ file to download | `export` (`scripts/blender_convert.py`) |
 | 3D model | a picture, or a front and back | a 3D model | `model`, with the box's engine |
 | Split into props | a 3D model of a sheet | finished props, named if you name them | `split` |
 | Finish | a 3D model | a game-ready model | `finished`, with the box's choices |
@@ -200,30 +206,33 @@ answers with how the canvas would run, or why it can't yet. `canvas_status` name
 Picture boxes waiting for a pick, so an agent can show the user the options and carry on.
 Box types and their settings come from the studio (`/api/graphs/types`), not a copy.
 
+## Tool boxes, and what they record
+
+Cut out background, Quad remesh, UV unwrap, Save as and Put together are short tool jobs
+(`viewer/tool_jobs.py`, `/api/tool/...`): the background remover, or a headless Blender
+script the repo already had. They run no generative model. Each file they make lands in a
+folder of its own (`tools/`, `exports/`, `images/`) so the Library lists it, and carries its
+source's licence record with what was done to it. Repaint is a generate route of its own
+(`hunyuan-paint`): its record names the Hunyuan3D paint licence and the repainted model's.
+
+**Put together** does not place parts where they belong on a character: the parts carry no
+record of where they sat in the picture, so they are laid out in a row, each its own object,
+for you to arrange in Blender. Tripo's assembly works from written instructions with a model
+the studio does not ship.
+
+A box's models can be **kept in a kit** from its side panel (`docs/kits.md`).
+
 ## Not built yet
 
-**Boxes the studio can back, later:**
+**Four views (front, left, back, right).** No engine here takes more than a front and a
+back. Hunyuan3D-2mv does: one model is 4.93 GB (Tencent Hunyuan community licence, not
+licensed in the EU, UK or South Korea; fast and turbo variants are the same size again). The
+in-repo Hunyuan shape port reads one picture only, so it needs either its view handling
+ported or Tencent's own code running on the Mac GPU. Nothing is downloaded until that is
+chosen.
 
-| Box | Backed by | Why not yet |
-|-----|-----------|-------------|
-| Cut out background | `image_to_3dlab.matte.cut_out` (BiRefNet-lite, already installable) | No job route of its own; every 3D engine cuts the picture out anyway |
-| New look | skins (`/api/skins`, `make_skin`) | Not one-shot: you approve a front and a back picture first |
-
-**Boxes with no engine here yet.** These are designs only, and nothing has been
-downloaded. You pick the engine, how it is set up, and its size first (`CLAUDE.md`,
-"Weights are never downloaded without an explicit choice"). The licences and sizes below
-are from memory and not yet checked against each project's own page; check them before
-choosing.
-
-| Box | Takes → makes | Candidates |
-|-----|---------------|------------|
-| Quad remesh | 3D model → 3D model with four-sided faces | Blender's QuadriFlow (ships with Blender, no download), Instant Meshes (BSD-3, a few MB) |
-| UV unwrap | 3D model → 3D model laid out for painting | `scripts/blender_reunwrap_bake.py` and xatlas, both already here, no download |
-| Re-texture | 3D model + words → newly painted model | Hunyuan3D-Paint 2.1 (several GB; **not licensed in the EU, UK or South Korea**), MV-Adapter (Apache-2.0, about 7 GB) |
-| Split a model into parts | 3D model → parts | Blender's loose parts (no download), PartField (**non-commercial**), Hunyuan3D-Part (**same region limits as Hunyuan**) |
-
-"Remove lighting" is not something any engine here says it does, so the 3D model box
-leaves it out until one does.
+**Split a 3D model into parts.** Blender's loose parts (no download) for parts that are not
+joined; PartField (**non-commercial**) or Hunyuan3D-Part (Tencent licence) otherwise.
 
 **In-studio chat: a proposal.** A side panel sends your words and the canvas to a model,
 and gets `edit_canvas` operations back. The model is yours, a local server or a key you
@@ -232,9 +241,8 @@ shows the changes to accept; **Go ahead** applies and runs them, pausing at a pi
 **Instructions** box is the same call scoped to one box ("put these parts together as one
 character"). It uses the same operations as the agent tools: one code path, one set of tests.
 
-**Also left:** filing a canvas's results into a kit (`docs/kits.md`); a server restart in
-the middle of a run leaves the last run marked as it was; Cmd + / Cmd − may zoom the page
-instead in a browser that keeps those keys for itself.
+**Also left:** a server restart in the middle of a run leaves the last run marked as it was;
+Cmd + / Cmd − may zoom the page instead in a browser that keeps those keys for itself.
 
 ## How the code is split
 
