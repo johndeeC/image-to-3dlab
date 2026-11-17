@@ -207,7 +207,18 @@ behind the Pick out parts run above it starts from the parts that run made. A bo
 shows **Queued (2)**, dashed; only boxes a run will reach show **Waiting**. The line above
 the board counts the queue, and a queued box's ▶ menu has **Take out of the queue**. Asking
 for the same run twice keeps one place. One that cannot run at its turn says why, and the
-next still goes. `GET /api/graph-runs` lists `running` and `queued`.
+next still goes. `GET /api/graph-runs` lists `running`, `side` and `queued`.
+
+**The side lane.** A run of tool boxes only (Cut out background, Quad remesh, UV unwrap,
+Save as, Put together: `activity_api.SIDE_STEPS`) does not wait behind a model run: it goes
+**beside** it, in a second lane with its own queue. Blender and the background remover
+barely touch what a picture or 3D engine needs, while two big models at once would share
+one graphics chip and the memory, and neither would finish sooner. A tool run that starts
+from a box a run is still making (or will make, queued) waits behind that run instead, so
+it works on the new file. The line above the board names both runs ("· beside it: Quad
+remesh → Save as") and can stop either. The studio's chain runner takes one main chain and
+one tool chain at once (`ChainRunner.can_start`); a picture flip (the right of Four views)
+never waits behind a tool job.
 
 ### Fan-out: one sheet, many props
 

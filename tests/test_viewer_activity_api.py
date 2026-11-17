@@ -110,6 +110,21 @@ def test_only_one_chain_at_a_time_and_unknown_steps_are_refused(tmp_path):
         runner.submit(aa.Chain(title="c", steps=["teleport"]), background=False)
 
 
+def test_a_tool_chain_runs_beside_a_model_chain_but_not_beside_another_tool_chain(tmp_path):
+    runner, _ = _runner(tmp_path)
+    model, tools = aa.Chain(title="m", steps=["picture", "model"], id="m"), aa.Chain(title="t", steps=["remesh", "export"], id="t")
+    assert aa.is_side(tools) and not aa.is_side(model) and not aa.is_side(aa.Chain(title="x", steps=["cutout", "model"]))
+    runner.chains["m"] = model
+    assert runner.can_start(tools) and not runner.can_start(aa.Chain(title="p", steps=["picture"]))
+    runner.chains["t"] = tools
+    assert not runner.can_start(aa.Chain(title="c", steps=["cutout"]))   # one tool chain at a time
+    assert runner.running().id == "m"                                   # the main one is the one the studio shows
+    del runner.chains["m"]
+    assert runner.running().id == "t" and runner.can_start(model)
+    with pytest.raises(RuntimeError):
+        runner.submit(aa.Chain(title="c", steps=["cutout"]), background=False)
+
+
 def test_cancel_asks_the_running_job_to_stop(tmp_path):
     runner, jobs = _runner(tmp_path)
     chain = aa.Chain(title="x", steps=["picture"], id="c1")

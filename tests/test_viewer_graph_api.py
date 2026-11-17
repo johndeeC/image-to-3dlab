@@ -1010,3 +1010,65 @@ def test_boxes_that_redraw_a_picture_say_which_engine_draws(tmp_path):
     runner.start(graph([node("p", "picture", file="images/k.png"), node("b", "back", picture_engine="qwen"),
                         node("m", "model", engine="pixal3d")], [("p", "b"), ("b", "m")]), background=False)
     assert jobs.bodies[0]["engine"] == "qwen"          # an ask, not a preference: the box said so
+
+
+# ---------------------------------------------------------------- the side lane: tool boxes beside a model run
+TOOLS = graph([node("a", "asset", file="m/model.glb"), node("r", "remesh", faces=8000), node("s", "saveas")],
+              [("a", "r"), ("r", "s")], name="Tools")
+
+
+def test_a_tool_only_run_goes_beside_a_model_run_instead_of_queueing(tmp_path):
+    tools = ga.save_graph(tmp_path, {**TOOLS, "id": None})
+    runner, jobs = _graph_runner(tmp_path)
+    seen = {}
+
+    def beside(run, index):
+        if not seen:
+            seen["side"] = runner.start(ga.get_graph(tmp_path, tools["id"]), background=False)
+            seen["main while"] = runner.running() is run
+
+    main = runner.start(CHARACTER, background=False, before_stage=beside)
+    side = seen["side"]
+    assert side.lane == "side" and side.to_dict()["lane"] == "side" and side.status == "done", side.error
+    assert seen["main while"] and main.status == "done" and main.lane == "main"
+    assert jobs.started[:2] == ["remesh", "export"]          # ran at once, before the model run's first step
+    assert runner.queue == [] and not runner.busy()
+
+
+def test_a_tool_run_that_starts_from_a_box_being_made_waits_behind_it(tmp_path):
+    g = graph([node("p", "picture", prompt="a lamp", goal="prop"), node("m", "model", engine="sf3d"), node("r", "remesh", faces=8000)],
+              [("p", "m"), ("m", "r")], name="Lamp")
+    saved = ga.save_graph(tmp_path, {**g, "id": None})
+    with ga._LOCK:   # an old model on the box: a side run would remesh that one, not the one being made
+        graphs = ga._read(tmp_path)
+        graphs[0]["last_run"] = {"status": "done", "results": {"p": [{"status": "done", "file": "images/old.png"}],
+                                                               "m": [{"status": "done", "file": "sf3d/old/model.glb"}]}}
+        ga._write(tmp_path, graphs)
+    (tmp_path / "images").mkdir()
+    (tmp_path / "images" / "old.png").write_bytes(b"x")
+    runner, jobs = _graph_runner(tmp_path)
+    seen = {}
+
+    def ask(run, index):
+        if not seen:
+            seen["r"] = runner.start(ga.get_graph(tmp_path, saved["id"]), node="r", mode="only", background=False)
+            seen["status"] = seen["r"].status
+
+    runner.start(ga.get_graph(tmp_path, saved["id"]), node="m", mode="only", background=False, before_stage=ask)
+    assert seen["status"] == "queued" and seen["r"].lane == "main"
+    assert jobs.started == ["model", "remesh"] and jobs.bodies[-1]["model"] != "sf3d/old/model.glb"
+
+
+def test_two_tool_runs_take_turns_in_the_side_lane(tmp_path):
+    tools = ga.save_graph(tmp_path, {**TOOLS, "id": None})
+    runner, jobs = _graph_runner(tmp_path)
+    seen = {}
+
+    def more(run, index):
+        if not seen:
+            seen["second"] = runner.start(ga.get_graph(tmp_path, tools["id"]), node="s", mode="only", background=False)
+            seen["status"], seen["lane"] = seen["second"].status, seen["second"].lane
+
+    first = runner.start(ga.get_graph(tmp_path, tools["id"]), background=False, before_stage=more)
+    assert first.lane == "side" and seen["status"] == "queued" and seen["lane"] == "side"
+    assert seen["second"].status == "done" and jobs.started == ["remesh", "export", "export"]

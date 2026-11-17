@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from activity_api import Chain, ChainRunner
+from activity_api import SIDE_STEPS, Chain, ChainRunner
 
 from image_to_3dlab.agent_plan import FINISH_DETAILS, compose_prompt
 
@@ -887,6 +887,7 @@ class GraphRun:
     request: dict[str, Any] = field(default_factory=dict)
     position: int = 0            # its place in the queue, 1 first
     after: str = ""              # the canvas running when it was queued
+    lane: str = "main"           # "side": tool boxes only, beside a model run (GraphRunner.lanes)
 
     def doing(self) -> str:
         """What the run is on now, in the plan's words: "3D model, once for each of 3 parts"."""
@@ -907,12 +908,36 @@ class GraphRun:
             return {"id": self.id, "graph": self.graph_id, "name": self.name, "status": "queued", "stage": 0, "stages": [],
                     "plan": [f"Queued: {what}, after “{self.after}” ends"], "chains": [], "current_chain": None,
                     "results": {}, "error": "", "waiting_for_pick": [], "again": False, "redo": None, "elapsed": 0,
-                    "queued_for": self.request.get("node"), "mode": self.request.get("mode"), "position": self.position}
+                    "queued_for": self.request.get("node"), "mode": self.request.get("mode"), "position": self.position,
+                    "lane": self.lane}
         return {"id": self.id, "graph": self.graph_id, "name": self.name, "status": self.status,
                 "stage": self.stage, "stages": [s.to_dict() for s in self.plan.stages],
                 "plan": describe_plan(self.plan), "chains": list(self.chains),
                 "current_chain": self.current_chain, "results": results, "error": self.error,
-                "waiting_for_pick": self.waiting_for_pick(), "again": self.again, "redo": self.plan.redo, "elapsed": round(time.time() - self.started, 1)}
+                "waiting_for_pick": self.waiting_for_pick(), "again": self.again, "redo": self.plan.redo, "lane": self.lane, "elapsed": round(time.time() - self.started, 1)}
+
+
+@dataclass
+class Lane:
+    """One run at a time, and the runs waiting their turn behind it."""
+
+    queue: list[GraphRun] = field(default_factory=list)
+    working: bool = False
+
+
+def is_side_plan(plan: Plan) -> bool:
+    """A plan of tool boxes only (activity_api.SIDE_STEPS): it may run beside a model run."""
+    steps = {step for stage in plan.stages for step in stage.steps}
+    return bool(steps) and steps <= SIDE_STEPS
+
+
+def _request_boxes(request: dict[str, Any]) -> set[str]:
+    """The boxes a queued run will run (canvas.js queuedBoxes says the same)."""
+    graph, node, mode = request.get("graph") or {}, request.get("node"), request.get("mode")
+    if not node:
+        return {n["id"] for n in graph.get("nodes", [])}
+    below = set(_descendants(graph, node))
+    return {node} | below if mode == "from" else below if mode == "after" else {node}
 
 
 class GraphRunner:
@@ -925,15 +950,29 @@ class GraphRunner:
         self.poll, self.sleep = poll, sleep
         self.random = random or (lambda: int.from_bytes(os.urandom(3), "big"))
         self.runs: dict[str, GraphRun] = {}
-        self.queue: list[GraphRun] = []   # asked for while another ran: each starts when the one before ends
-        self.working = False              # a run, or the queue behind it, is being worked through
+        # Two lanes, each one run at a time with a queue behind it: "main" for anything, "side" for
+        # runs of tool boxes only (Quad remesh, Save as...), which go beside a model run (SIDE_STEPS).
+        self.lanes: dict[str, Lane] = {"main": Lane(), "side": Lane()}
         self.lock = threading.Lock()
 
-    def running(self) -> GraphRun | None:
-        return next((r for r in self.runs.values() if r.status == "running"), None)
+    @property
+    def queue(self) -> list[GraphRun]:
+        """Every run waiting its turn, the main lane's first."""
+        return [*self.lanes["main"].queue, *self.lanes["side"].queue]
+
+    def running(self, lane: str = "main") -> GraphRun | None:
+        return next((r for r in self.runs.values() if r.status == "running" and r.lane == lane), None)
 
     def busy(self) -> bool:
-        return self.working
+        """The main lane is taken: a run asked for now may have to wait."""
+        return self.lanes["main"].working
+
+    def view(self, run: GraphRun | None) -> dict[str, Any] | None:
+        """A run as the canvas reads it, with the step its chain is on now ("now")."""
+        if run is None:
+            return None
+        chain = self.chains.chains.get(run.current_chain) if run.current_chain else None
+        return {**run.to_dict(), "now": chain.current if chain is not None else None}
 
     def plan(self, graph: dict[str, Any], node: str | None = None, mode: str = "all", *,
              redo_try: str | None = None, note: str | None = None) -> Plan:
@@ -948,14 +987,24 @@ class GraphRunner:
               again: bool = False, redo_try: str | None = None, note: str | None = None, background: bool = True,
               before_stage: Callable[[GraphRun, int], Any] | None = None) -> GraphRun:
         name = _clean_text(graph.get("name"), NAME_LIMIT) or "Canvas"
+        ask = {"node": node, "mode": mode, "again": again, "redo_try": redo_try, "note": note,
+               "client": client, "before_stage": before_stage}
         with self.lock:
-            if self.working:   # another run is going: this one waits its turn, planned when it comes
-                return self._enqueue(graph, name, node=node, mode=mode, again=again, redo_try=redo_try, note=note,
-                                     client=client, before_stage=before_stage)
-            plan = self.plan(graph, node, mode, redo_try=redo_try, note=note)   # refused here, before anything starts
-            run = GraphRun(graph_id=graph.get("id"), name=name, plan=plan, again=again and mode == "only" and not redo_try)
+            try:
+                plan = self.plan(graph, node, mode, redo_try=redo_try, note=note)
+            except ValueError:
+                # the box above may still be making it: wait behind the run that is, planned at its turn
+                lane = self._making(graph)
+                if lane is None:
+                    raise              # nothing is: refused here, before anything starts
+                return self._enqueue(graph, name, lane, **ask)
+            lane = "side" if is_side_plan(plan) and not self._waits_on_live(graph, plan, node, mode) else "main"
+            if self.lanes[lane].working:   # that lane is busy: this run waits its turn there
+                return self._enqueue(graph, name, lane, **ask)
+            run = GraphRun(graph_id=graph.get("id"), name=name, plan=plan, lane=lane,
+                           again=again and mode == "only" and not redo_try)
             self._keep(run)
-            self.working = True
+            self.lanes[lane].working = True
         work = lambda: self._work(run, client, before_stage)
         if background:
             threading.Thread(target=work, daemon=True, name=f"graph-{run.id[:8]}").start()
@@ -969,38 +1018,63 @@ class GraphRunner:
         live = [r for r in self.runs.values() if r.status in ("running", "queued")]
         self.runs = {r.id: r for r in [*done[-(KEEP_RUNS - 1):], *live]} | {run.id: run}
 
-    def _enqueue(self, graph: dict[str, Any], name: str, **request: Any) -> GraphRun:
+    def _making(self, graph: dict[str, Any]) -> str | None:
+        """The lane a run asked for now should wait in when it cannot be planned yet: the main one
+        if it is busy, else the side one if that is working on this canvas, else None."""
+        if self.lanes["main"].working:
+            return "main"
+        side = [self.running("side"), *self.lanes["side"].queue]
+        return "side" if any(r is not None and r.graph_id == graph.get("id") for r in side) else None
+
+    def _waits_on_live(self, graph: dict[str, Any], plan: Plan, node: str | None, mode: str) -> bool:
+        """Whether a run starts from, or runs, a box of the same canvas that a run going or queued
+        will make: then it goes after that run, not beside it, so it works on the new file."""
+        live: set[str] = set()
+        for r in self.runs.values():
+            if r.graph_id != graph.get("id"):
+                continue
+            if r.status == "running":
+                live |= {n for stage in r.plan.stages for n in stage.nodes}
+            elif r.status == "queued":
+                live |= _request_boxes(r.request)
+        reads = set(_ancestors(graph, node)) | ({node} if mode == "after" else set()) if node else set()
+        return bool(live & (reads | {n for stage in plan.stages for n in stage.nodes}))
+
+    def _enqueue(self, graph: dict[str, Any], name: str, lane: str, **request: Any) -> GraphRun:
+        queue = self.lanes[lane].queue
         key = (graph.get("id"), request["node"], request["mode"], request["redo_try"], request["note"], request["again"])
         same = next((q for q in self.queue if q.request.get("key") == key), None)
         if same is not None:   # asked again: it keeps its place
             return same
         box = next((n for n in graph.get("nodes", []) if n.get("id") == request["node"]), None)
         label = LABELS.get(box["type"], "a box") if box else None
-        ahead = self.running()
+        ahead = self.running(lane)
         run = GraphRun(graph_id=graph.get("id"), name=name, plan=Plan(stages=[], exports={}, labels={}, types={}),
-                       status="queued", request={**request, "key": key, "graph": graph, "label": label},
-                       after=ahead.name if ahead else (self.queue[-1].name if self.queue else name))
-        self.queue.append(run)
+                       status="queued", lane=lane, request={**request, "key": key, "graph": graph, "label": label},
+                       after=ahead.name if ahead else (queue[-1].name if queue else name))
+        queue.append(run)
         self._number()
         self._keep(run)
         return run
 
     def _number(self) -> None:
-        for i, q in enumerate(self.queue, 1):
-            q.position = i
+        for lane in self.lanes.values():
+            for i, q in enumerate(lane.queue, 1):
+                q.position = i
 
     def _work(self, run: GraphRun | None, client: str | None, before_stage) -> None:
-        """Run `run`, then each queued run in turn until the queue is empty."""
+        """Run `run`, then each run queued in its lane in turn until that queue is empty."""
+        lane = self.lanes[run.lane] if run is not None else None
         while run is not None:
             if run.status == "queued":
                 self._begin(run)
             if run.status == "running":
                 self._run(run, client, before_stage)
             with self.lock:
-                run = self.queue.pop(0) if self.queue else None
+                run = lane.queue.pop(0) if lane.queue else None
                 self._number()
                 if run is None:
-                    self.working = False
+                    lane.working = False
                 else:
                     client, before_stage = run.request.get("client"), run.request.get("before_stage")
 
@@ -1024,8 +1098,8 @@ class GraphRunner:
     def cancel(self, run_id: str) -> bool:
         run = self.runs.get(run_id)
         with self.lock:
-            if run is not None and run in self.queue:   # not started: it just leaves the queue
-                self.queue.remove(run)
+            if run is not None and run in self.lanes[run.lane].queue:   # not started: it just leaves the queue
+                self.lanes[run.lane].queue.remove(run)
                 self._number()
                 run.status = "cancelled"
                 return True

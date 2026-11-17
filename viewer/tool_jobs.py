@@ -68,11 +68,13 @@ class ToolJobs:
         self.lock = threading.Lock()
 
     def running(self) -> ToolJob | None:
-        return next((j for j in self.jobs.values() if j.status not in TERMINAL), None)
+        """The slow tool job going, if any. A mirror (a picture flipped, in a blink) never counts:
+        a four-view build's right side must not wait behind a side lane's remesh."""
+        return next((j for j in self.jobs.values() if j.status not in TERMINAL and j.kind != "mirror"), None)
 
     def start(self, kind: str, work: Callable[[ToolJob], dict[str, Any]], *, background: bool = True) -> ToolJob:
         with self.lock:
-            if self.running() is not None:
+            if kind != "mirror" and self.running() is not None:
                 raise RuntimeError("another tool job is running; wait for it to finish")
             job = ToolJob(kind)
             self.jobs[job.id] = job

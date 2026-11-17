@@ -3821,9 +3821,9 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send_json(404, {"error": str(exc)})
             return
         if parts == ["api", "graph-runs"]:
-            running = self._graphs().running()
-            self._send_json(200, {"running": running.to_dict() if running else None,
-                                  "queued": [q.to_dict() for q in list(self._graphs().queue)]})
+            runner = self._graphs()   # the main lane's run, the side lane's (tool boxes beside it), and the queues
+            self._send_json(200, {"running": runner.view(runner.running()), "side": runner.view(runner.running("side")),
+                                  "queued": [q.to_dict() for q in list(runner.queue)]})
             return
         if len(parts) == 3 and parts[:2] == ["api", "graph-runs"]:
             run = self._graphs().runs.get(parts[2])

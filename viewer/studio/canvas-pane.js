@@ -55,6 +55,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   let run = null, chain = null, timer = null, saveTimer = null, saving = Promise.resolve();
   let elsewhere = null, watchTimer = null;   // a run on another canvas (an agent's, another tab's)
   let queuedRuns = [];                        // runs waiting their turn, on any canvas
+  let side = null;                            // a run of tool boxes going beside the main one (any canvas)
   let tool = 'pointer', spaceHeld = false, drag = null, menu = null, pastes = 0;
   let kits = [];   // the Library's kits (docs/kits.md): a box's models can be filed into one
   const cards = new Map();   // box id -> its element
@@ -85,7 +86,8 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     <p class="hint canvas-say" aria-live="polite"></p>
     <div class="canvas-running" role="status" hidden><span class="spin" aria-hidden="true"></span><span data-running-words></span>
       <button type="button" class="ghost small" data-run-open data-tip="Opens the canvas that is running, to watch its boxes.">Open it</button>
-      <button type="button" class="ghost small" data-run-stop data-tip="Stops after the step that is running. What it made is kept.">Stop</button></div>
+      <button type="button" class="ghost small" data-run-stop data-tip="Stops after the step that is running. What it made is kept.">Stop</button>
+      <button type="button" class="ghost small" data-run-stop-side data-tip="Stops the tool boxes running beside it. What they made is kept." hidden>Stop the one beside it</button></div>
     <div class="canvas-board" tabindex="0" aria-label="Canvas board">
       <div class="canvas-space"><div class="canvas-frames"></div><svg class="canvas-lines" aria-hidden="true"></svg><div class="canvas-options"></div><div class="canvas-nodes"></div></div>
       <p class="hint canvas-empty">An empty board. Double-click it, press Tab or use + Add.</p>
@@ -185,7 +187,13 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   }
 
   // a box made again keeps its old tries beside the new; a try done over is swapped in its place
-  const merged = () => ({ status: run?.status, stages: run?.stages, results: mergeRun(graph.last_run?.results || {}, run) });
+  const sideHere = () => (side && side.graph === graph.id ? side : null);
+  const merged = () => {
+    const beside = sideHere();
+    return { status: run?.status === 'running' || beside ? 'running' : run?.status,
+      stages: [...(run?.stages || []), ...(beside?.stages || [])],
+      results: mergeRun(mergeRun(graph.last_run?.results || {}, beside), run) };
+  };
 
   function resultsHtml(node) {
     const { state, files, errors } = nodeState(merged(), node.id);
@@ -248,6 +256,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   function renderNodes() {
     const box = $('.canvas-nodes');
     const live = runningNode(run, graph, chain);
+    const liveBeside = runningNode(sideHere(), graph, { current: sideHere()?.now });
     const inLine = queuedBoxes(queuedRuns, graph, graph.id);
     const seen = new Set();
     for (const n of graph.nodes) {
@@ -268,11 +277,11 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       const face = tileFace(graph, n, st);
       const { partly } = resultsHtml(n);
       const place = inLine.get(n.id);   // queued to run, at this place in line
-      const shown = n.id === live ? 'running' : place && st.state !== 'waiting' ? 'queued' : st.state;
+      const shown = n.id === live || n.id === liveBeside ? 'running' : place && st.state !== 'waiting' ? 'queued' : st.state;
       card.className = `node cnode tile ${shown || ''}${face.kind === 'empty' ? ' blank' : ''}${selection.includes(n.id) ? ' chosen' : ''}`;
       card.querySelector('.tag').textContent = tagText(n, face.count);
-      card.querySelector('.state').textContent = n.id === live
-        ? (chain?.percent != null ? `${Math.round(chain.percent)}%` : 'Running') : shown === 'queued' ? `Queued (${place})` : partly ? 'Some stopped'
+      card.querySelector('.state').textContent = n.id === liveBeside ? 'Running'
+        : n.id === live ? (chain?.percent != null ? `${Math.round(chain.percent)}%` : 'Running') : shown === 'queued' ? `Queued (${place})` : partly ? 'Some stopped'
           : st.state === 'waiting' && run?.status !== 'running' ? 'Waits for a pick' : st.errors.length ? 'Stopped' : STATE_WORDS[st.state] || '';
       card.querySelector('.state').title = st.errors[0] || '';
       // a box with tries steps through them on its tile; the one shown is the one it hands on
@@ -521,12 +530,13 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
 
   // ---------------------------------------------------------------- what is running, and where
   function renderBanner() {
-    const said = runBanner(run || elsewhere, graph.id, queuedRuns.length);
+    const said = runBanner(run || elsewhere, graph.id, queuedRuns.length, side);
     const box = $('.canvas-running');
     box.hidden = !said;
     if (!said) return;
     box.querySelector('[data-running-words]').textContent = said.text;
     box.querySelector('[data-run-open]').hidden = said.here;
+    box.querySelector('[data-run-stop-side]').hidden = !(side && (run || elsewhere));   // two runs: stop either
   }
 
   /** Every few seconds: a run started anywhere (an agent, another tab) shows above the board,
@@ -534,15 +544,21 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   async function watch() {
     clearTimeout(watchTimer);
     if (!el.isConnected) return;
-    let running = null, queued = [];
-    try { ({ running, queued = [] } = await json(await fetchImpl('/api/graph-runs'))); } catch { /* the studio is restarting */ }
+    let running = null, queued = [], beside = null;
+    try { ({ running, queued = [], side: beside = null } = await json(await fetchImpl('/api/graph-runs'))); } catch { /* the studio is restarting */ }
+    const ended = sideHere();
+    side = beside;
+    if (ended && side?.id !== ended.id) {   // the run beside it on this canvas ended: keep what it made
+      try { graph = finishRun(graph, await json(await fetchImpl(`/api/graph-runs/${ended.id}`))); } catch { /* a restart forgot it */ }
+      render();
+    }
     const was = JSON.stringify(queuedRuns.map((q) => [q.id, q.position]));
     queuedRuns = queued;
     if (!run) {
       if (running && running.graph === graph.id) { elsewhere = null; follow(running.id); }
       else elsewhere = running;
     }
-    if (was !== JSON.stringify(queuedRuns.map((q) => [q.id, q.position]))) renderNodes();
+    if (was !== JSON.stringify(queuedRuns.map((q) => [q.id, q.position])) || side || ended) renderNodes();
     renderBanner();
     watchTimer = setTimeout(watch, Math.max(interval * 2, 3000));
   }
@@ -552,7 +568,8 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       await saveNow();
       const started = await json(await post(fetchImpl, `/api/graphs/${graph.id}/run`, body));
       say(started.plan.join(' · '));
-      if (started.status === 'queued') { watch(); return; }   // it starts by itself when its turn comes
+      // queued: it starts by itself when its turn comes; tool boxes beside a model run show from watch
+      if (started.status === 'queued' || started.lane === 'side') { watch(); return; }
       follow(started.id);
     } catch (error) { say(error.message, true); watch(); }
   }
@@ -1017,12 +1034,15 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       t.disabled = true;
       await start({});
       t.disabled = false;
-    } else if (t.dataset.runStop !== undefined && (run || elsewhere)) {
-      fetchImpl(`/api/graph-runs/${(run || elsewhere).id}/cancel`, { method: 'POST' }).catch(() => {});
+    } else if (t.dataset.runStopSide !== undefined && side) {
+      fetchImpl(`/api/graph-runs/${side.id}/cancel`, { method: 'POST' }).catch(() => {});
+      say('Stopping the tool boxes beside it…');
+    } else if (t.dataset.runStop !== undefined && (run || elsewhere || side)) {
+      fetchImpl(`/api/graph-runs/${(run || elsewhere || side).id}/cancel`, { method: 'POST' }).catch(() => {});
       say('Stopping after the step that is running…');
-    } else if (t.dataset.runOpen !== undefined && elsewhere) {
+    } else if (t.dataset.runOpen !== undefined && (elsewhere || side)) {
       await loadList();
-      const there = saved.find((g) => g.id === elsewhere.graph);
+      const there = saved.find((g) => g.id === (elsewhere || side).graph);
       if (there) { openGraph(there); watch(); } else say('That canvas was deleted; its run still finishes.', true);
     } else if (t.dataset.stop !== undefined && run) {
       fetchImpl(`/api/graph-runs/${run.id}/cancel`, { method: 'POST' }).catch(() => {});

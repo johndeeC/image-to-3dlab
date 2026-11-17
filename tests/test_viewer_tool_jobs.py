@@ -115,6 +115,8 @@ def test_one_tool_job_at_a_time_a_failure_ends_it_and_cancel_stops_it(tmp_path):
     slow = jobs.start("remesh", lambda job: (gate.wait(5), {"model": "x"})[1])
     with pytest.raises(RuntimeError, match="another tool job"):
         jobs.start("unwrap", lambda job: {})
+    mirrored = jobs.start("mirror", lambda job: {"picture": "x"}, background=False)   # a flip never waits
+    assert mirrored.status == "done"
     assert jobs.cancel(slow.id) is True
     gate.set()
     for _ in range(100):

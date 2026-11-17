@@ -87,6 +87,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Canvas: a queue. Run a box while another run goes and it lines up, then starts by itself
   from what the run before it made. Boxes say **Queued (2)**; **Take out of the queue** is in
   their ▶ menu.
+- Canvas: tool boxes run beside a model run instead of waiting for it. Cut out background,
+  Quad remesh, UV unwrap, Save as and Put together go in a second lane; one that needs a
+  file still being made waits for it.
 
 ## [0.5.11] - 2026-11-17
 

@@ -411,3 +411,13 @@ def test_a_box_waits_only_for_a_run_that_will_reach_it_and_says_when_it_is_queue
     assert out["queued"] == {"b": 1, "c": 1}                  # from b: b and below; c's best place is 1st
     assert out["all"] == ["a", "b", "c", "d"]
     assert out["banner"] == "Running: 3D model · 5 s · 2 queued"
+
+
+def test_the_running_line_names_a_side_run_beside_the_main_one():
+    out = _run("""const main = { id: 'a', graph: 'g1', name: 'Knight', status: 'running', stage: 0, elapsed: 70, plan: ['Run 1: 3D model'] };
+      const side = { id: 'b', graph: 'g2', name: 'Tools', status: 'running', stage: 0, elapsed: 4, plan: ['Run 1: Quad remesh → Save as'] };
+      console.log(JSON.stringify([m.runBanner(main, 'g1', 0, side).text, m.runBanner(null, 'g2', 1, side),
+        m.runBanner(main, 'g1', 0, { ...side, graph: 'g1' }).text]))""")
+    assert out[0] == "Running: 3D model · 1 min 10 s · beside it on “Tools”: Quad remesh → Save as"
+    assert out[1] == {"here": True, "text": "Running: Quad remesh → Save as · 4 s · 1 queued"}
+    assert out[2].endswith("· beside it: Quad remesh → Save as")

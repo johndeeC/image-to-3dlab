@@ -421,19 +421,28 @@ export function finishRun(graph, run) {
   return g;
 }
 
-/** What a canvas run is doing and where, for the line above the board: `here` when it is this
- *  canvas's run (its boxes show it too), else which canvas it is on. Null when nothing runs.
- *  "Run 2, once for each part: 3D model" reads "3D model, once for each part" (graph_api.doing). */
-export function runBanner(run, graphId, queued = 0) {
-  if (!run || run.status !== 'running') return null;
+/** What a run is on now, in the plan's words: "Run 2, once for each part: 3D model" reads
+ *  "3D model, once for each part" (graph_api.doing). */
+function doingNow(run) {
   const line = run.plan?.[Math.min(run.stage, run.plan.length - 1)] || 'starting';
   const hit = /^Run \d+(?:, (.*?))?: (.*)$/.exec(line);
-  const doing = hit ? (hit[1] ? `${hit[2]}, ${hit[1]}` : hit[2]) : line;
-  const secs = Math.round(run.elapsed || 0);
+  return hit ? (hit[1] ? `${hit[2]}, ${hit[1]}` : hit[2]) : line;
+}
+
+/** What is running and where, for the line above the board: `here` when the run shown is this
+ *  canvas's (its boxes show it too), else which canvas it is on; `side` is a run of tool boxes
+ *  going beside it. Null when nothing runs. */
+export function runBanner(run, graphId, queued = 0, side = null) {
+  const live = (r) => r && r.status === 'running';
+  const first = live(run) ? run : live(side) ? side : null;
+  if (!first) return null;
+  const secs = Math.round(first.elapsed || 0);
   const time = secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)} min ${secs % 60} s`;
-  const here = run.graph === graphId;
-  const where = here ? 'Running' : run.name ? `Running on “${run.name}”` : 'Running on another canvas';
-  return { here, text: `${where}: ${doing} · ${time}${queued ? ` · ${queued} queued` : ''}` };
+  const here = first.graph === graphId;
+  const where = here ? 'Running' : first.name ? `Running on “${first.name}”` : 'Running on another canvas';
+  const beside = first !== side && live(side)
+    ? ` · beside it${side.graph === graphId ? '' : side.name ? ` on “${side.name}”` : ' on another canvas'}: ${doingNow(side)}` : '';
+  return { here, text: `${where}: ${doingNow(first)} · ${time}${queued ? ` · ${queued} queued` : ''}${beside}` };
 }
 
 /** The boxes of canvas `graphId` that queued runs will run, each with its best place in line:

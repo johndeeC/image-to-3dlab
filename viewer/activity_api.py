@@ -29,6 +29,9 @@ STEPS = ("picture", "back", "model", "finished", "split", "rigged", "animated", 
          "cutout", "remesh", "unwrap", "export", "combine", "left", "right", "fix")
 # The short tool jobs (viewer/tool_jobs.py): what each reads from `made`, in order of preference.
 TOOL_STEPS = {"cutout", "remesh", "unwrap", "export", "combine"}
+# A chain of only these runs beside one that uses a big model (a picture, a 3D build...): Blender
+# and the background remover barely touch what those need. One such side chain at a time.
+SIDE_STEPS = TOOL_STEPS
 LABELS = {"picture": "Picture", "back": "Back picture", "model": "3D model", "finished": "Finish",
           "split": "Split into props", "rigged": "Rig", "animated": "Animate", "skin": "Skin",
           "part": "Pick out a part", "repaint": "Repaint", "cutout": "Cut out background",
@@ -167,6 +170,11 @@ class Chain:
         }
 
 
+def is_side(chain: Chain) -> bool:
+    """A chain of tool steps only (SIDE_STEPS): it may run beside a main one."""
+    return bool(chain.steps) and set(chain.steps) <= SIDE_STEPS
+
+
 class ChainRunner:
     """One plan at a time (the jobs underneath refuse to overlap anyway)."""
 
@@ -180,11 +188,17 @@ class ChainRunner:
 
     # ------------------------------------------------------------------ public
     def running(self) -> Chain | None:
-        return next((c for c in self.chains.values() if c.status == "running"), None)
+        """The chain the studio shows: the main one, else a side one (is_side)."""
+        live = [c for c in self.chains.values() if c.status == "running"]
+        return next((c for c in live if not is_side(c)), live[0] if live else None)
+
+    def can_start(self, chain: Chain) -> bool:
+        """One main chain and one side chain may run at once, never two of either."""
+        return not any(c.status == "running" and is_side(c) == is_side(chain) for c in self.chains.values())
 
     def submit(self, chain: Chain, *, background: bool = True) -> Chain:
         with self.lock:
-            if self.running() is not None:
+            if not self.can_start(chain):
                 raise RuntimeError("something is already being made; wait for it to finish")
             bad = [s for s in chain.steps if s not in STEPS]
             if bad or not chain.steps:
