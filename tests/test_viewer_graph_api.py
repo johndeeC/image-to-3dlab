@@ -615,3 +615,16 @@ def test_again_adds_a_try_and_keeps_the_old_ones(tmp_path):
     assert tries[0] == first[0] and len(tries) == 2 and tries[1]["file"] != first[0]["file"]
     runner.start(ga.get_graph(tmp_path, saved["id"]), node="n3", mode="only", background=False)   # not again: replaced
     assert len(ga.get_graph(tmp_path, saved["id"])["last_run"]["results"]["n3"]) == 1
+
+
+def test_one_prop_dragged_onto_a_line_below_a_split_runs_for_that_prop_alone(tmp_path):
+    g = json.loads(json.dumps(SHEET))
+    g["edges"][2]["file"] = "props/old-run/finished/sword/sword_LOD0.glb"   # s3 -> s4 carries the sword
+    results = {"s3": [{"status": "done", "file": f"props/old-run/finished/{n}/{n}_LOD0.glb", "label": n} for n in ("axe", "sword")]}
+    seeds = ga.plan_from(g, "s4", "only", results, RECIPES).stages[0].seeds
+    assert seeds == [{"made": {"finished": "props/old-run/finished/sword/sword_LOD0.glb"}, "label": "sword"}]
+    assert ga.plan_graph(g, RECIPES).stages[1].only_prop == "sword"
+    runner, jobs = _graph_runner(tmp_path)
+    run = runner.start(g, background=False)           # Run all splits again: the sword is still the sword
+    assert jobs.started == ["picture", "model", "split", "rigged"]
+    assert [r["label"] for r in run.to_dict()["results"]["s4"]] == ["sword"]

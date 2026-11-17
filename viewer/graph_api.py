@@ -273,6 +273,7 @@ class Stage:
     steps: list[str]
     after: str | None = None     # the stage whose results this one starts from
     each_prop: bool = False      # run once for each prop the stage before split off
+    only_prop: str | None = None # ... or for just this one, by name (one prop dragged onto the line)
     want: str = "character"
     prompt: str | None = None
     picture_engine: str | None = None
@@ -438,6 +439,9 @@ class _Planner:
         props = each_prop or self.in_props(start)
         stage = Stage(id=f"s{len(self.stages) + 1}", nodes=[], steps=[], after=after.id if after else None,
                       each_prop=each_prop, want="prop" if props else goal, seeds=seeds)
+        carried = g.picks.get((g.parent.get(start), start))
+        if each_prop and carried:
+            stage.only_prop = prop_name(carried)
         if after is not None and after.count > 1:
             stage.waits_for_pick = True
         self.stages.append(stage)
@@ -543,7 +547,10 @@ def _seeds(g: _Graph, path: list[str], results: dict[str, list[dict[str, Any]]],
             made[MADE_KEY[g.nodes[b]["type"]]] = _chosen(g, b, results, path[i + 1] if i + 1 < len(path) else below)
         return [{"made": made, "label": None}]
     seeds = []
-    for prop in [r for r in results.get(path[split_at], []) if r.get("status") == "done" and r.get("file")]:
+    after_split = path[split_at + 1] if split_at + 1 < len(path) else below
+    carried = g.picks.get((path[split_at], after_split))   # one prop dragged onto the line below the split
+    for prop in [r for r in results.get(path[split_at], []) if r.get("status") == "done" and r.get("file")
+                 and (not carried or prop_name(r["file"]) == prop_name(carried))]:
         made, label = {"finished": prop["file"]}, prop.get("label")
         for b in path[split_at + 1:]:
             hit = next((r for r in results.get(b, []) if r.get("label") == label and r.get("status") == "done"), None)
@@ -622,10 +629,18 @@ def instances(stage: Stage, parent_made: list[dict[str, str]], props_of: Callabl
     for made in parent_made:
         if stage.each_prop:
             for prop in props_of(made.get("split", "")) or []:
+                if stage.only_prop and prop_name(prop) != stage.only_prop:
+                    continue
                 runs.append({"made": {"finished": prop}, "label": PurePosixPath(prop).parent.name})
         else:
             runs.append({"made": dict(made), "label": None})
     return runs
+
+
+def prop_name(file: str) -> str:
+    """A split prop's name, from its file (props/<run>/finished/<name>/<name>_LOD0.glb). A sheet split
+    again names the same prop the same, so a line can keep one prop across runs."""
+    return PurePosixPath(str(file)).parent.name
 
 
 def split_props(output: Path, split_dir: str) -> list[str]:
