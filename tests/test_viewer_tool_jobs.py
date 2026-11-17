@@ -133,3 +133,18 @@ def test_a_command_writes_its_output_to_the_log_and_a_failure_raises(tmp_path):
     assert list(job.log) == ["BAKE:: 50%"]
     with pytest.raises(RuntimeError, match="exit code 3"):
         tj.run_command(job, [sys.executable, "-c", "raise SystemExit(3)"])
+
+
+def test_a_right_view_is_the_left_one_mirrored_beside_it(tmp_path):
+    from PIL import Image
+
+    left = tmp_path / "images" / "k" / "k__left.png"
+    left.parent.mkdir(parents=True)
+    picture = Image.new("RGB", (4, 2), (0, 0, 0))
+    picture.putpixel((0, 0), (255, 0, 0))
+    picture.save(left)
+    job = tj.ToolJobs().start("mirror", tj.mirror_work(tmp_path, "images/k/k__left.png"), background=False)
+    assert job.status == "done" and job.result["picture"] == "images/k/k__right.png"
+    with Image.open(tmp_path / job.result["picture"]) as right:
+        assert right.getpixel((3, 0)) == (255, 0, 0)          # what was on the left is on the right
+    assert tj.mirrored_name(Path("a/b.png")).name == "b__mirrored.png"

@@ -934,8 +934,8 @@ def test_a_side_view_asks_for_that_side_and_lands_beside_the_front(tmp_path):
     from image_to_3dlab import back_view
 
     left = back_view.view_prompt("left")
-    assert "seen from its left side" in left and "faces the right edge" in left
-    assert "faces the left edge" in back_view.view_prompt("right")
+    assert "seen from its left side" in left and "faces the left edge" in left     # as Tencent's examples show
+    assert "faces the right edge" in back_view.view_prompt("right")
     assert back_view.view_prompt("back") == back_view.BACK_PROMPT
     with pytest.raises(ValueError, match="back, left or right"):
         back_view.view_prompt("top")

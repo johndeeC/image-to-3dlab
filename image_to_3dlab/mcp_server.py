@@ -62,6 +62,7 @@ STUDIO_ONLY = {
     "api/tool/unwrap": "a canvas box (UV unwrap); agents add it with edit_canvas",
     "api/tool/export": "a canvas box (Save as); agents add it with edit_canvas",
     "api/tool/combine": "a canvas box (Put together); agents add it with edit_canvas",
+    "api/tool/mirror": "part of a canvas's Four views box (the right view is the left one mirrored)",
     "api/tool/*/cancel": "stops a canvas tool step; agents use cancel_canvas_run",
     "api/graphs/upload": "a person drops a picture on a Picture box; agents give image_path to create",
     "api/graphs/*/delete": "deleting a canvas is the user's call, made in the studio",

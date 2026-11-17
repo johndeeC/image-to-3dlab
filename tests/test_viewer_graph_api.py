@@ -182,10 +182,11 @@ class FakeJobs:
             kind = {"/api/image": "picture", "/api/image/back": "back", "/api/generate": "model", "/api/finish": "finished",
                     "/api/animate/rig": "rigged", "/api/animate/play": "animated", "/api/props": "split",
                     "/api/image/part": "part", "/api/tool/cutout": "cutout", "/api/tool/remesh": "remesh",
-                    "/api/tool/unwrap": "unwrap", "/api/tool/export": "export", "/api/tool/combine": "combine"}[path]
+                    "/api/tool/unwrap": "unwrap", "/api/tool/export": "export", "/api/tool/combine": "combine",
+                    "/api/tool/mirror": "mirror"}[path]
             self.started.append(kind)
-            if kind in ("cutout", "remesh", "unwrap", "export", "combine"):
-                self.bodies.append(json.loads(body))
+            if kind in ("cutout", "remesh", "unwrap", "export", "combine", "mirror"):
+                self.bodies.append({"tool": kind, **json.loads(body)})
             if kind == "part":
                 self.parts.append(json.loads(body)["part"])
             if path == "/api/image/back":
@@ -205,11 +206,12 @@ class FakeJobs:
                 "model": f"sf3d/m{n}/model.glb", "finished": f"finish/f{n}.glb",
                 "rigged": f"animate/r{n}/rigged.glb", "animated": f"animate/r{n}/walk.glb"}
         event = {"phase": "done", "message": "done", "overall_pct": 100}
-        if kind in ("cutout", "remesh", "unwrap", "export", "combine"):
-            file = {"cutout": f"images/cut{n}/cut{n}.png", "export": f"exports/e{n}/e{n}.fbx"}.get(kind, f"tools/t{n}/t{n}.glb")
+        if kind in ("cutout", "remesh", "unwrap", "export", "combine", "mirror"):
+            file = {"cutout": f"images/cut{n}/cut{n}.png", "export": f"exports/e{n}/e{n}.fbx",
+                    "mirror": f"images/p__side{n}.png"}.get(kind, f"tools/t{n}/t{n}.glb")
             (self.output / file).parent.mkdir(parents=True, exist_ok=True)
             (self.output / file).write_bytes(b"x")
-            key = {"cutout": "picture", "export": "file"}.get(kind, "model")
+            key = {"cutout": "picture", "mirror": "picture", "export": "file"}.get(kind, "model")
             return 200, {"status": "done", "last_event": {"phase": kind, "message": "done"}, "log_tail": "ok", key: file}
         if kind == "split":
             folder = self.output / "props" / "s__props__20261116-101010"
@@ -758,7 +760,7 @@ def test_tool_boxes_run_in_line_each_from_what_the_box_before_made(tmp_path):
     runner, jobs = _graph_runner(tmp_path)
     run = runner.start(g, background=False)
     assert run.status == "done", run.error
-    cut, remesh, unwrap, export = [b for b in jobs.bodies if "generate" not in b]
+    cut, remesh, unwrap, export = [{k: v for k, v in b.items() if k != "tool"} for b in jobs.bodies if "generate" not in b]
     assert cut == {"picture": "images/p.png"}
     assert remesh == {"model": "sf3d/m3/model.glb", "faces": 8000, "size": 1024}
     assert unwrap == {"model": "tools/t4/t4.glb", "size": 2048}            # unwraps what the remesh made
@@ -777,7 +779,7 @@ def test_put_together_gathers_every_part_into_one_run(tmp_path):
     run = runner.start(g, background=False)
     assert run.status == "done", run.error
     assert jobs.started == ["part", "part", "part", "model", "model", "model", "combine"]
-    assert jobs.bodies[-1] == {"models": ["sf3d/m4/model.glb", "sf3d/m5/model.glb", "sf3d/m6/model.glb"]}
+    assert jobs.bodies[-1] == {"tool": "combine", "models": ["sf3d/m4/model.glb", "sf3d/m5/model.glb", "sf3d/m6/model.glb"]}
     assert len(run.to_dict()["results"]["t"]) == 1
 
 
@@ -787,7 +789,7 @@ def test_put_together_after_a_split_takes_every_prop(tmp_path):
     runner, jobs = _graph_runner(tmp_path)
     run = runner.start(g, background=False)
     assert run.status == "done", run.error
-    assert jobs.bodies[-1] == {"models": ["props/s__props__20261116-101010/finished/axe/axe_LOD0.glb",
+    assert jobs.bodies[-1] == {"tool": "combine", "models": ["props/s__props__20261116-101010/finished/axe/axe_LOD0.glb",
                                           "props/s__props__20261116-101010/finished/sword/sword_LOD0.glb"]}
 
 
@@ -813,7 +815,8 @@ def test_four_views_draws_three_sides_and_the_3d_model_reads_all_four(tmp_path):
     run = runner.start(FOUR, background=False)
     assert run.status == "done", run.error
     sides = [b for b in jobs.bodies if "picture" in b]
-    assert [b.get("side", "back") for b in sides] == ["left", "back", "right"]
+    assert [b.get("tool") or b.get("side", "back") for b in sides] == ["left", "back", "mirror"]   # the right is the left mirrored
+    assert sides[2]["picture"] == "images/p__side2.png"                                              # the left view
     generate = next(b["generate"] for b in jobs.bodies if "generate" in b).decode(errors="replace")
     assert '"model": "2mv"' in generate
     for side, n in (("left", 2), ("back", 3), ("right", 4)):

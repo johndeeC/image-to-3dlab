@@ -31,8 +31,10 @@ BACK_PROMPT = (
 
 # The side views for a four-view build (Hunyuan3D-2mv reads front, left, back and right). Its
 # "left" is the front turned a quarter clockwise seen from above: the subject's own left side
-# faces the camera, so the subject faces the right edge of the picture. Same rules as the back:
-# name no parts, keep the height and size, plain grey.
+# faces the camera and the subject faces the picture's left edge (Tencent's example_mv_images
+# show it so). Same rules as the back: name no parts, keep the height and size, plain grey.
+# The picture engine turns subjects to face left either way, so the studio draws the left view
+# and mirrors it for the right (viewer/tool_jobs.py mirror_work).
 SIDE_PROMPT = (
     "The same subject as in the reference image, seen from its {side} side: the camera has moved "
     "90 degrees around it to the subject's {side}, so the subject faces the {edge} edge of the picture. "
@@ -40,7 +42,7 @@ SIDE_PROMPT = (
     "{side} side of exactly the parts that are in the reference. Keep the colours, materials and "
     "design consistent with the reference. Flat even lighting, plain light grey background."
 )
-SIDE_EDGE = {"left": "right", "right": "left"}
+SIDE_EDGE = {"left": "left", "right": "right"}
 
 
 def view_prompt(side: str) -> str:

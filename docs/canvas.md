@@ -213,8 +213,10 @@ Box types and their settings come from the studio (`/api/graphs/types`), not a c
 Picture → Four views → 3D model (Fast and clean)
 ```
 
-**Four views** draws the picture's left, back and right sides, the way backs are drawn
-(`image_to_3dlab/back_view.py` `view_prompt`). A 3D model after it builds from all four with
+**Four views** draws the picture's left and back sides, the way backs are drawn
+(`image_to_3dlab/back_view.py` `view_prompt`), and makes the right view by mirroring the left:
+asked for either side, the picture engine turned the subject to face the picture's left edge,
+which is Hunyuan3D-2mv's left (Tencent's own example pictures show it so). A 3D model after it builds from all four with
 Hunyuan3D-2mv, run by the in-repo MLX shape port (`hunyuan_mlx/shape`, model `2mv`), then
 painted as usual. It needs the Fast and clean engine; the canvas sets it. The weights are
 `tencent/Hunyuan3D-2mv`'s `hunyuan3d-dit-v2-mv` only (4.93 GB, the Tencent Hunyuan community

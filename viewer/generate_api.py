@@ -3133,7 +3133,7 @@ class Handler(SimpleHTTPRequestHandler):
         if parts == ["api", "image", "part"]:
             self._create_part_job()
             return
-        if len(parts) == 3 and parts[:2] == ["api", "tool"] and parts[2] in {"cutout", "remesh", "unwrap", "export", "combine"}:
+        if len(parts) == 3 and parts[:2] == ["api", "tool"] and parts[2] in {"cutout", "remesh", "unwrap", "export", "combine", "mirror"}:
             self._start_tool(parts[2])
             return
         if len(parts) == 4 and parts[:2] == ["api", "tool"] and parts[3] == "cancel":
@@ -3276,9 +3276,10 @@ class Handler(SimpleHTTPRequestHandler):
             body = json.loads(self.rfile.read(length)) if 0 < length <= 65536 else {}
             if not isinstance(body, dict):
                 raise ValueError("send a JSON object")
-            blender = find_blender() if kind != "cutout" else None
+            blender = find_blender() if kind not in ("cutout", "mirror") else None
             work = {
                 "cutout": lambda: tool_jobs.cutout_work(OUTPUT_ROOT, str(body.get("picture", ""))),
+                "mirror": lambda: tool_jobs.mirror_work(OUTPUT_ROOT, str(body.get("picture", ""))),
                 "remesh": lambda: tool_jobs.remesh_work(OUTPUT_ROOT, str(body.get("model", "")),
                                                         int(body.get("faces", 20000)), int(body.get("size", 2048)), blender),
                 "unwrap": lambda: tool_jobs.unwrap_work(OUTPUT_ROOT, str(body.get("model", "")), int(body.get("size", 2048)), blender),

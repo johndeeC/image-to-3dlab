@@ -416,6 +416,11 @@ class ChainRunner:
                                "engine": chain.picture_engine,
                                "picture_only": not {"back", "model"} & set(chain.steps)}).encode()
             return kind, self._post("/api/image", body, "application/json")
+        if step == "right" and chain.made.get("left"):
+            # the picture engine turns subjects to face left whichever side it is asked for: the
+            # right view is the left one mirrored (image_to_3dlab/back_view.py)
+            return "tool", self._post("/api/tool/mirror", json.dumps({"picture": chain.made["left"]}).encode(),
+                                      "application/json")
         if step in ("back", "left", "right"):
             front = chain.made.get("picture") or (self._kept_upload(chain) if chain.upload else None)
             if not front:

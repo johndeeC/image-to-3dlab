@@ -32,7 +32,7 @@ MAX_PARTS = 24
 
 # What each tool is called on screen and in its folder name.
 LABELS = {"cutout": "Cut out background", "remesh": "Quad remesh", "unwrap": "UV unwrap",
-          "export": "Save as", "combine": "Put together"}
+          "export": "Save as", "combine": "Put together", "mirror": "Mirror"}
 
 
 class ToolJob:
@@ -242,3 +242,30 @@ def combine_work(output: Path, models: list[str], blender: Path | None):
     if not isinstance(models, list) or not 2 <= len(models) <= MAX_PARTS:
         raise ValueError(f"put together 2 to {MAX_PARTS} models")
     return blender_work(output, "combine", "blender_combine_parts.py", models, ".glb", [], blender, out_first=True)
+
+
+def mirrored_name(picture: Path) -> Path:
+    """Where a mirrored view goes: a left view `<front>__left.png` becomes `<front>__right.png`
+    beside it, the name a drawn right view would have; anything else `<name>__mirrored.png`."""
+    stem = picture.stem
+    if stem.endswith("__left"):
+        return picture.with_name(f"{stem[:-len('__left')]}__right.png")
+    return picture.with_name(f"{stem}__mirrored.png")
+
+
+def mirror_work(output: Path, picture: str) -> Callable[[ToolJob], dict[str, Any]]:
+    """Flip a picture left to right: a four-view build's right view from its left view."""
+    source = inside(output, picture, PICTURES)
+
+    def work(job: ToolJob) -> dict[str, Any]:
+        from PIL import Image, ImageOps
+
+        with Image.open(source) as opened:
+            if max(opened.size) > 8192:
+                raise ValueError("that picture is too large to mirror")
+            flipped = ImageOps.mirror(opened.convert("RGBA" if "A" in opened.getbands() else "RGB"))
+        target = mirrored_name(source)
+        flipped.save(target, "PNG")
+        carry_provenance(source, target, "mirror")
+        return {"picture": rel(output, target)}
+    return work
