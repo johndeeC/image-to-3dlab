@@ -1,197 +1,204 @@
 # Canvas: draw the steps, then run them
 
-The **Canvas** is a board where you place step boxes (we call them *nodes*), join them
-with lines, and press **Run**. It is Create with the steps laid out in the open, so a
-plan can branch: one picture into two 3D engines, or one sheet of nine into nine props
-that each get rigged.
+The **Canvas** (beside **+ Create**) is a board where you place step boxes (*nodes* in
+code), join them with lines, and run them. It is Create with the steps laid out in the
+open, so a plan can branch: one picture into two 3D engines, or one sheet of nine into nine
+props that each get rigged.
 
-Nothing new makes anything. Every node is a step the studio already runs, and a graph
+Nothing new makes anything. Every box is a step the studio already runs, and a canvas
 runs as ordinary runs through the same runner Create uses (`viewer/activity_api.py`).
-Each one lands in the Library and the activity history like any other run.
+Each run lands in the Library and the activity history like any other.
 
-## The nodes
+## The boxes
 
-| Node | Takes | Makes | Runner step |
-|------|-------|-------|-------------|
-| Picture | nothing (a description) or a picture already made | a picture | `picture` (skipped for a picture already made) |
-| 3D model | a picture | a 3D model | `model`, with the node's engine |
-| Split into props | a 3D model of a sheet of nine | several finished props | `split` |
-| Finish | a 3D model | a game-ready model | `finished` |
+| Box | Takes | Makes | Runner step |
+|-----|-------|-------|-------------|
+| Picture | nothing: a description, or a picture you upload or pick from the Library | a picture | `picture` (skipped for one you gave) |
+| Your 3D model | nothing: a model picked from the Library | a 3D model | none; it starts the run with that file |
+| Front + back | a picture | a front and back picture | `back`; only the Best detail engine uses the back |
+| 3D model | a picture, or a front and back | a 3D model | `model`, with the box's engine |
+| Split into props | a 3D model of a sheet | finished props, named if you name them | `split` |
+| Finish | a 3D model | a game-ready model | `finished`, with the box's choices |
 | Rig | a 3D model, a game-ready model, or props | a rigged model | `rigged` |
-| Move | a rigged model | a moving model | `animated`, with the node's move |
+| Move | a rigged model | a moving model | `animated`, with the box's move |
 | Export | anything with a 3D model | nothing new: lists the files to take | none |
 
-A Picture node says what it is for: a **character**, **one prop**, or a **sheet of nine**.
-That picks the wording added to the description (the same wording Create adds,
-`image_to_3dlab/prompt_recipes.json`) and Finish's defaults (a character is 1.8 m tall; a
-prop stands upright). A Split node only takes a sheet of nine.
+Each box keeps the choices Create and the Steps panel offer, the main one on show and the
+rest under **More settings** (`viewer/studio/canvas-settings.js`):
 
-## The graph format
+- **Picture**: what to draw, what it is for (a character, one prop, a sheet of nine, just a
+  picture), how many options to draw (1–4), its shape, and which picture engine draws it.
+  What it is for picks the wording added (`image_to_3dlab/prompt_recipes.json`) and
+  Finish's defaults: a character is 1.8 m tall, and a prop stands upright.
+- **3D model**: the engine, named by what it does ("Best detail", "Fastest, rough").
+- **Finish**: detail (triangles), texture size, surface maps, Pixel Match, clean-up, height
+  and standing upright. Create puts triangle count and texture size on Finish, not on the
+  3D model, so the canvas does too.
+- **Split into props**: the props' names, one each, in reading order.
+- **Rig**: bone names (numbered, or Unity Humanoid). **Move**: the move, speed, on the spot.
+
+The server keeps the same list (`graph_api.SETTINGS`) and drops any value that does not
+fit. A test checks the two lists agree, key for key and choice for choice.
+
+## Getting about and editing
+
+- **Zoom**: wheel, pinch, Cmd + / Cmd −, or the − 100% + buttons. **Fit** (Cmd 0) shows
+  everything. **Pan**: hold Space and drag, drag with the middle button, scroll with two
+  fingers, or pick the **Hand** (H). **Pointer** (V) picks and moves boxes.
+- **Add a box**: double-click the board, press Tab, or **+ Add**. The same menu adds a
+  ready-made line of boxes (Moving character, Nine props, Parts by name, Two engines).
+- **Drop a line on empty board** to get a menu of only the boxes that take what that box
+  makes. The one you pick arrives already joined.
+- **Choose**: click, Shift/Cmd-click, or drag a rectangle; Cmd A for all. Delete removes;
+  Cmd C / Cmd V copy and paste with the lines between them; Cmd Z / Cmd Shift Z undo and
+  redo (one drag, or one word typed, is one step).
+- **Cmd L** joins the chosen boxes left to right where they fit. **Cmd G** puts them in a
+  named frame, Cmd Shift G takes it off; drag a frame by its name bar to move it all.
+- **Alt Shift F** tidies the layout. **Lines** hides or shows the lines. **?** lists every
+  shortcut (`viewer/studio/canvas-keys.js`; the panel is drawn from that table).
+- Below 1150 px wide the studio stacks its columns, so the canvas takes the window under the
+  top bar.
+
+## The format
 
 Saved in `output/.graphs.json`, beside the run history (`.activity.jsonl`) and the kits
 (`.kits.json`). It only names steps and files, never copies them.
 
 ```json
 {"graphs": [{
-  "schema": 1, "id": "graph-1a2b3c4d", "name": "Knight and gear", "updated": 1763190000,
+  "schema": 2, "id": "graph-1a2b3c4d", "name": "Knight and gear", "updated": 1763190000,
   "nodes": [
-    {"id": "n1", "type": "picture", "x": 40,  "y": 80, "settings": {"prompt": "a rune knight", "goal": "character"}},
-    {"id": "n2", "type": "model",   "x": 260, "y": 80, "settings": {"engine": "pixal3d"}},
-    {"id": "n3", "type": "finish",  "x": 480, "y": 80, "settings": {}},
-    {"id": "n4", "type": "rig",     "x": 700, "y": 80, "settings": {}},
-    {"id": "n5", "type": "move",    "x": 920, "y": 80, "settings": {"move": "walk"}}
+    {"id": "n1", "type": "picture", "x": 40, "y": 80, "settings": {"prompt": "a rune knight", "goal": "character", "count": 3},
+     "picked": "images/rune-knight__b2.png"},
+    {"id": "n2", "type": "model",   "x": 300, "y": 80, "settings": {"engine": "pixal3d"}},
+    {"id": "n3", "type": "finish",  "x": 560, "y": 80, "settings": {"detail": "hero", "texture_size": 1024}}
   ],
-  "edges": [{"from": "n1", "to": "n2"}, {"from": "n2", "to": "n3"}, {"from": "n3", "to": "n4"}, {"from": "n4", "to": "n5"}],
+  "edges": [{"from": "n1", "to": "n2"}, {"from": "n2", "to": "n3"}],
+  "groups": [{"id": "g1", "label": "Body", "nodes": ["n2", "n3"]}],
+  "view": {"x": 0, "y": 0, "k": 0.8},
   "last_run": {"status": "done", "results": {"n2": [{"file": "pixal3d/.../model.glb", "status": "done"}]}}
 }]}
 ```
 
-- `x`, `y` are where the box sits on the board; nothing else reads them.
-- Every node has at most one line in. A Picture has none.
-- A node may have any number of lines out. That is the branching.
-- `last_run` is what the last run made, per node, so a reopened canvas shows it.
-- A half-drawn graph saves fine. It is only checked in full when you press Run.
+- Every box has at most one line in; a Picture or Your 3D model has none. A box may have any
+  number of lines out: that is the branching.
+- `picked` is the result that carries on, for a Picture asked for several options.
+- `groups` are the frames, `view` is where the board was left. Nothing else reads them.
+- `last_run` is what each box made last time. Running one box replaces only that box's part.
+- A half-drawn canvas saves fine; it is checked in full when it runs.
+- `updated` is the version. A save that brings an older one is refused (409), so the studio
+  tab and an agent never overwrite each other's change: the tab then shows the newer one.
+- Schema 1 (round one) still reads. Schema 2 only added `groups`, `picked`, `view` and typed
+  settings.
 
-## From a graph to runs
+## From a canvas to runs
 
-`viewer/graph_api.py` turns a graph into **stages**: one stage is one ordinary run, a
-`Chain` with a list of steps. The rules, as `plan_graph()` applies them:
+`viewer/graph_api.py` turns a canvas into **stages**: one stage is one ordinary run, a
+`Chain` with a list of steps. `plan_graph()` applies these rules:
 
-1. Start at each Picture node and walk down the lines.
-2. While a node has exactly one line out to a step node, the next node joins the same
-   stage. Picture → 3D model → Finish → Rig → Move is **one** run, exactly what Create
-   would send for "A moving character".
-3. A node with two or more lines out ends its stage. Each line starts a new stage that
-   begins with what the first one made (the runner's `made`: picture, model, finished...),
-   so the shared part runs once, not once per branch.
-4. A Split node also ends its stage. The stages after it are **for each prop** (below).
-5. Export nodes are not steps. They hang off a node and list that node's files.
+1. Start at each Picture or Your 3D model box and walk down the lines.
+2. While a box has exactly one line out to a step box, the next box joins the same stage.
+   Picture → 3D model → Finish → Rig → Move is **one** run, as Create would send it.
+3. A box with two or more lines out ends its stage. Each line starts a stage that begins
+   from what the first one made (the runner's `made`), so the shared part runs once.
+4. A Split ends its stage, and the stages after it run **once per prop**.
+5. A Picture asked for 2–4 options ends its stage too, and draws that many. The stages after
+   it **wait for a pick**.
+6. Export boxes are not steps. They hang off a box and list its files.
 
-Stages run one after another, a parent before its children (the studio makes one thing
-at a time). If a stage fails, the stages after it are skipped; branches that do not
-depend on it still run. Cancel stops the running stage and skips the rest.
+Stages run one after another, a parent before its children (the studio makes one thing at
+a time). A failed stage skips what hangs off it; other branches still run. Stop ends the
+running step and skips the rest. The run lives on the server (`GraphRunner`): closing the
+tab does not stop it.
 
-The run lives on the server (`GraphRunner`), like a Create run: closing the tab does
-not stop it. Each step lands in `output/.activity.jsonl` as usual.
+### One box at a time
 
-## Fan-out: one sheet, many props
+Each box has a **▶** with **Run this box** and **Run from here**. `plan_from(graph, box,
+mode)` starts from what the boxes above it made last time: their only result, or the one
+picked. Those boxes don't run again, so their own settings aren't checked. Below a Split it
+runs once for each prop that got that far. Picking a Picture option shows **Carry on with
+this one**, which runs everything below it (mode `after`).
+
+### Fan-out: one sheet, many props
 
 ```
 Picture (sheet of nine) → 3D model → Split into props ─┬→ Rig
                                                        └→ Export
 ```
 
-Runs as:
+Run 1 is Picture → 3D model → Split; the split's props land under
+`output/props/<run>/finished/`, and the runner records that folder as `made["split"]`.
+Run 2 rigs each prop, once per prop. Export lists every prop.
 
-- **Run 1**: Picture → 3D model → Split into props. The split makes up to nine finished
-  props under `output/props/<run>/finished/`. The runner now records that folder as
-  `made["split"]`.
-- **Run 2, once per prop**: Rig, starting from that prop as its game-ready model. Nine
-  props, nine short runs.
-- Export lists every prop and every rig.
+**Parts by name** is the same line with names on the Split: describe one sheet of the parts
+("the parts of a knight: head, hair, body, left hand, right hand"), and the split names each
+part and makes it a 3D model of its own. Tripo cuts named parts out of a picture of the
+whole thing; here each part is drawn on its own, which is what the prop sheet already does
+well.
 
-Two lines out of a 3D model work the same way without the "per prop": one model, then a
-Finish run and a Rig run of the raw model, side by side.
+## Agents
 
-## Kits
+`box_types`, `list_canvases`, `get_canvas`, `edit_canvas`, `save_canvas`, `check_canvas`,
+`run_canvas`, `canvas_status` and `cancel_canvas_run` (`image_to_3dlab/mcp_server.py`).
+`edit_canvas` takes a list of operations (`add` with `after` to join it, `remove`,
+`connect`, `disconnect`, `set`, `pick`, `rename`), saves them with the version check, and
+answers with how the canvas would run, or why it can't yet. `canvas_status` names the
+Picture boxes waiting for a pick, so an agent can show the user the options and carry on.
+Box types and their settings come from the studio (`/api/graphs/types`), not a copy.
 
-A kit (`docs/kits.md`) is a character plus the gear made for it, and its pane draws each
-member as a row of step nodes. The canvas is the free-form version of the same picture,
-with the same node look. Filing a canvas's results into a kit is the natural next step;
-it is not in this first cut.
+## Not built yet
 
-## Not in this first cut
+**Boxes the studio can back, later:**
 
-- Starting from a 3D model file, front-and-back pictures, and Finish's detail choices:
-  each node uses the usual defaults. The node settings are where they go next.
-- A Picture node can use a picture already made (`"file"` in its settings), and runs that
-  way, but the canvas has no picker for one yet.
-- Agents cannot draw or run a canvas yet; they have `create` and `continue_asset`.
-  A `run_graph` tool would take the same JSON.
-- Results are not filed into a kit.
-- Nodes are not run one at a time from the canvas; Run runs the whole graph.
+| Box | Backed by | Why not yet |
+|-----|-----------|-------------|
+| Cut out background | `image_to_3dlab.matte.cut_out` (BiRefNet-lite, already installable) | No job route of its own; every 3D engine cuts the picture out anyway |
+| New look | skins (`/api/skins`, `make_skin`) | Not one-shot: you approve a front and a back picture first |
 
-## Next: closing the gaps with Tripo's canvas
+**Boxes with no engine here yet.** These are designs only, and nothing has been
+downloaded. You pick the engine, how it is set up, and its size first (`CLAUDE.md`,
+"Weights are never downloaded without an explicit choice"). The licences and sizes below
+are from memory and not yet checked against each project's own page; check them before
+choosing.
 
-Advice taken before round two (a second opinion, read from the code only). The decisions:
+| Box | Takes → makes | Candidates |
+|-----|---------------|------------|
+| Quad remesh | 3D model → 3D model with four-sided faces | Blender's QuadriFlow (ships with Blender, no download), Instant Meshes (BSD-3, a few MB) |
+| UV unwrap | 3D model → 3D model laid out for painting | `scripts/blender_reunwrap_bake.py` and xatlas, both already here, no download |
+| Re-texture | 3D model + words → newly painted model | Hunyuan3D-Paint 2.1 (several GB; **not licensed in the EU, UK or South Korea**), MV-Adapter (Apache-2.0, about 7 GB) |
+| Split a model into parts | 3D model → parts | Blender's loose parts (no download), PartField (**non-commercial**), Hunyuan3D-Part (**same region limits as Hunyuan**) |
 
-**Keep the hand-rolled board, no library.** A canvas holds up to 60 boxes and each box
-has one line in, so the graph is a forest. Zoom and pan are one CSS `transform`; tidying
-is a short tree layout. Boxes hold real form controls, which libraries that draw on a
-`<canvas>` (LiteGraph) cannot. The others need a framework or a bundler (React Flow, Rete),
-or own their own data model (Drawflow). The studio has no build step.
+"Remove lighting" is not something any engine here says it does, so the 3D model box
+leaves it out until one does.
 
-**Pure modules, thin page.** Each is a plain ES module that Node tests import:
+**In-studio chat: a proposal.** A side panel sends your words and the canvas to a model,
+and gets `edit_canvas` operations back. The model is yours, a local server or a key you
+paste; the studio ships none (as `scripts/blender_agent.py` already works). **Ask first**
+shows the changes to accept; **Go ahead** applies and runs them, pausing at a pick. An
+**Instructions** box is the same call scoped to one box ("put these parts together as one
+character"). It uses the same operations as the agent tools: one code path, one set of tests.
 
-| File | What it holds |
+**Also left:** filing a canvas's results into a kit (`docs/kits.md`); a server restart in
+the middle of a run leaves the last run marked as it was; Cmd + / Cmd − may zoom the page
+instead in a browser that keeps those keys for itself.
+
+## How the code is split
+
+Advice taken before round two (a second opinion, read from the code only): keep the
+hand-rolled board rather than a graph library. A canvas holds up to 60 boxes with one line
+in each; zoom and pan are one CSS `transform`; boxes hold real form controls, which
+libraries that draw on a `<canvas>` (LiteGraph) cannot; and the others need a framework or
+a bundler (React Flow, Rete) or own their own data model (Drawflow). The studio has no
+build step.
+
+| File | What it holds (no page code; Node tests import each) |
 |------|---------------|
-| `canvas.js` | the graph: add, connect, remove, `takersOf`, `addConnected`, groups, picks |
-| `canvas-view.js` | zoom and pan: `zoomAt`, `panBy`, `fitAll`, `screenToBoard` |
-| `canvas-select.js` | `nodesInRect`, selection toggles |
-| `canvas-history.js` | undo and redo; a drag or a typed word is one step |
-| `canvas-clip.js` | copy and paste with new ids, inner lines kept |
-| `canvas-layout.js` | `tidy`: a left-to-right tree layout |
-| `canvas-keys.js` | the shortcuts table; the shortcuts panel is drawn from it |
-| `canvas-settings.js` | each box's settings, one table checked against the server's list |
-
-`canvas-pane.js` only turns events into actions and patches boxes by id, not rebuilding
-them all on each change.
-
-**Server.** A box's **Run** and **Run from here** are `plan_from(graph, node, mode)`. It
-starts from what the box's parents made last time (their picked file), so the runner is
-unchanged. A Picture asked for 2–4 options ends its stage like a Split. The boxes after it
-wait until you pick one, and picking runs from there. The 3D model and the split get their
-own settings, passed to the routes that already check them. The format goes to
-`schema: 2`. Schema 1 still reads; the new parts are only additions: `groups`, `picked`,
-`view`, and typed settings.
-
-**Order.** One small commit each, test first:
-
-1. patch boxes by id; fix the fonts and the narrow width
-2. zoom and pan
-3. selection
-4. undo and redo
-5. add a box: double-click, Tab, the + menu, a line dropped on empty board
-6. copy and paste, connect selected, tidy, hide lines
-7. per-box run on the server
-8. per-box Run buttons
-9. box settings
-10. picture options
-11. agent tools
-12. groups and the shortcuts panel
-13. new box types
-
-**New boxes, and what backs them:**
-
-| Box | Backed by |
-|-----|-----------|
-| From Library (picture or model) | a Picture's `file`; a model root seeds `made["model"]` |
-| Front + back | the `back` step (`/api/image/back`); only Pixal3D uses the back |
-| Parts by name | Split into props with names (`props_api.normalise_names`) |
-| Cut out background | `image_to_3dlab.matte.cut_out`; needs a small job route first |
-| New look | skins (`/api/skins`); not one-shot, it asks you to approve pictures |
-
-No local engine yet, so these are designs only and nothing is downloaded. The user picks
-the backend, the route and the size first. The licences and sizes below have not been
-checked against each project's own page yet; check them before choosing.
-
-| Box | Candidates |
-|-----|------------|
-| Quad remesh | Blender's QuadriFlow (ships with Blender), Instant Meshes (BSD-3, a few MB) |
-| UV unwrap | `scripts/blender_reunwrap_bake.py` and xatlas, both already here |
-| Re-texture | Hunyuan3D-Paint 2.1 (several GB; **not licensed in the EU, UK or South Korea**), MV-Adapter (Apache-2.0, about 7 GB) |
-| Split a model into parts | Blender's loose parts (no weights), PartField (**non-commercial**), Hunyuan3D-Part (**same region limits**) |
-
-"Remove lighting" is not something any engine here says it does, so it stays off the
-3D model box until one does.
-
-**Agents.** `list_canvases`, `get_canvas`, `save_canvas`, `edit_canvas` (a list of add,
-remove, connect, set and pick operations), `check_canvas`, `run_canvas`, `canvas_status`,
-`cancel_canvas_run` and `box_types`. A save checks the canvas has not changed since it was
-read, so the studio tab and an agent don't overwrite each other.
-
-**In-studio chat: a proposal, not built.** A side panel sends your words and the canvas to
-a model and gets `edit_canvas` operations back. The model is yours: a local server or a key
-you paste; the studio ships none. "Ask first" shows the changes to accept; "Go ahead" applies
-and runs them. An "Instructions" box is the same call for one box. Same operations as the
-agent tools, so one code path and one set of tests.
+| `canvas.js` | the graph: boxes, lines, which boxes take which, frames, picks, what a box shows |
+| `canvas-view.js` | zoom and pan, fit, wheel or pinch |
+| `canvas-select.js` | choosing boxes |
+| `canvas-history.js` | undo and redo |
+| `canvas-clip.js` | copy and paste |
+| `canvas-layout.js` | tidy |
+| `canvas-keys.js` | the shortcuts |
+| `canvas-settings.js` | each box's settings |
+| `canvas-pane.js` | the page: events in, boxes patched by id |

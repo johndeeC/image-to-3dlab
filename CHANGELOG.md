@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each get rigged. Each straight line of boxes runs as one ordinary run, in the Library as
   usual, and the run carries on with the tab closed. Boards are saved in `output/.graphs.json`.
   See `docs/canvas.md`.
+- Canvas: zoom (wheel, pinch, Cmd +/−, Fit) and pan (Space-drag, two fingers, the Hand); add a
+  box by double-click, Tab or **+ Add**, or drop a line on empty board to pick the next box from
+  only those that fit; choose, copy, paste, delete, undo, join (Cmd L), frame (Cmd G) and tidy
+  (Alt Shift F), with **?** listing every shortcut.
+- Canvas: run one box, or from a box down, from what the boxes above it made. A Picture can
+  draw 2–4 options; pick one and carry on. Every box keeps Create's choices under **More
+  settings**, engines named by what they do.
+- Canvas boxes: **Your 3D model** (start from one in the Library), **Front + back**, a picture
+  uploaded or picked from the Library, and prop names on **Split into props** (**Parts by
+  name**).
+- Agents can build and run canvases: `box_types`, `list_canvases`, `get_canvas`, `edit_canvas`,
+  `save_canvas`, `check_canvas`, `run_canvas`, `canvas_status`, `cancel_canvas_run`.
 
 ## [0.5.11] - 2026-11-17
 
