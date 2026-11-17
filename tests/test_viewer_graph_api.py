@@ -136,7 +136,7 @@ def test_a_loop_is_refused():
 def test_a_per_prop_stage_runs_once_for_each_prop_of_each_split():
     stage = ga.plan_graph(SHEET, RECIPES).stages[1]
     props = {"props/a": ["props/a/finished/sword/sword_LOD0.glb", "props/a/finished/axe/axe_LOD0.glb"]}
-    runs = ga.instances(stage, [{"picture": "p.png", "model": "m.glb", "split": "props/a"}], props.get)
+    runs = ga.instances(stage, [{"made": {"picture": "p.png", "model": "m.glb", "split": "props/a"}, "label": None}], props.get)
     assert [r["made"] for r in runs] == [{"finished": "props/a/finished/sword/sword_LOD0.glb"},
                                          {"finished": "props/a/finished/axe/axe_LOD0.glb"}]
     assert [r["label"] for r in runs] == ["sword", "axe"]
@@ -145,7 +145,7 @@ def test_a_per_prop_stage_runs_once_for_each_prop_of_each_split():
 def test_a_branch_starts_from_everything_its_parent_made():
     plan = ga.plan_graph(graph([node("a", "picture", prompt="a fox", goal="prop"), node("b", "model", engine="sf3d"),
                                 node("c", "finish"), node("d", "rig")], [("a", "b"), ("b", "c"), ("b", "d")]), RECIPES)
-    runs = ga.instances(plan.stages[1], [{"picture": "p.png", "model": "m.glb"}], lambda _: [])
+    runs = ga.instances(plan.stages[1], [{"made": {"picture": "p.png", "model": "m.glb"}, "label": None}], lambda _: [])
     assert runs == [{"made": {"picture": "p.png", "model": "m.glb"}, "label": None}]
     first = ga.instances(plan.stages[0], [], lambda _: [])
     assert first == [{"made": {}, "label": None}]
@@ -171,6 +171,7 @@ class FakeJobs:
     def __init__(self, output: Path, fail: str | None = None):
         self.output, self.fail = output, fail
         self.started: list[str] = []
+        self.parts: list[str] = []
         self.jobs: dict[str, str] = {}
 
     def __call__(self, method, path, body, content_type, headers=None):
@@ -178,8 +179,11 @@ class FakeJobs:
             return 200, {"ok": True}
         if method == "POST":
             kind = {"/api/image": "picture", "/api/generate": "model", "/api/finish": "finished",
-                    "/api/animate/rig": "rigged", "/api/animate/play": "animated", "/api/props": "split"}[path]
+                    "/api/animate/rig": "rigged", "/api/animate/play": "animated", "/api/props": "split",
+                    "/api/image/part": "part"}[path]
             self.started.append(kind)
+            if kind == "part":
+                self.parts.append(json.loads(body)["part"])
             job_id = f"job-{len(self.started)}"
             self.jobs[job_id] = kind
             return 202, {"job_id": job_id, "status_url": f"/api/x/{job_id}/status"}
@@ -187,7 +191,9 @@ class FakeJobs:
         if kind == self.fail:
             return 200, {"status": "error", "error": "it broke", "log_tail": ""}
         n = len(self.started)
-        made = {"picture": "images/p.png", "model": f"sf3d/m{n}/model.glb", "finished": f"finish/f{n}.glb",
+        slug = ga.slugged(self.parts[-1]) if self.parts else ""
+        made = {"picture": f"images/{slug}__part__{n}/{slug}__part__{n}.png" if kind == "part" else "images/p.png",
+                "model": f"sf3d/m{n}/model.glb", "finished": f"finish/f{n}.glb",
                 "rigged": f"animate/r{n}/rigged.glb", "animated": f"animate/r{n}/walk.glb"}
         event = {"phase": "done", "message": "done", "overall_pct": 100}
         if kind == "split":
@@ -197,12 +203,13 @@ class FakeJobs:
                 (folder / "finished" / name / f"{name}_LOD0.glb").write_bytes(b"x")
             event["directory"] = folder.name
         else:
-            (self.output / made[kind]).parent.mkdir(parents=True, exist_ok=True)
-            (self.output / made[kind]).write_bytes(b"x")
+            file = made["picture" if kind == "part" else kind]
+            (self.output / file).parent.mkdir(parents=True, exist_ok=True)
+            (self.output / file).write_bytes(b"x")
         if kind in ("finished", "rigged", "animated"):
             event["path"] = made[kind]
         return 200, {"status": "done", "last_event": event, "log_tail": "ok",
-                     "picture": made["picture"] if kind == "picture" else None,
+                     "picture": made["picture"] if kind in ("picture", "part") else None,
                      "model": made["model"] if kind == "model" else None}
 
 
@@ -628,3 +635,67 @@ def test_one_prop_dragged_onto_a_line_below_a_split_runs_for_that_prop_alone(tmp
     run = runner.start(g, background=False)           # Run all splits again: the sword is still the sword
     assert jobs.started == ["picture", "model", "split", "rigged"]
     assert [r["label"] for r in run.to_dict()["results"]["s4"]] == ["sword"]
+
+
+# ---------------------------------------------------------------- Pick out parts (element extraction)
+PARTS = graph(
+    [node("p", "picture", file="images/knight.png", goal="character"), node("x", "parts", names="helmet, left hand,\nhelmet"),
+     node("m", "model", engine="sf3d"), node("f", "finish")],
+    [("p", "x"), ("x", "m"), ("m", "f")], name="Knight parts")
+
+
+def test_pick_out_parts_runs_once_per_part_and_each_part_carries_on_alone():
+    plan = ga.plan_graph(PARTS, RECIPES)
+    given, parts, below = plan.stages
+    assert given.steps == [] and given.made == {"picture": "images/knight.png"}
+    assert parts.steps == ["part"] and parts.parts == ["helmet", "left hand"] and parts.after == given.id
+    assert below.steps == ["model", "finished"] and below.after == parts.id
+    assert ga.describe_plan(plan) == ["Starts from Picture you gave", "Run 1, once for each of 2 parts: Pick out parts (helmet, left hand)",
+                                      "Run 2, once for each part from run 1: 3D model → Finish"]
+    with pytest.raises(ValueError, match="name the parts"):
+        ga.plan_graph(graph([node("p", "picture", prompt="x"), node("x", "parts")], [("p", "x")]), RECIPES)
+
+
+def test_a_parts_run_makes_each_part_then_a_3d_model_of_each(tmp_path):
+    runner, jobs = _graph_runner(tmp_path)
+    run = runner.start(PARTS, background=False)
+    assert run.status == "done"
+    assert jobs.started == ["part", "part", "model", "finished", "model", "finished"]
+    assert jobs.parts == ["helmet", "left hand"]
+    results = run.to_dict()["results"]
+    assert [(r["label"], r["file"].split("/")[1]) for r in results["x"]] == [("helmet", "helmet__part__1"), ("left hand", "left-hand__part__2")]
+    assert [r["label"] for r in results["m"]] == ["helmet", "left hand"]
+    assert results["p"] == [{"status": "done", "file": "images/knight.png"}]
+
+
+def test_one_part_dragged_onto_the_line_carries_on_alone(tmp_path):
+    g = json.loads(json.dumps(PARTS))
+    g["edges"][1]["file"] = "images/left-hand__part__old/left-hand__part__old.png"
+    runner, jobs = _graph_runner(tmp_path)
+    run = runner.start(g, background=False)                      # Run all: still only the left hand goes on
+    assert jobs.started == ["part", "part", "model", "finished"]
+    assert [r["label"] for r in run.to_dict()["results"]["m"]] == ["left hand"]
+    results = {"x": [{"status": "done", "file": "images/helmet__part__1/helmet__part__1.png", "label": "helmet"},
+                     {"status": "done", "file": "images/left-hand__part__2/left-hand__part__2.png", "label": "left hand"}]}
+    seeds = ga.plan_from(g, "m", "only", results, RECIPES).stages[0].seeds
+    assert seeds == [{"made": {"picture": "images/left-hand__part__2/left-hand__part__2.png"}, "label": "left hand"}]
+
+
+def test_the_parts_box_run_on_its_own_starts_from_its_picture():
+    plan = ga.plan_from(PARTS, "x", "only", {}, RECIPES)
+    stage = plan.stages[0]
+    assert stage.steps == ["part"] and stage.seeds == [{"made": {"picture": "images/knight.png"}, "label": None}]
+    assert [j["part"] for j in ga.instances(stage, [], lambda _: [])] == ["helmet", "left hand"]
+
+
+def test_a_part_step_asks_for_the_part_by_name_and_hands_its_picture_on(tmp_path):
+    jobs = FakeJobs(tmp_path)
+    sent = []
+    runner = aa.ChainRunner(tmp_path, lambda *a, **k: (sent.append(a), jobs(*a, **k))[1], poll=0, sleep=lambda s: None)
+    chain = runner.submit(aa.Chain(title="x", steps=["part", "model"], engine="sf3d", part_name="left hand",
+                                   picture_settings={"seed": 9}, made={"picture": "images/knight.png"}), background=False)
+    asked = json.loads(next(a[2] for a in sent if a[1] == "/api/image/part"))
+    assert asked == {"picture": "images/knight.png", "part": "left hand", "prefer_engine": None, "seed": 9}
+    assert chain.made["picture"] == "images/left-hand__part__1/left-hand__part__1.png"   # the 3D model is made from the part
+    refused = runner.submit(aa.Chain(title="x", steps=["part"], made={}), background=False)
+    assert refused.status == "error" and "needs a picture" in refused.error     # nothing to pick parts from

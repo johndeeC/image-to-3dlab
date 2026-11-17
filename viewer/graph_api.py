@@ -40,19 +40,23 @@ _LOCK = threading.Lock()     # the server answers on threads; one write at a tim
 
 # What each box is called, what it takes in, what it makes, and its runner step.
 # viewer/studio/canvas.js has the same table; tests/test_studio_canvas.py checks they agree.
-LABELS = {"picture": "Picture", "asset": "Your 3D model", "back": "Front + back", "model": "3D model",
+LABELS = {"picture": "Picture", "asset": "Your 3D model", "back": "Front + back", "parts": "Pick out parts", "model": "3D model",
           "split": "Split into props", "finish": "Finish", "rig": "Rig", "move": "Move", "export": "Export"}
-TAKES = {"picture": (), "asset": (), "back": ("picture",), "model": ("picture", "pair"), "split": ("model",),
+TAKES = {"picture": (), "asset": (), "back": ("picture",), "parts": ("picture",), "model": ("picture", "pair"), "split": ("model",),
          "finish": ("model",), "rig": ("model", "finished", "props"), "move": ("rigged",),
          "export": ("model", "finished", "rigged", "animated", "props")}
-MAKES = {"picture": "picture", "asset": "model", "back": "pair", "model": "model", "split": "props",
+MAKES = {"picture": "picture", "asset": "model", "back": "pair", "parts": "picture", "model": "model", "split": "props",
          "finish": "finished", "rig": "rigged", "move": "animated", "export": None}
-STEP = {"picture": "picture", "back": "back", "model": "model", "split": "split", "finish": "finished",
+STEP = {"picture": "picture", "back": "back", "parts": "part", "model": "model", "split": "split", "finish": "finished",
         "rig": "rigged", "move": "animated"}
 # the runner's `made` key each box's file lands under (split: the folder its props went to)
-MADE_KEY = {"picture": "picture", "asset": "model", "back": "back", "model": "model", "split": "split",
+MADE_KEY = {"picture": "picture", "asset": "model", "back": "back", "parts": "picture", "model": "model", "split": "split",
             "finish": "finished", "rig": "rigged", "move": "animated"}
 ROOTS = ("picture", "asset")
+# Boxes whose results all carry on, each its own run below: a Split's props, a Pick out parts' parts.
+# The key each one's result lands under in the runs below it.
+FANS = {"split": "finished", "parts": "picture"}
+MAX_PARTS = 12
 GOALS = {"character": "a character", "prop": "one prop", "set": "a sheet of nine", "picture": "just a picture"}
 TAKE_WORDS = {"picture": "a picture", "pair": "a front and back picture", "model": "a 3D model",
               "finished": "a game-ready model", "rigged": "a rigged model", "animated": "a moving model", "props": "props"}
@@ -65,6 +69,7 @@ SETTINGS: dict[str, dict[str, tuple]] = {
                 "count": ("int", 1, 4), "shape": ("choice", *SHAPES)},
     "asset": {"file": ("path",), "goal": ("choice", "character", "prop")},
     "back": {},
+    "parts": {"names": ("text",)},
     "model": {"engine": ("text",)},
     "split": {"names": ("text",)},
     "finish": {"detail": ("choice", *FINISH_DETAILS), "pixel_match": ("bool",),
@@ -274,6 +279,8 @@ class Stage:
     after: str | None = None     # the stage whose results this one starts from
     each_prop: bool = False      # run once for each prop the stage before split off
     only_prop: str | None = None # ... or for just this one, by name (one prop dragged onto the line)
+    parts: list[str] = field(default_factory=list)   # a Pick out parts box: one run per part, by name
+    only_part: str | None = None # below Pick out parts: just this part (one dragged onto the line)
     want: str = "character"
     prompt: str | None = None
     picture_engine: str | None = None
@@ -291,7 +298,8 @@ class Stage:
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "nodes": self.nodes, "steps": self.steps, "after": self.after,
-                "each_prop": self.each_prop, "count": self.count, "waits_for_pick": self.waits_for_pick}
+                "each_prop": self.each_prop, "count": self.count, "waits_for_pick": self.waits_for_pick,
+                "parts": self.parts}
 
 
 @dataclass
@@ -370,6 +378,12 @@ def _check(raw: Any, keep: set[str] | None = None, above: set[str] = frozenset()
             raise ValueError("3D model: pick an engine.")
         if kind == "move" and not s.get("move"):
             raise ValueError("Move: pick a move.")
+        if kind == "parts":
+            names = part_names(s.get("names", ""))
+            if not names:
+                raise ValueError("Pick out parts: name the parts, one per line or with commas (head, hair, hands).")
+            if len(names) > MAX_PARTS:
+                raise ValueError(f"Pick out parts: up to {MAX_PARTS} parts at a time.")
     root_of: dict[str, str] = {}
     for i in nodes:
         seen, at = set(), i
@@ -442,6 +456,8 @@ class _Planner:
         carried = g.picks.get((g.parent.get(start), start))
         if each_prop and carried:
             stage.only_prop = prop_name(carried)
+        if carried and g.nodes.get(g.parent.get(start), {}).get("type") == "parts":
+            stage.only_part = part_slug_of(carried)
         if after is not None and after.count > 1:
             stage.waits_for_pick = True
         self.stages.append(stage)
@@ -464,6 +480,8 @@ class _Planner:
                 stage.count = s.get("count", 1)
             elif kind == "model":
                 stage.engine = s["engine"]
+            elif kind == "parts":
+                stage.parts = part_names(s["names"])
             elif kind == "split":
                 stage.want = "set"
                 if s.get("names"):
@@ -476,8 +494,8 @@ class _Planner:
                 stage.first_move = s["move"]
                 stage.move_settings = {k: s[k] for k in ("speed", "in_place") if k in s}
             nexts = self.step_children(at)
-            if single or kind == "split" or stage.count > 1 or len(nexts) != 1:
-                break
+            if single or kind in FANS or stage.count > 1 or len(nexts) != 1 or g.nodes[nexts[0]]["type"] == "parts":
+                break     # a Pick out parts box runs once per part: it starts a stage of its own
             at = nexts[0]
         if not single:
             for c in self.step_children(at):
@@ -540,7 +558,7 @@ def _chosen(g: _Graph, node_id: str, results: dict[str, list[dict[str, Any]]], c
 def _seeds(g: _Graph, path: list[str], results: dict[str, list[dict[str, Any]]], below: str) -> list[dict[str, Any]]:
     """What a run of box `below` begins from, given `path` (the boxes above it, first box first): one
     run, or after a Split, one per prop that came through every box since."""
-    split_at = max((i for i, b in enumerate(path) if g.nodes[b]["type"] == "split"), default=None)
+    split_at = max((i for i, b in enumerate(path) if g.nodes[b]["type"] in FANS), default=None)
     if split_at is None:
         made = {}
         for i, b in enumerate(path):
@@ -548,10 +566,12 @@ def _seeds(g: _Graph, path: list[str], results: dict[str, list[dict[str, Any]]],
         return [{"made": made, "label": None}]
     seeds = []
     after_split = path[split_at + 1] if split_at + 1 < len(path) else below
-    carried = g.picks.get((path[split_at], after_split))   # one prop dragged onto the line below the split
+    fan = g.nodes[path[split_at]]["type"]
+    name_of = prop_name if fan == "split" else part_slug_of
+    carried = g.picks.get((path[split_at], after_split))   # one prop or part dragged onto the line below
     for prop in [r for r in results.get(path[split_at], []) if r.get("status") == "done" and r.get("file")
-                 and (not carried or prop_name(r["file"]) == prop_name(carried))]:
-        made, label = {"finished": prop["file"]}, prop.get("label")
+                 and (not carried or name_of(r["file"]) == name_of(carried))]:
+        made, label = {FANS[fan]: prop["file"]}, prop.get("label")
         for b in path[split_at + 1:]:
             hit = next((r for r in results.get(b, []) if r.get("label") == label and r.get("status") == "done"), None)
             if hit is None:
@@ -587,6 +607,8 @@ def plan_from(raw: Any, node_id: str, mode: str, results: dict[str, list[dict[st
         return planner.plan()
     if g.nodes[node_id]["type"] in ROOTS:
         planner.walk(node_id, None, False, single=mode == "only")
+    elif g.nodes[node_id]["type"] == "parts":   # from its picture, once per part
+        planner.walk(node_id, None, False, seeds=_seeds(g, up, results, node_id), single=mode == "only")
     else:
         planner.walk(node_id, None, False, seeds=_seeds(g, up, results, node_id), single=mode == "only")
     if mode == "only":
@@ -595,46 +617,84 @@ def plan_from(raw: Any, node_id: str, mode: str, results: dict[str, list[dict[st
 
 
 def describe_plan(plan: Plan) -> list[str]:
-    """The plan in plain lines, for the canvas to show before it runs."""
-    index = {s.id: n for n, s in enumerate(plan.stages, start=1)}
+    """The plan in plain lines, for the canvas to show before it runs. Only stages that make
+    something are runs; a picture or model you gave is where they start."""
+    by_id = {s.id: s for s in plan.stages}
+    index, n = {}, 0
+    for stage in plan.stages:
+        if stage.steps:
+            n += 1
+            index[stage.id] = n
     lines = []
-    for n, stage in enumerate(plan.stages, start=1):
+    for stage in plan.stages:
         names = " → ".join(plan.labels[i] for i in stage.nodes)
+        if not stage.steps:
+            lines.append(f"Starts from {names} you gave")
+            continue
+        run, after = f"Run {index[stage.id]}", by_id.get(stage.after)
+        since = f" from run {index[after.id]}" if after and after.id in index else ""
         if stage.count > 1:
             names += f" ({stage.count} options to pick from)"
-        if stage.seeds and len(stage.seeds) > 1:
-            lines.append(f"Run {n}, once for each of {len(stage.seeds)} props: {names}")
+        if stage.parts:
+            lines.append(f"{run}, once for each of {len(stage.parts)} parts: {names} ({', '.join(stage.parts)})")
+        elif stage.seeds and len(stage.seeds) > 1:
+            lines.append(f"{run}, once for each of {len(stage.seeds)} props: {names}")
         elif stage.waits_for_pick:
-            lines.append(f"Run {n}, once you pick a picture from run {index[stage.after]}: {names}")
+            lines.append(f"{run}, once you pick a picture{since}: {names}")
         elif stage.each_prop:
-            lines.append(f"Run {n}, once for each prop from run {index[stage.after]}: {names}")
-        elif stage.after:
-            lines.append(f"Run {n}, from what run {index[stage.after]} made: {names}")
+            lines.append(f"{run}, once for each prop{since}: {names}")
+        elif after and after.parts:
+            lines.append(f"{run}, once for each part{since}: {names}")
+        elif since:
+            lines.append(f"{run}, from what run {index[after.id]} made: {names}")
         else:
-            lines.append(f"Run {n}: {names}")
+            lines.append(f"{run}: {names}")
     return lines
 
 
-def instances(stage: Stage, parent_made: list[dict[str, str]], props_of: Callable[[str], list[str] | None]) -> list[dict[str, Any]]:
+def instances(stage: Stage, parent_runs: list[dict[str, Any]], props_of: Callable[[str], list[str] | None]) -> list[dict[str, Any]]:
     """The runs one stage makes: once for a first stage (or once per option a Picture is asked
-    for, or once per seed it was given), once per run of the stage before, and for a stage after
-    a Split, once per prop that split made. Each starts from `made`."""
+    for, or once per seed it was given), once per run of the stage before (keeping its label), for
+    a stage after a Split once per prop that split made, and for Pick out parts once per part.
+    Each starts from `made`. `parent_runs` are the stage before's runs: {"made", "label"}."""
     if stage.seeds is not None:
+        if stage.parts:   # one Pick out parts box run on its own: each part from the picture it was given
+            return [{"made": dict(s["made"]), "label": name, "part": name} for s in stage.seeds for name in stage.parts]
         return [{"made": dict(s["made"]), "label": s.get("label")} for s in stage.seeds]
     if stage.after is None:
         if stage.count > 1:
             return [{"made": dict(stage.made), "label": f"Option {i}"} for i in range(1, stage.count + 1)]
         return [{"made": dict(stage.made), "label": None}]
     runs = []
-    for made in parent_made:
-        if stage.each_prop:
+    for parent in parent_runs:
+        made, label = parent["made"], parent.get("label")
+        if stage.parts:
+            runs += [{"made": dict(made), "label": name, "part": name} for name in stage.parts]
+        elif stage.each_prop:
             for prop in props_of(made.get("split", "")) or []:
                 if stage.only_prop and prop_name(prop) != stage.only_prop:
                     continue
                 runs.append({"made": {"finished": prop}, "label": PurePosixPath(prop).parent.name})
+        elif stage.only_part and slugged(label or "") != stage.only_part:
+            continue   # one part dragged onto the line: the others stop here
         else:
-            runs.append({"made": dict(made), "label": None})
+            runs.append({"made": dict(made), "label": label})
     return runs
+
+
+def part_names(text: Any) -> list[str]:
+    """The parts a Pick out parts box asks for: one per line or comma, each once."""
+    names = [" ".join(p.split())[:60] for line in str(text or "").splitlines() for p in line.split(",")]
+    return list(dict.fromkeys(n for n in names if n))
+
+
+def slugged(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(name).lower()).strip("-")
+
+
+def part_slug_of(file: str) -> str:
+    """The part a picked-out picture shows, from its folder (`left-hand__part__<time>/...`)."""
+    return PurePosixPath(str(file)).parent.name.split("__part__")[0]
 
 
 def prop_name(file: str) -> str:
@@ -737,7 +797,7 @@ class GraphRunner:
         return True
 
     def _run(self, run: GraphRun, client: str | None, before_stage) -> None:
-        made_by: dict[str, list[dict[str, str]]] = {}   # stage id -> what each of its runs made
+        made_by: dict[str, list[dict[str, Any]]] = {}   # stage id -> its runs: {"made", "label"}
         waiting: set[str] = set()                        # stages that wait for a picture to be picked
         failed = False
         try:
@@ -758,6 +818,12 @@ class GraphRunner:
                 jobs = instances(stage, made_by.get(stage.after, []), lambda d: split_props(self.output, d))
                 if not jobs:
                     self._mark(run, stage, "skipped")   # a split that made no props
+                if not stage.steps:   # nothing to make: a picture or model you gave, handed on as it is
+                    for job in jobs:
+                        made_by[stage.id].append({"made": job["made"], "label": job["label"]})
+                        for node_id in stage.nodes:
+                            self._add(run, node_id, {"status": "done", "file": job["made"].get(MADE_KEY[run.plan.types[node_id]])})
+                    continue
                 for job in jobs:
                     if run.cancel_requested:
                         break
@@ -766,7 +832,7 @@ class GraphRunner:
                         break
                     self._results(run, stage, chain, job["label"])
                     if chain.status == "done":
-                        made_by[stage.id].append({k: v for k, v in chain.made.items() if v})
+                        made_by[stage.id].append({"made": {k: v for k, v in chain.made.items() if v}, "label": job["label"]})
                     else:
                         failed = True
                         run.error = run.error or chain.error
@@ -783,12 +849,14 @@ class GraphRunner:
         while True:
             if run.cancel_requested:
                 return None
-            picture = {**stage.picture_settings, "seed": self.random()} if "picture" in stage.steps else {}
+            picture = ({**stage.picture_settings, "seed": self.random()} if "picture" in stage.steps
+                       else {"seed": self.random()} if "part" in stage.steps else {})
             chain = Chain(title=title, steps=list(stage.steps), want=stage.want, prompt=stage.prompt,
                           engine=stage.engine, first_move=stage.first_move, picture_engine=stage.picture_engine,
                           picture_settings=picture, finish_settings=dict(stage.finish_settings),
                           split_settings=dict(stage.split_settings), rig_settings=dict(stage.rig_settings),
                           move_settings=dict(stage.move_settings), made=dict(job["made"]), client=client,
+                          part_name=job.get("part"),
                           model_seed=self.random() if "model" in stage.steps else None)
             run.current_chain = chain.id
             try:

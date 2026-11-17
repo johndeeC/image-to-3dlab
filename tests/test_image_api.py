@@ -898,3 +898,30 @@ def test_two_swaps_in_one_second_keep_both_old_pictures(tmp_path):
     kept = sorted(p.read_bytes() for p in tmp_path.glob("orc__back_prev_*.png"))
     assert kept == [b"first", b"second"] and final.read_bytes() == b"third"
     assert len(api.back_versions(final)) == 2
+
+
+# ---------------------------------------------------------------- Pick out parts (the canvas's element extraction)
+def test_a_part_is_asked_for_by_name_and_an_empty_name_is_refused():
+    prompt = api.part_prompt("  left   hand ")
+    assert prompt.startswith("Only the left hand from the reference image") and "the whole left hand" in prompt
+    with pytest.raises(ValueError, match="name the part"):
+        api.part_prompt("   ")
+
+
+def test_each_part_lands_in_its_own_picture_folder_the_library_lists(tmp_path):
+    first = api.part_output(tmp_path, "Left hand!", "20261116-210000")
+    assert first == tmp_path / "left-hand__part__20261116-210000" / "left-hand__part__20261116-210000.png"
+    first.parent.mkdir()
+    assert api.part_output(tmp_path, "Left hand!", "20261116-210000").parent.name == "left-hand__part__20261116-210000-2"
+
+
+def test_a_part_job_redraws_the_picture_it_was_given(tmp_path):
+    from PIL import Image
+
+    source = tmp_path / "knight.png"
+    Image.new("RGB", (64, 64)).save(source)
+    manager = api.ImageJobManager(output_root=tmp_path / "images")
+    job = api.start_part(source, "helmet", seed=5, manager=manager, background=False)
+    assert job.reference == source and job.mode == "edit (part)" and job.instruction == "helmet"
+    assert job.output_path.parent.name.startswith("helmet__part__") and job.settings["seed"] == 5
+    assert "Only the helmet" in job.prompt

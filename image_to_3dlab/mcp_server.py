@@ -56,6 +56,7 @@ STUDIO_ONLY = {
     "api/kits/*/swap": "which try a kit uses is the user's pick, in the kit pane",
     "api/kits/*/name": "renaming is the user's choice",
     "api/kits/*/delete": "deleting a kit is the user's call, made in the studio",
+    "api/image/part": "drawn by a canvas's Pick out parts box; agents add that box with edit_canvas",
     "api/graphs/upload": "a person drops a picture on a Picture box; agents give image_path to create",
     "api/graphs/*/delete": "deleting a canvas is the user's call, made in the studio",
     "api/skins/*/discard": "deleting a skin is the user's call, made in the studio",

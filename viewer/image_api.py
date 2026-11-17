@@ -1032,6 +1032,50 @@ def start_back(front: Path, seed: int = 3, engine: PictureEngine = QWEN,
     return job
 
 
+# Pick out parts (the canvas's element extraction): the engine that draws a back from a front
+# redraws one named part of a picture on its own, so each part can become its own 3D model.
+PART_PROMPT = ("Only the {part} from the reference image, shown on its own: the whole {part}, centred, nothing "
+               "else in the picture. Keep its exact design, shape, colours and materials, in the same art style. "
+               "Plain light grey background, soft even studio lighting, no shadow, no text.")
+PART_LIMIT = 60
+
+
+def part_prompt(part: str) -> str:
+    name = " ".join(str(part or "").split())[:PART_LIMIT]
+    if not name:
+        raise ValueError("name the part to pick out (head, hair, left hand...)")
+    return PART_PROMPT.format(part=name)
+
+
+def part_output(output_root: Path, part: str, stamp: str | None = None) -> Path:
+    """Where a picked-out part lands: its own picture folder, so the Library lists it like any
+    other picture, named by the part (`left-hand__part__<time>/left-hand__part__<time>.png`)."""
+    name = f"{slug(part, 30)}__part__{stamp or time.strftime('%Y%m%d-%H%M%S')}"
+    path = output_root / name / f"{name}.png"
+    suffix = 2
+    while path.parent.exists():
+        path = output_root / f"{name}-{suffix}" / f"{name}-{suffix}.png"
+        suffix += 1
+    return path
+
+
+def start_part(picture: Path, part: str, seed: int = 7, engine: PictureEngine = QWEN,
+               manager: ImageJobManager | None = None, background: bool = True) -> ImageJob:
+    """Redraw one part of `picture` on its own (it is the reference), into its own folder."""
+    from PIL import Image
+
+    manager = manager or MANAGER
+    with Image.open(picture) as opened:   # a crafted file is refused before the engine reads it
+        check_picture_size(opened)
+    job = manager.create(part_prompt(part), clean_settings({"seed": seed}, engine),
+                         output_path=part_output(manager.output_root, part), reference=picture,
+                         mode="edit (part)", engine=engine)
+    job.instruction = " ".join(str(part).split())[:PART_LIMIT]
+    if background:
+        threading.Thread(target=run_job, args=(job, manager), daemon=True).start()
+    return job
+
+
 def start_edit(reference: Path, output_path: Path, prompt: str, seed: int,
                mode: str = "edit (skin)") -> ImageJob:
     """Qwen redraws `reference` as `prompt` asks, into `output_path` (a skin's picture try).

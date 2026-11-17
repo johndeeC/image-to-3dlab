@@ -25,11 +25,12 @@ from usage_api import CLIENT_HEADER
 HISTORY_NAME = ".activity.jsonl"
 TERMINAL = {"done", "error", "cancelled"}
 STALL_SECONDS = 180
-STEPS = ("picture", "back", "model", "finished", "split", "rigged", "animated")
+STEPS = ("picture", "back", "model", "finished", "split", "rigged", "animated", "part")
 LABELS = {"picture": "Picture", "back": "Back picture", "model": "3D model", "finished": "Finish",
-          "split": "Split into props", "rigged": "Rig", "animated": "Animate", "skin": "Skin"}
+          "split": "Split into props", "rigged": "Rig", "animated": "Animate", "skin": "Skin",
+          "part": "Pick out a part"}
 KIND = {"picture": "image", "back": "image", "model": "generate", "finished": "finish", "split": "props",
-        "rigged": "animate", "animated": "animate"}
+        "rigged": "animate", "animated": "animate", "part": "image"}
 # The Finish choices a plan may carry (the same ones the Steps panel's Finish sends).
 MOVE_KEYS = ("speed", "arm_spread", "in_place")
 SPLIT_KEYS = ("names",)       # what a plan may tell the props job (props_api.normalise_names checks them)
@@ -102,6 +103,7 @@ class Chain:
     prompt: str | None = None
     engine: str | None = None
     first_move: str | None = None
+    part_name: str | None = None                                     # the part a "part" step picks out (the canvas)
     picture_settings: dict[str, Any] = field(default_factory=dict)  # size, steps, seed (the image job checks them)
     picture_engine: str | None = None                                # "flux" / "flux-light" / "qwen"; None = the default
     back_settings: dict[str, Any] = field(default_factory=dict)      # a back redraw: seed, what to change
@@ -313,6 +315,9 @@ class ChainRunner:
             chain.made["picture"] = final.get("picture")
         elif step == "back":
             chain.made["back"] = final.get("picture")
+        elif step == "part":
+            # the part is the picture from here on: the 3D model and Finish work from it
+            chain.made["picture"] = final.get("picture")
         elif step == "model":
             chain.made["model"] = final.get("model")
         elif step == "finished":
@@ -401,6 +406,12 @@ class ChainRunner:
             # own choice in back_settings is an ask
             body = {"picture": front, "prefer_engine": chain.picture_engine, **chain.back_settings}
             return kind, self._post("/api/image/back", json.dumps(body).encode(), "application/json")
+        if step == "part":
+            if not chain.made.get("picture") or not chain.part_name:
+                raise ValueError("Picking out a part needs a picture and the part's name")
+            body = {"picture": chain.made["picture"], "part": chain.part_name, "prefer_engine": chain.picture_engine,
+                    **({"seed": chain.picture_settings["seed"]} if "seed" in chain.picture_settings else {})}
+            return kind, self._post("/api/image/part", json.dumps(body).encode(), "application/json")
         if step == "model":
             settings = {"backend": chain.engine} if chain.engine else {}
             if chain.model_seed is not None:
@@ -463,7 +474,8 @@ class ChainRunner:
                   "seconds": round(self.now() - started, 1), "note": note,
                   "made": chain.made.get({"picture": "picture", "back": "back", "model": "model",
                                           "finished": "finished", "rigged": "rigged",
-                                          "animated": "animated", "split": "split"}.get(step, ""), None),
+                                          "animated": "animated", "split": "split",
+                                          "part": "picture"}.get(step, ""), None),
                   "log": str(log or "")[-3000:]}
         append_history(self.output, record)
 

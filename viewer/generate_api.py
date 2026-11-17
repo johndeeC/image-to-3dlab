@@ -3030,6 +3030,9 @@ class Handler(SimpleHTTPRequestHandler):
         if parts == ["api", "image", "back"]:
             self._create_back_job()
             return
+        if parts == ["api", "image", "part"]:
+            self._create_part_job()
+            return
         if parts == ["api", "image", "brush"]:
             self._create_brush_job()
             return
@@ -3147,6 +3150,45 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             job = image_api.start_back(front, seed, engine, instruction)
         except (ValueError, OSError) as exc:      # an unreadable or oversized front
+            self._send_json(422, {"error": str(exc)})
+            return
+        except RuntimeError as exc:
+            self._send_json(409, {"error": str(exc)})
+            return
+        self._send_json(202, {"job_id": job.id, "settings": job.settings,
+                              "events_url": f"/api/image/{job.id}/events",
+                              "status_url": f"/api/image/{job.id}/status"})
+
+    def _create_part_job(self) -> None:
+        """Pick out one part of a picture already in output/: {picture, part, seed?, engine?}. The
+        canvas's Pick out parts box asks once per part name (docs/canvas.md)."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length)) if 0 < length <= 16384 else {}
+            picture = image_api.back_source(OUTPUT_ROOT, str(payload.get("picture", "")))
+            part = str(payload.get("part") or "")
+            image_api.part_prompt(part)   # an empty name is refused before anything is drawn
+            seed = int(payload.get("seed", 7))
+            engine = image_api.choose_engine(str(payload.get("engine") or "") or None, picture, edit=True,
+                                             prefer=str(payload.get("prefer_engine") or "") or None)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        if not image_api.BINARY.exists():
+            self._send_json(503, {"error": "stable-diffusion.cpp is not installed.", "needs_setup": True})
+            return
+        waiting = busy_reason("image")
+        if waiting:
+            self._send_json(409, {"error": waiting})
+            return
+        try:
+            image_api.check_ready(engine, edit=True)
+        except image_api.MissingWeights as exc:
+            self._send_json(503, {"error": str(exc), "needs_setup": True, "missing": exc.missing})
+            return
+        try:
+            job = image_api.start_part(picture, part, seed, engine)
+        except (ValueError, OSError) as exc:
             self._send_json(422, {"error": str(exc)})
             return
         except RuntimeError as exc:
