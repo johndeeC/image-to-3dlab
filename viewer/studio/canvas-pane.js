@@ -172,7 +172,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     }
     for (const note of card.querySelectorAll('[data-note-for]')) {   // what the chosen engine is good for
       const chosen = card.querySelector(`[data-key="${note.dataset.noteFor}"]`)?.value;
-      note.textContent = engineNote(note.dataset.noteFor, chosen);
+      note.textContent = engineNote(note.dataset.noteFor, chosen, node.type, tools);
     }
     for (const box of card.querySelectorAll('[data-file-field]')) {
       const file = node.settings[box.dataset.fileField];

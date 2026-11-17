@@ -32,11 +32,39 @@ const words = (table, id, label) => {
   return plain ? (name ? `${plain} · ${name}` : plain) : name || id;
 };
 
-/** The one line under an engine menu: what the chosen engine is good for, and when to pick it. */
-export function engineNote(key, id) {
-  if (!id) return key === 'picture_engine' ? 'The engine Create would use.' : '';
+/** Boxes that redraw a picture they are given (a part, a side, a fix), rather than draw a new one. */
+export const REDRAWS = ['parts', 'back', 'views'];
+
+/** The picture engine a new picture gets when none is chosen: the suggested one if it is set up,
+ *  else the first set up (image_api.pick_engine). */
+function firstReady(tools) {
+  const ready = (tools?.pictureEngines || []).filter((e) => e.installed !== false);
+  return ready.find((e) => e.suggested) || ready[0] || null;
+}
+
+/** A Drawn by menu. One that redraws lists only the engines that can, and by default keeps the
+ *  engine that drew the picture, so the pictures of one model match. */
+function pictureChoices(tools, redraw) {
+  const ready = (tools?.pictureEngines || []).filter((e) => e.installed !== false && (!redraw || e.can_draw_backs !== false));
+  const first = firstReady(tools);
+  const usual = redraw ? 'Pick for me: the one that drew the picture'
+    : first ? `Pick for me: ${words(PICTURE_ENGINE_WORDS, first.id, first.label)}` : 'Pick for me';
+  return [['', usual], ...ready.map((e) => [e.id, words(PICTURE_ENGINE_WORDS, e.id, e.label)])];
+}
+
+/** The one line under an engine menu: what the chosen engine is good for, and when to pick it.
+ *  With none chosen, which one runs. `type` is the box's; `tools` has the picture engines. */
+export function engineNote(key, id, type = 'picture', tools = null) {
+  if (!id && key === 'picture_engine') {
+    if (REDRAWS.includes(type)) return 'Uses the engine that drew the picture, so they match.';
+    const first = firstReady(tools);
+    return first ? `Uses ${modelName(first.label)}: the first one set up, as Create does.` : 'The engine Create would use.';
+  }
+  if (!id) return '';
   return (key === 'picture_engine' ? PICTURE_ENGINE_WORDS : ENGINE_WORDS)[id]?.[1] || '';
 }
+
+const REDRAWN_BY = ['picture_engine', 'Drawn by', 'Which picture engine redraws it.', 'select', (t) => pictureChoices(t, true), true];
 
 /**
  * Each box's fields: [key, label, hint, kind, choices(tools) or bounds, folded].
@@ -50,17 +78,17 @@ export const FIELDS = {
     ['count', 'Options', 'Draw a few and pick the one to carry on with.', 'select', () => [[1, '1'], [2, '2'], [3, '3'], [4, '4']], true],
     ['shape', 'Shape', 'Square suits most things; tall for characters, wide for vehicles.', 'select',
       () => [['square', 'Square'], ['tall', 'Tall'], ['wide', 'Wide']], true],
-    ['picture_engine', 'Drawn by', 'Which picture engine draws it.', 'select',
-      (t) => [['', 'The usual one'], ...(t.pictureEngines || []).filter((e) => e.installed !== false).map((e) => [e.id, words(PICTURE_ENGINE_WORDS, e.id, e.label)])], true],
+    ['picture_engine', 'Drawn by', 'Which picture engine draws it.', 'select', (t) => pictureChoices(t, false), true],
   ],
   asset: [
     ['file', '3D model', 'A model from your Library.', 'file'],
     ['goal', 'It is', 'Finish stands a character 1.8 m tall and a prop upright.', 'select', () => [['character', 'A character'], ['prop', 'A prop']]],
   ],
-  back: [],
-  views: [],
+  back: [REDRAWN_BY],
+  views: [REDRAWN_BY],
   parts: [
     ['names', 'Parts', 'One per line or with commas: head, hair, left hand. Each is redrawn on its own.', 'area'],
+    REDRAWN_BY,
   ],
   repaint: [
     ['file', 'Paint from', 'A picture of the new look. Leave it empty to paint from the picture the model was made from.', 'file'],

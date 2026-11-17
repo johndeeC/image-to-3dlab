@@ -86,15 +86,15 @@ SETTINGS: dict[str, dict[str, tuple]] = {
     "picture": {"prompt": ("text",), "goal": ("choice", *GOALS), "file": ("path",), "picture_engine": ("text",),
                 "count": ("int", 1, 4), "shape": ("choice", *SHAPES)},
     "asset": {"file": ("path",), "goal": ("choice", "character", "prop")},
-    "back": {},
-    "parts": {"names": ("text",)},
+    "back": {"picture_engine": ("text",)},
+    "parts": {"names": ("text",), "picture_engine": ("text",)},
     "repaint": {"file": ("path",)},
     "cutout": {},
     "remesh": {"faces": ("int", 500, 200_000), "size": ("choice", 512, 1024, 2048, 4096)},
     "unwrap": {"size": ("choice", 512, 1024, 2048, 4096)},
     "saveas": {"format": ("choice", "fbx", "obj", "usdz")},
     "combine": {},
-    "views": {},
+    "views": {"picture_engine": ("text",)},
     "model": {"engine": ("text",)},
     "split": {"names": ("text",)},
     "finish": {"detail": ("choice", *FINISH_DETAILS), "pixel_match": ("bool",),
@@ -351,6 +351,7 @@ class Stage:
     seeds: list[dict[str, Any]] | None = None                 # runs to start from (one box run on its own)
     waits_for_pick: bool = False                              # follows a Picture with options to pick from
     fix_note: str | None = None                               # one picture redrawn from itself as this says
+    redraw_engines: dict[str, str] = field(default_factory=dict)   # step -> the picture engine a box chose to redraw with
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "nodes": self.nodes, "steps": self.steps, "after": self.after,
@@ -539,8 +540,12 @@ class _Planner:
                 stage.made["model"] = s["file"]
             elif kind == "views":
                 stage.steps += list(VIEW_STEPS)
+                if s.get("picture_engine"):
+                    stage.redraw_engines.update(dict.fromkeys(VIEW_STEPS, s["picture_engine"]))
             else:
                 stage.steps.append(STEP[kind])
+            if kind in ("back", "parts") and s.get("picture_engine"):   # Drawn by, on a box that redraws
+                stage.redraw_engines[STEP[kind]] = s["picture_engine"]
             if kind == "picture" and not s.get("file"):
                 stage.prompt = compose_prompt(s["prompt"], goal, self.recipes)
                 stage.picture_engine = s.get("picture_engine")
@@ -722,8 +727,10 @@ def plan_redo(raw: Any, node_id: str, file: str, note: str | None, results: dict
             raise ValueError("3D engines do not read words. Fix the picture it came from, then make the 3D model again.")
         up = _ancestors(graph, node_id)
         planner = _Planner(_check(graph, {*up, node_id}, above=set(up)), recipes)
+        drawn_by = box["settings"].get("picture_engine")
         planner.stages.append(Stage(id="s1", nodes=[node_id], steps=["fix"], fix_note=note,
-                                    seeds=[{"made": {"picture": file}, "label": label}]))
+                                    seeds=[{"made": {"picture": file}, "label": label}],
+                                    redraw_engines={"fix": drawn_by} if drawn_by else {}))
         plan = planner.plan()
     else:
         if box["type"] not in REMAKE:
@@ -1014,6 +1021,7 @@ class GraphRunner:
                           move_settings=dict(stage.move_settings), made=made, client=client,
                           part_name=job.get("part"), tool_settings=dict(stage.tool_settings),
                           gather=list(job.get("gather") or []), four_views=stage.four_views, fix_note=stage.fix_note,
+                          redraw_engines=dict(stage.redraw_engines),
                           model_seed=self.random() if {"model", "repaint"} & set(stage.steps) else None)
             run.current_chain = chain.id
             try:

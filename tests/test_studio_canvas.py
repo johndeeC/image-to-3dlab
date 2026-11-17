@@ -204,7 +204,7 @@ def test_every_choice_on_screen_is_a_value_the_server_keeps():
                     assert ga.clean_settings(box, {key: value}) != {}, (box, key, value)
     assert dict(fields["model"])["engine"] == [["pixal3d", "Best detail · Pixal3D"], ["newthing", "New"]]
     # the catalog's picture engine ids, named by what they do; one not installed is not offered
-    assert dict(fields["picture"])["picture_engine"] == [["", "The usual one"], ["qwen", "Follows long descriptions · Qwen-Image 2.1"]]
+    assert dict(fields["picture"])["picture_engine"] == [["", "Pick for me: Follows long descriptions · Qwen-Image 2.1"], ["qwen", "Follows long descriptions · Qwen-Image 2.1"]]
 
 
 def test_a_form_value_becomes_what_the_box_keeps():
@@ -306,6 +306,28 @@ def test_an_engine_is_named_by_what_it_does_then_by_its_own_name_with_a_note():
     assert out[:3] == ["Hunyuan3D-MLX", "Stable Fast 3D", "FLUX.2 [klein] 4B"]
     assert out[3].startswith("A quick look in seconds") and out[4] == ""
     assert out[5] == "The engine Create would use." and out[6].startswith("Slower, but sticks closely")
+
+
+PICTURE_ENGINES = """[{ id: 'flux', label: 'FLUX.2 [klein] 4B', suggested: true, installed: true, can_draw_backs: true },
+  { id: 'flux-light', label: 'FLUX.2 [klein] 4B Light', installed: false, can_draw_backs: false },
+  { id: 'qwen', label: 'Qwen-Image 2.1', installed: true, can_draw_backs: true },
+  { id: 'old', label: 'Old Draw', installed: true, can_draw_backs: false }]"""
+
+
+def test_drawn_by_names_the_engine_it_would_pick_and_redrawing_boxes_get_one_too():
+    out = _settings(f"""const tools = {{ pictureEngines: {PICTURE_ENGINES} }};
+      const menu = (type) => m.FIELDS[type].find((f) => f[0] === 'picture_engine')[4](tools);
+      console.log(JSON.stringify({{ picture: menu('picture'), parts: menu('parts'), back: menu('back'), views: menu('views'),
+        notes: [m.engineNote('picture_engine', '', 'picture', tools), m.engineNote('picture_engine', '', 'parts', tools),
+                m.engineNote('picture_engine', '', 'picture', {{ pictureEngines: [] }})] }}))""")
+    assert out["picture"][0] == ["", "Pick for me: Quick pictures · FLUX.2 [klein] 4B"]
+    assert [c[0] for c in out["picture"]] == ["", "flux", "qwen", "old"]           # only what is set up
+    assert out["parts"] == out["back"] == out["views"] == [
+        ["", "Pick for me: the one that drew the picture"], ["flux", "Quick pictures · FLUX.2 [klein] 4B"],
+        ["qwen", "Follows long descriptions · Qwen-Image 2.1"]]                     # only those that can redraw
+    assert out["notes"][0] == "Uses FLUX.2 [klein] 4B: the first one set up, as Create does."
+    assert out["notes"][1] == "Uses the engine that drew the picture, so they match."
+    assert out["notes"][2] == "The engine Create would use."
 
 
 def test_four_views_runs_three_steps_on_one_box_and_its_3d_model_gets_the_four_view_engine():

@@ -81,6 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   results on the wrong boxes. The quick view fits a short window, buttons and all.
 - Canvas: the line out of Pick out parts, Split into props or Four views now starts at each
   of its tiles and gathers into the next box, since every one of them goes on.
+- Canvas: **Drawn by** says which engine "Pick for me" means (FLUX, say) instead of
+  "The usual one", and Front + back, Pick out parts and Four views get it too.
 
 ## [0.5.11] - 2026-11-17
 

@@ -31,6 +31,13 @@ Each run lands in the Library and the activity history like any other.
 | Move | a rigged model | a moving model | `animated`, with the box's move |
 | Export | anything with a 3D model | nothing new: lists the files to take | none |
 
+**Drawn by.** A Picture box's menu names the engine it would pick ("Pick for me: Quick
+pictures · FLUX.2 [klein] 4B"): the suggested one if it is set up, else the first that is.
+Front + back, Pick out parts and Four views have the menu too, listing only engines that
+can redraw a picture. Left on Pick for me, they keep the engine that drew the picture, so
+one model's pictures match; a choice is an ask (`engine`), and a fix of their tries uses it
+as well (`Stage.redraw_engines`).
+
 Each box keeps the choices Create and the Steps panel offer, the main one on show and the
 rest under **More settings** (`viewer/studio/canvas-settings.js`):
 

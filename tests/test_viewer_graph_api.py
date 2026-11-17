@@ -950,3 +950,22 @@ def test_a_second_run_is_told_which_canvas_is_running_and_what_it_is_doing(tmp_p
 
     runner.start(PARTS, background=False, before_stage=hold)
     assert held[1] == "“Knight parts” is running (Starts from Picture you gave). Wait for it to finish, or stop it there."
+
+
+# ---------------------------------------------------------------- Drawn by, on the boxes that redraw a picture
+def test_boxes_that_redraw_a_picture_say_which_engine_draws(tmp_path):
+    g = graph([node("p", "picture", prompt="a knight", picture_engine="flux"), node("b", "back", picture_engine="qwen"),
+               node("m", "model", engine="pixal3d")], [("p", "b"), ("b", "m")])
+    stage = ga.plan_graph(g, RECIPES).stages[0]
+    assert stage.picture_engine == "flux" and stage.redraw_engines == {"back": "qwen"}
+    views = graph([node("p", "picture", file="images/k.png"), node("v", "views", picture_engine="qwen"),
+                   node("m", "model", engine="hunyuan_xiong")], [("p", "v"), ("v", "m")])
+    assert ga.plan_graph(views, RECIPES).stages[0].redraw_engines == {"left": "qwen", "back": "qwen", "right": "qwen"}
+    parts = json.loads(json.dumps(PARTS))
+    parts["nodes"][1]["settings"]["picture_engine"] = "qwen"
+    assert ga.plan_graph(parts, RECIPES).stages[1].redraw_engines == {"part": "qwen"}
+    assert ga.plan_redo(parts, "x", CAPE, "darker", PART_TRIES, RECIPES).stages[0].redraw_engines == {"fix": "qwen"}
+    runner, jobs = _graph_runner(tmp_path)
+    runner.start(graph([node("p", "picture", file="images/k.png"), node("b", "back", picture_engine="qwen"),
+                        node("m", "model", engine="pixal3d")], [("p", "b"), ("b", "m")]), background=False)
+    assert jobs.bodies[0]["engine"] == "qwen"          # an ask, not a preference: the box said so

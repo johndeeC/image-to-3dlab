@@ -121,6 +121,7 @@ class Chain:
     gather: list[str] = field(default_factory=list)                  # the models a "combine" step puts together
     four_views: bool = False                                         # the 3D model reads front, left, back, right (Hunyuan3D-2mv)
     fix_note: str | None = None                                      # what a "fix" step changes in the picture (the canvas)
+    redraw_engines: dict[str, str] = field(default_factory=dict)    # step -> the picture engine asked for (a canvas box's Drawn by)
     step_made: dict[str, str] = field(default_factory=dict)          # step -> the file that step made
     picture_settings: dict[str, Any] = field(default_factory=dict)  # size, steps, seed (the image job checks them)
     picture_engine: str | None = None                                # "flux" / "flux-light" / "qwen"; None = the default
@@ -442,20 +443,22 @@ class ChainRunner:
             # the front's engine is a preference (any engine that can draw backs will do); a redraw's
             # own choice in back_settings is an ask
             body = {"picture": front, "prefer_engine": chain.picture_engine, **chain.back_settings,
-                    **({"side": step} if step != "back" else {})}
+                    **({"side": step} if step != "back" else {}), **self._asked_engine(chain, step)}
             return kind, self._post("/api/image/back", json.dumps(body).encode(), "application/json")
         if step == "part":
             if not chain.made.get("picture") or not chain.part_name:
                 raise ValueError("Picking out a part needs a picture and the part's name")
             body = {"picture": chain.made["picture"], "part": chain.part_name, "prefer_engine": chain.picture_engine,
-                    **({"seed": chain.picture_settings["seed"]} if "seed" in chain.picture_settings else {})}
+                    **({"seed": chain.picture_settings["seed"]} if "seed" in chain.picture_settings else {}),
+                    **self._asked_engine(chain, step)}
             return kind, self._post("/api/image/part", json.dumps(body).encode(), "application/json")
         if step == "fix":
             if not chain.made.get("picture") or not chain.fix_note:
                 raise ValueError("Fixing a picture needs the picture and what is wrong with it")
             body = {"picture": chain.made["picture"], "instruction": chain.fix_note,
                     **({"prefer_engine": chain.picture_engine} if chain.picture_engine else {}),
-                    **({"seed": chain.picture_settings["seed"]} if "seed" in chain.picture_settings else {})}
+                    **({"seed": chain.picture_settings["seed"]} if "seed" in chain.picture_settings else {}),
+                    **self._asked_engine(chain, step)}
             return kind, self._post("/api/image/fix", json.dumps(body).encode(), "application/json")
         if step in TOOL_STEPS:
             return kind, self._post(f"/api/tool/{step}", json.dumps(self._tool_body(chain, step)).encode(), "application/json")
@@ -517,6 +520,13 @@ class ChainRunner:
             body, ctype = multipart({"generated": chain.made["model"], "settings": json.dumps(settings)}, {})
             return kind, self._post("/api/props", body, ctype)
         raise ValueError(f"unknown step {step}")
+
+    @staticmethod
+    def _asked_engine(chain: Chain, step: str) -> dict[str, str]:
+        """{"engine": id} when the box chose who redraws (an ask: that one, or a message on what to
+        set up); else nothing, and the engine that drew the picture is kept."""
+        asked = chain.redraw_engines.get(step)
+        return {"engine": asked} if asked else {}
 
     @staticmethod
     def _tool_body(chain: Chain, step: str) -> dict[str, Any]:
