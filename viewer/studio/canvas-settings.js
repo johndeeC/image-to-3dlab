@@ -21,7 +21,22 @@ export const PICTURE_ENGINE_WORDS = {
   qwen: ['Follows long descriptions', 'Slower, but sticks closely to what you wrote.'],
 };
 
-const words = (table, id, fallback) => (table[id] ? table[id][0] : fallback || id);
+/** An engine's own name: its catalog label without the bracketed setup notes ("Pixal3D (C++/GGML)" -> "Pixal3D"). */
+export function modelName(label) {
+  return String(label || '').replace(/\s*\([^)]*\)\s*$/, '').trim();
+}
+
+/** A menu entry: what the engine does first, then which engine it is ("Best detail · Pixal3D"). */
+const words = (table, id, label) => {
+  const plain = table[id]?.[0], name = modelName(label);
+  return plain ? (name ? `${plain} · ${name}` : plain) : name || id;
+};
+
+/** The one line under an engine menu: what the chosen engine is good for, and when to pick it. */
+export function engineNote(key, id) {
+  if (!id) return key === 'picture_engine' ? 'The engine Create would use.' : '';
+  return (key === 'picture_engine' ? PICTURE_ENGINE_WORDS : ENGINE_WORDS)[id]?.[1] || '';
+}
 
 /**
  * Each box's fields: [key, label, hint, kind, choices(tools) or bounds, folded].

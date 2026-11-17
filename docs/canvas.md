@@ -31,7 +31,9 @@ rest under **More settings** (`viewer/studio/canvas-settings.js`):
   picture), how many options to draw (1–4), its shape, and which picture engine draws it.
   What it is for picks the wording added (`image_to_3dlab/prompt_recipes.json`) and
   Finish's defaults: a character is 1.8 m tall, and a prop stands upright.
-- **3D model**: the engine, named by what it does ("Best detail", "Fastest, rough").
+- **3D model**: the engine, named by what it does and then by its own name ("Best detail ·
+  Pixal3D", "Fastest, rough · Stable Fast 3D"), with a line under the menu on what the chosen
+  one is good for. The picture engine menu works the same way.
 - **Finish**: detail (triangles), texture size, surface maps, Pixel Match, clean-up, height
   and standing upright. Create puts triangle count and texture size on Finish, not on the
   3D model, so the canvas does too.

@@ -197,13 +197,14 @@ def test_every_choice_on_screen_is_a_value_the_server_keeps():
     for box, selects in fields.items():
         for key, choices in selects:
             for value, label in choices:
-                # named by what it does, never where it came from (CLAUDE.md "Studio text is for the user")
-                assert label and not any(w in str(label) for w in ("C++", "GGML", "Xiong", "dgrauet", "Pixal3D")), (box, key, label)
+                # what it does first; an engine's own name may follow, never its setup notes
+                setup_notes = ("C++", "GGML", "Xiong", "dgrauet") + (("(",) if "engine" in key else ())
+                assert label and not any(w in str(label) for w in setup_notes), (box, key, label)
                 if value != "":
                     assert ga.clean_settings(box, {key: value}) != {}, (box, key, value)
-    assert dict(fields["model"])["engine"] == [["pixal3d", "Best detail"], ["newthing", "New"]]
+    assert dict(fields["model"])["engine"] == [["pixal3d", "Best detail · Pixal3D"], ["newthing", "New"]]
     # the catalog's picture engine ids, named by what they do; one not installed is not offered
-    assert dict(fields["picture"])["picture_engine"] == [["", "The usual one"], ["qwen", "Follows long descriptions"]]
+    assert dict(fields["picture"])["picture_engine"] == [["", "The usual one"], ["qwen", "Follows long descriptions · Qwen-Image 2.1"]]
 
 
 def test_a_form_value_becomes_what_the_box_keeps():
@@ -296,3 +297,12 @@ def test_picked_out_parts_each_get_a_tile_and_all_carry_on():
     assert out["tiles"] == ["helmet", "hair"]             # but each is its own tile to carry on from alone
     assert out["face"]["kind"] == "empty" and out["face"]["text"].startswith("2 parts")
     assert out["models"] == "mosaic"                      # a 3D model of each part, side by side
+
+
+def test_an_engine_is_named_by_what_it_does_then_by_its_own_name_with_a_note():
+    out = _settings("""console.log(JSON.stringify([m.modelName('Hunyuan3D-MLX (Xiong, full pipeline)'), m.modelName('Stable Fast 3D'),
+      m.modelName('FLUX.2 [klein] 4B'), m.engineNote('engine', 'sf3d'), m.engineNote('engine', 'mystery'),
+      m.engineNote('picture_engine', ''), m.engineNote('picture_engine', 'qwen')]))""")
+    assert out[:3] == ["Hunyuan3D-MLX", "Stable Fast 3D", "FLUX.2 [klein] 4B"]
+    assert out[3].startswith("A quick look in seconds") and out[4] == ""
+    assert out[5] == "The engine Create would use." and out[6].startswith("Slower, but sticks closely")

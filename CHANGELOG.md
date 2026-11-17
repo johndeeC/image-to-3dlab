@@ -50,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `save_canvas`, `check_canvas`, `run_canvas`, `canvas_status`, `cancel_canvas_run`.
 
 ### Fixed
+- Canvas engine menus say which engine each choice is: "Best detail · Pixal3D", "Fastest, rough ·
+  Stable Fast 3D", with a line under the menu on what the chosen one is good for.
 - Model thumbnails (the Library, the canvas) show shiny metal as metal: they were drawn
   with nothing to reflect, so armour and blades came out black. Thumbnails saved before are
   drawn again.

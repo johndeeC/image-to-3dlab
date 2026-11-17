@@ -624,3 +624,4 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .canvas-picker .picker-search { width: 100%; margin-bottom: 8px; background: var(--raise); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; }
 .canvas-picker .prop img.mark { width: 40%; height: auto; opacity: .35; object-fit: contain; }
 .canvas-picker .prop .meta-words { font-size: 11px; color: var(--ash); }
+.canvas-side .field-note { display: block; margin-top: 3px; font-size: 11.5px; line-height: 1.35; color: var(--ash); }

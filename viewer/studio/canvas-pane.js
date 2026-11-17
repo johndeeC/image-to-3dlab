@@ -15,7 +15,7 @@ import { createHistory, record, undo, redo } from './canvas-history.js';
 import { copyNodes, pasteNodes } from './canvas-clip.js';
 import { tidy } from './canvas-layout.js';
 import { SHORTCUTS, actionFor } from './canvas-keys.js';
-import { FIELDS, defaultsFor, readField, toggleValue } from './canvas-settings.js';
+import { FIELDS, defaultsFor, readField, toggleValue, engineNote } from './canvas-settings.js';
 
 const esc = (text) => String(text ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const STATE_WORDS = { done: '✓', error: 'Stopped', skipped: 'Skipped', cancelled: 'Cancelled', waiting: 'Waiting' };
@@ -122,6 +122,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       const options = choices(tools);
       if (!options.length) return `<small class="hint">${esc(label)}: nothing installed yet. Setup adds it.</small>`;
       control = `<select data-key="${key}">${options.map(([v, words]) => `<option value="${esc(v)}">${esc(words)}</option>`).join('')}</select>`;
+      if (key === 'engine' || key === 'picture_engine') control += `<small class="hint field-note" data-note-for="${key}"></small>`;
     } else if (kind === 'number') {
       control = `<input type="number" data-key="${key}" step="0.1" min="${choices[0]}" max="${choices[1]}">`;
     } else {
@@ -162,6 +163,10 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       const value = node.settings[input.dataset.key];
       if (input.type === 'checkbox') input.checked = toggleValue(input.dataset.key, node.settings);
       else input.value = value == null ? '' : String(value);
+    }
+    for (const note of card.querySelectorAll('[data-note-for]')) {   // what the chosen engine is good for
+      const chosen = card.querySelector(`[data-key="${note.dataset.noteFor}"]`)?.value;
+      note.textContent = engineNote(note.dataset.noteFor, chosen);
     }
     for (const box of card.querySelectorAll('[data-file-field]')) {
       const file = node.settings[box.dataset.fileField];
