@@ -16,6 +16,7 @@ Each run lands in the Library and the activity history like any other.
 | Picture | nothing: a description, or a picture you upload or pick from the Library | a picture | `picture` (skipped for one you gave) |
 | Your 3D model | nothing: a model picked from the Library | a 3D model | none; it starts the run with that file |
 | Front + back | a picture | a front and back picture | `back`; only the Best detail engine uses the back |
+| Pick out parts | a picture | each part you name, redrawn on its own | `part`, once per name (`/api/image/part`) |
 | 3D model | a picture, or a front and back | a 3D model | `model`, with the box's engine |
 | Split into props | a 3D model of a sheet | finished props, named if you name them | `split` |
 | Finish | a 3D model | a game-ready model | `finished`, with the box's choices |
@@ -172,11 +173,20 @@ Run 1 is Picture → 3D model → Split; the split's props land under
 `output/props/<run>/finished/`, and the runner records that folder as `made["split"]`.
 Run 2 rigs each prop, once per prop. Export lists every prop.
 
-**Parts by name** is the same line with names on the Split: describe one sheet of the parts
-("the parts of a knight: head, hair, body, left hand, right hand"), and the split names each
-part and makes it a 3D model of its own. Tripo cuts named parts out of a picture of the
-whole thing; here each part is drawn on its own, which is what the prop sheet already does
-well.
+### Pick out parts (element extraction)
+
+```
+Picture (a knight) → Pick out parts (helmet, sword, left hand) → 3D model → Finish
+```
+
+**Pick out parts** takes a picture and a list of names. For each name the picture engine
+that draws backs from fronts redraws just that part of your picture, on its own, plain
+background (`image_api.part_prompt`, `start_part`). Each part lands as its own picture in
+the Library (`images/<part>__part__<time>/`), and on the canvas as its own tile beside the
+box. The boxes after it run once for each part, so a 3D model box makes one model per part;
+drag one part's tile onto a box to carry on from that part alone (the line keeps the part
+by name, so Run all redraws it and still carries on from it). Names on a Split still work
+too, for a sheet drawn as nine parts.
 
 ## Agents
 

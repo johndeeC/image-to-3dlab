@@ -621,3 +621,6 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .canvas-space [data-tip]:hover::after, .canvas-space [data-tip]:focus-visible::after { content: none; display: none; }
 .canvas-tip { position: absolute; z-index: 20; max-width: 260px; padding: 8px 10px; border-radius: 8px; background: #2a201b;
   border: 1px solid var(--line); color: var(--bone); font: 400 12.5px/1.45 var(--f-ui); pointer-events: none; box-shadow: 0 8px 24px rgb(0 0 0 / .5); }
+.canvas-picker .picker-search { width: 100%; margin-bottom: 8px; background: var(--raise); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; }
+.canvas-picker .prop img.mark { width: 40%; height: auto; opacity: .35; object-fit: contain; }
+.canvas-picker .prop .meta-words { font-size: 11px; color: var(--ash); }

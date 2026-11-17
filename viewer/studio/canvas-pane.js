@@ -8,6 +8,7 @@ import { NODES, NODE_W, PORT_Y, newGraph, addNode, removeNodes, moveNodes, setSe
   groupBounds, pickResult, downstreamOf, isChoice, edgeFile, useResult, addFromResult, tileFace, tagText,
   optionTiles, makeRoom, curve, OPTION_W, OPTION_OFFSET } from './canvas.js';
 import { openPeek } from './canvas-peek.js';
+import { libraryChoices } from './canvas-library.js';
 import { identity, screenToBoard, zoomAt, zoomTo, zoomStep, panBy, wheelFactor, wheelIntent, fitAll, zoomPercent, rememberView, recallView, placeTip } from './canvas-view.js';
 import { nodesInRect, toggle, addAll, keepExisting } from './canvas-select.js';
 import { createHistory, record, undo, redo } from './canvas-history.js';
@@ -21,7 +22,7 @@ const STATE_WORDS = { done: '✓', error: 'Stopped', skipped: 'Skipped', cancell
 const PICTURE = /\.(png|jpe?g|webp)$/i;
 const STARTERS = [['character', 'Moving character', 'Picture, 3D model, Finish, Rig and a move.'],
   ['sheet', 'Nine props', 'A sheet of nine, cut into nine game-ready props.'],
-  ['parts', 'Parts by name', 'One picture of named parts, each its own 3D model.'],
+  ['parts', 'Pick out parts', 'One picture, each part you name redrawn on its own, then a 3D model of each.'],
   ['compare', 'Two engines', 'One picture, built by two engines side by side.']];
 let clipboard = null;   // kept while the studio is open, so a copy survives closing the canvas
 
@@ -561,19 +562,29 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   // ---------------------------------------------------------------- the Library picker
   async function pickFromLibrary(id) {
     const node = graph.nodes.find((n) => n.id === id);
+    const want = node.type === 'picture' ? 'picture' : 'model';
     const box = $('.canvas-picker');
     box.hidden = false;
     box.dataset.for = id;
     box.innerHTML = '<p class="hint">Loading your Library…</p>';
     let assets = [];
     try { assets = (await json(await fetchImpl('/api/assets'))).assets || []; } catch (error) { box.innerHTML = `<p class="bad">${esc(error.message)}</p>`; return; }
-    const want = node.type === 'picture'
-      ? assets.filter((a) => a.picture).map((a) => ({ name: a.name, file: a.picture, thumb: a.picture }))
-      : assets.filter((a) => a.finished || a.model).map((a) => ({ name: a.name, file: a.finished || a.model, thumb: a.picture }));
-    box.innerHTML = `<div class="row"><b>${node.type === 'picture' ? 'Pick a picture' : 'Pick a 3D model'}</b><button type="button" class="ghost small" data-picker-close>Close</button></div>
-      ${want.length ? `<div class="kit-props">${want.slice(0, 120).map((a) => `<button type="button" class="prop" data-use-file="${esc(a.file)}">
-        ${a.thumb ? `<img src="/api/thumb?path=${encodeURIComponent(a.thumb)}" alt="" loading="lazy">` : ''}<b>${esc(a.name)}</b></button>`).join('')}</div>`
-        : '<p class="hint">Nothing in your Library yet.</p>'}`;
+    box.innerHTML = `<div class="row"><b>${want === 'picture' ? 'Pick a picture' : 'Pick a 3D model'}</b><button type="button" class="ghost small" data-picker-close>Close</button></div>
+      <input type="search" class="picker-search" placeholder="Search by name" aria-label="Search your Library">
+      <div class="picker-list"></div>`;
+    const draw = (query) => {
+      const list = libraryChoices(assets, want, query).slice(0, 150);
+      const grid = box.querySelector('.picker-list');
+      grid.innerHTML = list.length ? `<div class="kit-props">${list.map((c) => `<button type="button" class="prop" data-use-file="${esc(c.file)}" title="${esc(c.file)}">
+          ${want === 'picture' ? `<img src="/api/thumb?path=${encodeURIComponent(c.file)}" alt="" loading="lazy">`
+            : `<img class="mark" data-kit-file="${esc(c.file)}" src="./studio/mark.svg" alt="">`}
+          <b>${esc(c.name)}</b><small class="meta-words">${esc(c.what)}</small></button>`).join('')}</div>`
+        : `<p class="hint">${query ? 'Nothing matches.' : `No ${want === 'picture' ? 'pictures' : '3D models'} in your Library yet.`}</p>`;
+      grid.querySelectorAll('[data-kit-file]').forEach((img) => on.thumb?.(img, img.dataset.kitFile));
+    };
+    box.querySelector('.picker-search').addEventListener('input', (event) => draw(event.target.value));
+    draw('');
+    box.querySelector('.picker-search').focus();
   }
 
   function upload(id) {

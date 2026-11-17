@@ -39,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any one to make the next step from that picture.
 - Canvas tooltips sit above every box at their normal size; they used to hide under the next
   box and shrink when zoomed out.
+- Canvas: **Pick out parts** (element extraction). Give it a picture and the names of its parts
+  (helmet, sword, left hand); each part is redrawn on its own, lands in the Library as its own
+  picture, and sits on the canvas as its own tile. The boxes after it make one 3D model per part,
+  or drag one part out to carry on from it alone. The starter of the same name sets it up.
+- Canvas: picking **Your 3D model** from the Library shows every model each asset has, rendered:
+  the raw 3D model (and which engine made it), the finished one (and its detail), the rigged one,
+  and a split's props, with a search box.
 - Agents can build and run canvases: `box_types`, `list_canvases`, `get_canvas`, `edit_canvas`,
   `save_canvas`, `check_canvas`, `run_canvas`, `canvas_status`, `cancel_canvas_run`.
 

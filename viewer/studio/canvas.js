@@ -8,6 +8,7 @@ export const NODES = {
   picture: { tone: 'draw', label: 'Picture', hint: 'Draws a picture from your words, or uses one you already made.', takes: [], makes: 'picture', step: 'picture' },
   asset: { tone: 'source', label: 'Your 3D model', hint: 'Starts from a 3D model already in your Library.', takes: [], makes: 'model', step: null },
   back: { tone: 'draw', label: 'Front + back', hint: 'Draws the back too, so the 3D model is right all round. Best detail engine only.', takes: ['picture'], makes: 'pair', step: 'back' },
+  parts: { tone: 'draw', label: 'Pick out parts', hint: 'Redraws each part you name (head, hair, hands) on its own, so each can become its own 3D model.', takes: ['picture'], makes: 'picture', step: 'part' },
   model: { tone: 'shape', label: '3D model', hint: 'Builds a 3D model from the picture.', takes: ['picture', 'pair'], makes: 'model', step: 'model' },
   split: { tone: 'shape', label: 'Split into props', hint: 'Cuts a sheet of nine into separate game-ready props.', takes: ['model'], makes: 'props', step: 'split' },
   finish: { tone: 'finish', label: 'Finish', hint: 'Makes the model game-ready: cleaner shape, lighter file.', takes: ['model'], makes: 'finished', step: 'finished' },
@@ -222,7 +223,8 @@ export const OPTION_OFFSET = 40;
 
 /** The option tiles of a box with tries: [{file, label, x, y, w, h, port: {x, y}}], or none. */
 export function optionTiles(graph, node, files) {
-  if (!files || files.length < 2 || !isChoice(graph, node.id)) return [];
+  // a box's tries, and each part Pick out parts made: every one its own tile to carry on from
+  if (!files || files.length < 2 || !(isChoice(graph, node.id) || node.type === 'parts')) return [];
   const x = node.x + NODE_W + OPTION_OFFSET;
   return files.map((f, i) => {
     const y = node.y + i * (OPTION_W + OPTION_GAP);
@@ -256,8 +258,8 @@ export function starter(kind, { engines = [], move = null } = {}) {
     return { ...g, name: 'Nine props' };
   }
   if (kind === 'parts') {
-    const g = row([['picture', {}], ['model', engine], ['split', { names: 'head, hair, body, left hand, right hand' }], ['export', {}]], 'set');
-    return { ...g, name: 'Parts by name' };
+    const g = row([['picture', {}], ['parts', { names: 'head, hair, body, hands' }], ['model', engine]], 'character');
+    return { ...g, name: 'Pick out parts' };
   }
   if (kind === 'compare') {
     let g = row([['picture', {}], ['model', engine]], 'prop');
@@ -295,9 +297,12 @@ export function runningNode(run, graph, chain) {
  *  not a set that all carries on (a Split's props, and every box below a Split). */
 export function isChoice(graph, id) {
   const types = new Map(graph.nodes.map((n) => [n.id, n.type]));
-  if (!types.has(id) || ['split', 'export'].includes(types.get(id))) return false;
-  return !upstreamOf(graph, id).some((up) => types.get(up) === 'split');
+  if (!types.has(id) || ['split', 'parts', 'export'].includes(types.get(id))) return false;
+  return !upstreamOf(graph, id).some((up) => FANS.includes(types.get(up)));
 }
+
+/** Boxes whose results all carry on, each as its own run below: a Split's props, picked-out parts. */
+export const FANS = ['split', 'parts'];
 
 /** The try a line carries, or null. */
 export function edgeFile(graph, from, to) {
@@ -332,6 +337,9 @@ export function tileFace(graph, node, state) {
     if (given) return { kind: 'one', file: given, files: [], count: 0, tryIndex: -1, text: '' };
     const words = node.type === 'picture' ? (node.settings?.prompt || 'Describe it in the side panel') : NODES[node.type].hint;
     return { kind: 'empty', file: null, files: [], count: 0, tryIndex: -1, text: words };
+  }
+  if (files.length > 1 && node.type === 'parts') {   // the parts sit beside it as tiles
+    return { kind: 'empty', file: null, files, count: files.length, tryIndex: -1, text: `${files.length} parts: carry on from any one, or all` };
   }
   if (files.length > 1 && isChoice(graph, node.id)) {
     // tries sit beside the box as option tiles: the box shows the picked one, or its own words

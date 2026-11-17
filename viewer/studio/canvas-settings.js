@@ -43,6 +43,9 @@ export const FIELDS = {
     ['goal', 'It is', 'Finish stands a character 1.8 m tall and a prop upright.', 'select', () => [['character', 'A character'], ['prop', 'A prop']]],
   ],
   back: [],
+  parts: [
+    ['names', 'Parts', 'One per line or with commas: head, hair, left hand. Each is redrawn on its own.', 'area'],
+  ],
   model: [
     ['engine', 'Engine', 'Which engine builds the 3D model.', 'select', (t) => (t.engines || []).map((e) => [e.id, words(ENGINE_WORDS, e.id, e.label)])],
   ],
@@ -87,6 +90,7 @@ export function defaultsFor(type, tools = {}) {
     return move ? { move: move.id } : {};
   }
   if (type === 'picture') return { goal: 'character' };
+  if (type === 'parts') return { names: 'head, hair, body, hands' };
   return {};
 }
 

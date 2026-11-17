@@ -116,7 +116,7 @@ def test_a_line_dropped_on_the_board_offers_only_the_boxes_that_take_it():
     out = _run("""console.log(JSON.stringify({ model: m.takersOf('model'), picture: m.takersOf('picture'),
       export: m.takersOf('export'), back: m.takersOf('back') }))""")
     assert out["model"] == ["split", "finish", "rig", "export"]
-    assert out["picture"] == ["back", "model"]
+    assert out["picture"] == ["back", "parts", "model"]
     assert out["export"] == [] and out["back"] == ["model"]
 
 
@@ -282,3 +282,17 @@ def test_each_try_gets_a_tile_of_its_own_to_carry_on_from():
     assert out["moved"] == [40, 396, 646, 0]                  # the 3D model and Finish moved right to make room
     assert out["again"] == out["moved"]                       # there is room already: nothing moves
     assert out["curve"] == "M 0 0 C 50 0, 50 50, 100 50"
+
+
+def test_picked_out_parts_each_get_a_tile_and_all_carry_on():
+    out = _run("""let g = m.newGraph('B');
+      for (const t of ['picture', 'parts', 'model']) g = m.addNode(g, t, 0, 0);
+      g = m.connect(m.connect(g, 'n1', 'n2'), 'n2', 'n3');
+      const parts = [{ file: 'images/helmet__part__1/a.png', label: 'helmet' }, { file: 'images/hair__part__2/b.png', label: 'hair' }];
+      console.log(JSON.stringify({ choice: ['n1', 'n2', 'n3'].map((id) => m.isChoice(g, id)),
+        tiles: m.optionTiles(g, g.nodes[1], parts).map((t) => t.label), face: m.tileFace(g, g.nodes[1], { files: parts }),
+        models: m.tileFace(g, g.nodes[2], { files: [{ file: 'a.glb' }, { file: 'b.glb' }] }).kind }))""")
+    assert out["choice"] == [True, False, False]          # the parts are not alternatives: each carries on
+    assert out["tiles"] == ["helmet", "hair"]             # but each is its own tile to carry on from alone
+    assert out["face"]["kind"] == "empty" and out["face"]["text"].startswith("2 parts")
+    assert out["models"] == "mosaic"                      # a 3D model of each part, side by side
