@@ -52,6 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Put together** (every model coming in, side by side in one file) boxes. None runs a new model:
   they use the background remover and the repo's headless Blender scripts.
 - Canvas: upload a GLB onto **Your 3D model**, and keep a box's models in a kit from its side panel.
+- Canvas: **Four views**. A picture's left, back and right are drawn too, and the 3D model is built
+  from all four with Hunyuan3D-2mv, now in the MLX shape port (`--model 2mv`, `--left/--back/--right`
+  on `scripts/hunyuan_mlx_xiong_generate.py`). The weights (4.93 GB) are fetched by hand: see
+  `docs/hunyuan-mlx-recipes.md`.
 - Agents can build and run canvases: `box_types`, `list_canvases`, `get_canvas`, `edit_canvas`,
   `save_canvas`, `check_canvas`, `run_canvas`, `canvas_status`, `cancel_canvas_run`.
 

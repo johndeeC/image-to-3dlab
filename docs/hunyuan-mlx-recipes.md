@@ -29,6 +29,7 @@ input.png output.glb --model 2.0 [flags]`
 | 2.0 | `2.0` | **best so far — cleanest shape, default** |
 | 2.0-turbo | `2.0-turbo` | fast, but distillation noise (dents/tears); more `--steps` (up to `pcm_timesteps`, 100) helps but doesn't fully clear it |
 | 2mini | not downloaded | untested |
+| 2mv | `2mv` | several views (`--left/--back/--right` beside the front); the canvas's Four views box. Weights: `tencent/Hunyuan3D-2mv`, `hunyuan3d-dit-v2-mv/` only, 4.93 GB, into `hunyuan_mlx/shape/weights/Hunyuan3D-2mv/` |
 
 **Current best recipe:** 2.0, `--octree-decode --quantize 8 --steps 30`, octree=512.
 ~9 min shape+paint end to end.

@@ -17,6 +17,7 @@ Each run lands in the Library and the activity history like any other.
 | Your 3D model | nothing: a model picked from the Library, or a GLB you upload | a 3D model | none; it starts the run with that file |
 | Front + back | a picture | a front and back picture | `back`; only the Best detail engine uses the back |
 | Pick out parts | a picture | each part you name, redrawn on its own | `part`, once per name (`/api/image/part`) |
+| Four views | a picture | its left, back and right drawn too | `left`, `back`, `right` (the back-view job, per side) |
 | Cut out background | a picture | the picture with its background taken off | `cutout` (the background remover; `/api/tool/cutout`) |
 | Repaint | a model, a game-ready model, or props | the same shape, painted again from a picture | `repaint`: the Hunyuan3D-MLX paint stage (`scripts/hunyuan_mlx_retexture.py`) |
 | Quad remesh | a model, a game-ready model, or props | the shape rebuilt as tidy four-sided faces, texture carried over | `remesh` (`scripts/blender_retopo_bake.py`) |
@@ -206,6 +207,20 @@ answers with how the canvas would run, or why it can't yet. `canvas_status` name
 Picture boxes waiting for a pick, so an agent can show the user the options and carry on.
 Box types and their settings come from the studio (`/api/graphs/types`), not a copy.
 
+## Four views (Hunyuan3D-2mv)
+
+```
+Picture → Four views → 3D model (Fast and clean)
+```
+
+**Four views** draws the picture's left, back and right sides, the way backs are drawn
+(`image_to_3dlab/back_view.py` `view_prompt`). A 3D model after it builds from all four with
+Hunyuan3D-2mv, run by the in-repo MLX shape port (`hunyuan_mlx/shape`, model `2mv`), then
+painted as usual. It needs the Fast and clean engine; the canvas sets it. The weights are
+`tencent/Hunyuan3D-2mv`'s `hunyuan3d-dit-v2-mv` only (4.93 GB, the Tencent Hunyuan community
+licence: not licensed in the EU, UK or South Korea), in
+`hunyuan_mlx/shape/weights/Hunyuan3D-2mv/hunyuan3d-dit-v2-mv/`.
+
 ## Tool boxes, and what they record
 
 Cut out background, Quad remesh, UV unwrap, Save as and Put together are short tool jobs
@@ -223,13 +238,6 @@ the studio does not ship.
 A box's models can be **kept in a kit** from its side panel (`docs/kits.md`).
 
 ## Not built yet
-
-**Four views (front, left, back, right).** No engine here takes more than a front and a
-back. Hunyuan3D-2mv does: one model is 4.93 GB (Tencent Hunyuan community licence, not
-licensed in the EU, UK or South Korea; fast and turbo variants are the same size again). The
-in-repo Hunyuan shape port reads one picture only, so it needs either its view handling
-ported or Tencent's own code running on the Mac GPU. Nothing is downloaded until that is
-chosen.
 
 **Split a 3D model into parts.** Blender's loose parts (no download) for parts that are not
 joined; PartField (**non-commercial**) or Hunyuan3D-Part (Tencent licence) otherwise.
