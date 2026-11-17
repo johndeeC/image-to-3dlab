@@ -492,6 +492,14 @@ def test_one_box_below_a_split_runs_once_per_prop_that_got_that_far():
     assert ga.describe_plan(plan) == ["Run 1, once for each of 2 props: Rig"]
 
 
+def test_the_boxes_above_one_box_run_on_its_own_only_hand_on_what_they_made():
+    blank = graph([node("p", "picture"), node("m", "model"), node("f", "finish")], [("p", "m"), ("m", "f")])
+    with pytest.raises(ValueError, match="Run Picture first"):     # not "describe it": the Picture does not run
+        ga.plan_from(blank, "f", "only", {}, RECIPES)
+    results = {"p": [{"status": "done", "file": "images/p.png"}], "m": [{"status": "done", "file": "m.glb"}]}
+    assert ga.plan_from(blank, "f", "only", results, RECIPES).stages[0].steps == ["finished"]
+
+
 def test_running_one_box_ignores_a_half_drawn_branch_elsewhere():
     g = graph([node("p", "picture", prompt="x"), node("m", "model", engine="sf3d"), node("v", "move")],
               [("p", "m"), ("p", "v")])   # the Move is wrong, and not part of this run

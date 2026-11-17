@@ -313,9 +313,10 @@ class _Graph:
     label: dict[str, str]
 
 
-def _check(raw: Any, keep: set[str] | None = None) -> _Graph:
+def _check(raw: Any, keep: set[str] | None = None, above: set[str] = frozenset()) -> _Graph:
     """Check a graph can run, in words a person can act on. `keep` limits the check to those
-    boxes (running one box ignores a half-drawn branch elsewhere)."""
+    boxes (running one box ignores a half-drawn branch elsewhere); the boxes `above` it only hand
+    on what they made before, so their settings are not checked."""
     graph = clean_graph(raw)
     nodes: dict[str, dict[str, Any]] = {}
     for n in graph["nodes"]:
@@ -348,6 +349,8 @@ def _check(raw: Any, keep: set[str] | None = None) -> _Graph:
         s, kind = n["settings"], n["type"]
         if kind not in ROOTS and i not in parent:
             raise ValueError(f"Every line of steps starts with a Picture: {label[i]} has nothing coming in.")
+        if i in above:
+            continue
         if kind == "picture" and not s.get("file") and not s.get("prompt"):
             raise ValueError("Picture: describe it, or pick a picture already made.")
         if kind == "asset" and not s.get("file"):
@@ -552,7 +555,7 @@ def plan_from(raw: Any, node_id: str, mode: str, results: dict[str, list[dict[st
         raise ValueError(f"no box {node_id} on this canvas")
     up = _ancestors(graph, node_id)
     keep = {*up, node_id} | (set(_descendants(graph, node_id)) if mode != "only" else set())
-    g = _check(graph, keep)
+    g = _check(graph, keep, above=set(up) | ({node_id} if mode == "after" else set()))
     results = results or {}
     planner = _Planner(g, recipes)
     if mode == "after":
