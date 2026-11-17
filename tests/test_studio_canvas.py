@@ -100,7 +100,7 @@ def test_what_a_node_shows_after_a_run():
     assert out["b"] == "waiting"                                # below a Picture whose options wait for a pick
     assert out["c"]["state"] == "error" and out["c"]["files"] == [{"file": "r1.glb", "label": "axe"}]
     assert out["c"]["errors"] == ["sword: it broke"]
-    assert out["d"] == {"state": "waiting", "files": [], "errors": []}
+    assert out["d"] == {"state": None, "files": [], "errors": []}   # not in this run: it is not waiting for it
     assert out["none"] == {"state": None, "files": [], "errors": []}
     assert out["running"] == "c" and out["idle"] is None
 
@@ -395,3 +395,19 @@ def test_lines_start_from_the_tiles_that_carry_on():
         m.lineStarts(g, { from: 'x', to: 'm' }, [], port)]))""")
     assert out == [[{"x": 300, "y": 10}, {"x": 300, "y": 120}], [{"x": 300, "y": 120}], [{"x": 300, "y": 10}, {"x": 300, "y": 120}],
                    [{"x": 1, "y": 802}], [{"x": 1, "y": 2}]]
+
+
+def test_a_box_waits_only_for_a_run_that_will_reach_it_and_says_when_it_is_queued():
+    out = _run("""const g = { nodes: ['a', 'b', 'c', 'd'].map((id) => ({ id, type: 'model', settings: {} })),
+        edges: [{ from: 'a', to: 'b' }, { from: 'b', to: 'c' }] };
+      const run = { status: 'running', stages: [{ nodes: ['a', 'b'] }], results: {} };
+      const queued = [{ graph: 'g1', queued_for: 'c', mode: 'only', position: 2 }, { graph: 'g1', queued_for: 'b', mode: 'from', position: 1 },
+                      { graph: 'g2', queued_for: 'd', mode: 'only', position: 3 }];
+      const all = [{ graph: 'g1', queued_for: null, mode: null, position: 1 }];
+      console.log(JSON.stringify({ states: ['a', 'c', 'd'].map((id) => m.nodeState(run, id).state),
+        queued: Object.fromEntries(m.queuedBoxes(queued, g, 'g1')), all: [...m.queuedBoxes(all, g, 'g1').keys()],
+        banner: m.runBanner({ ...run, graph: 'g1', name: 'X', plan: ['Run 1: 3D model'], stage: 0, elapsed: 5 }, 'g1', 2).text }))""")
+    assert out["states"] == ["waiting", None, None]          # only boxes in the run wait; the rest are idle
+    assert out["queued"] == {"b": 1, "c": 1}                  # from b: b and below; c's best place is 1st
+    assert out["all"] == ["a", "b", "c", "d"]
+    assert out["banner"] == "Running: 3D model · 5 s · 2 queued"

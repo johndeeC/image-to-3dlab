@@ -549,6 +549,7 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .cnode.done { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
 .cnode.done .state { color: var(--ok); }
 .cnode.skipped, .cnode.cancelled, .cnode.waiting { opacity: .7; }
+.cnode.queued { border-style: dashed; }   /* lined up to run when the run before it ends */
 /* Below 1150 px the studio stacks its columns and the stage is only part of the page: the canvas
    takes the whole window under the top bar instead, as a workspace of its own. */
 @media (max-width: 1150px) {

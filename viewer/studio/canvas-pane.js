@@ -6,7 +6,7 @@
 import { NODES, NODE_W, PORT_Y, newGraph, addNode, removeNodes, moveNodes, setSetting, connect, canConnect, removeEdge,
   edgePath, starter, nodeState, runningNode, takersOf, addConnected, connectSelected, group, ungroup, renameGroup,
   groupBounds, pickResult, downstreamOf, isChoice, edgeFile, useResult, addFromResult, tileFace, tagText,
-  optionTiles, makeRoom, curve, OPTION_W, OPTION_OFFSET, redoChoices, mergeRun, finishRun, runBanner, lineStarts } from './canvas.js';
+  optionTiles, makeRoom, curve, OPTION_W, OPTION_OFFSET, redoChoices, mergeRun, finishRun, runBanner, lineStarts, queuedBoxes } from './canvas.js';
 import { openPeek } from './canvas-peek.js';
 import { libraryChoices, assetIdsFor } from './canvas-library.js';
 import { identity, screenToBoard, zoomAt, zoomTo, zoomStep, panBy, wheelFactor, wheelIntent, fitAll, zoomPercent, rememberView, recallView, placeTip } from './canvas-view.js';
@@ -54,6 +54,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   let graph = newGraph(), saved = [], view = identity(), selection = [], history = createHistory();
   let run = null, chain = null, timer = null, saveTimer = null, saving = Promise.resolve();
   let elsewhere = null, watchTimer = null;   // a run on another canvas (an agent's, another tab's)
+  let queuedRuns = [];                        // runs waiting their turn, on any canvas
   let tool = 'pointer', spaceHeld = false, drag = null, menu = null, pastes = 0;
   let kits = [];   // the Library's kits (docs/kits.md): a box's models can be filed into one
   const cards = new Map();   // box id -> its element
@@ -184,7 +185,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   }
 
   // a box made again keeps its old tries beside the new; a try done over is swapped in its place
-  const merged = () => ({ status: run?.status, results: mergeRun(graph.last_run?.results || {}, run) });
+  const merged = () => ({ status: run?.status, stages: run?.stages, results: mergeRun(graph.last_run?.results || {}, run) });
 
   function resultsHtml(node) {
     const { state, files, errors } = nodeState(merged(), node.id);
@@ -247,6 +248,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   function renderNodes() {
     const box = $('.canvas-nodes');
     const live = runningNode(run, graph, chain);
+    const inLine = queuedBoxes(queuedRuns, graph, graph.id);
     const seen = new Set();
     for (const n of graph.nodes) {
       seen.add(n.id);
@@ -265,11 +267,12 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       const st = nodeState(merged(), n.id);
       const face = tileFace(graph, n, st);
       const { partly } = resultsHtml(n);
-      const shown = n.id === live ? 'running' : st.state;
+      const place = inLine.get(n.id);   // queued to run, at this place in line
+      const shown = n.id === live ? 'running' : place && st.state !== 'waiting' ? 'queued' : st.state;
       card.className = `node cnode tile ${shown || ''}${face.kind === 'empty' ? ' blank' : ''}${selection.includes(n.id) ? ' chosen' : ''}`;
       card.querySelector('.tag').textContent = tagText(n, face.count);
       card.querySelector('.state').textContent = n.id === live
-        ? (chain?.percent != null ? `${Math.round(chain.percent)}%` : 'Running') : partly ? 'Some stopped'
+        ? (chain?.percent != null ? `${Math.round(chain.percent)}%` : 'Running') : shown === 'queued' ? `Queued (${place})` : partly ? 'Some stopped'
           : st.state === 'waiting' && run?.status !== 'running' ? 'Waits for a pick' : st.errors.length ? 'Stopped' : STATE_WORDS[st.state] || '';
       card.querySelector('.state').title = st.errors[0] || '';
       // a box with tries steps through them on its tile; the one shown is the one it hands on
@@ -513,11 +516,12 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     render();
     renderBanner();
     on.ran?.();
+    watch();   // the next queued run may start now
   }
 
   // ---------------------------------------------------------------- what is running, and where
   function renderBanner() {
-    const said = runBanner(run || elsewhere, graph.id);
+    const said = runBanner(run || elsewhere, graph.id, queuedRuns.length);
     const box = $('.canvas-running');
     box.hidden = !said;
     if (!said) return;
@@ -530,12 +534,16 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   async function watch() {
     clearTimeout(watchTimer);
     if (!el.isConnected) return;
+    let running = null, queued = [];
+    try { ({ running, queued = [] } = await json(await fetchImpl('/api/graph-runs'))); } catch { /* the studio is restarting */ }
+    const was = JSON.stringify(queuedRuns.map((q) => [q.id, q.position]));
+    queuedRuns = queued;
     if (!run) {
-      let running = null;
-      try { ({ running } = await json(await fetchImpl('/api/graph-runs'))); } catch { /* the studio is restarting */ }
       if (running && running.graph === graph.id) { elsewhere = null; follow(running.id); }
-      else { elsewhere = running; renderBanner(); }
+      else elsewhere = running;
     }
+    if (was !== JSON.stringify(queuedRuns.map((q) => [q.id, q.position]))) renderNodes();
+    renderBanner();
     watchTimer = setTimeout(watch, Math.max(interval * 2, 3000));
   }
 
@@ -544,6 +552,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       await saveNow();
       const started = await json(await post(fetchImpl, `/api/graphs/${graph.id}/run`, body));
       say(started.plan.join(' · '));
+      if (started.status === 'queued') { watch(); return; }   // it starts by itself when its turn comes
       follow(started.id);
     } catch (error) { say(error.message, true); watch(); }
   }
@@ -608,7 +617,13 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
   function runMenu(id, sx, sy) {
     const below = downstreamOf(graph, id).length;
     const made = nodeState(merged(), id).files.length;
+    const mine = queuedRuns.filter((q) => q.graph === graph.id && q.queued_for === id);
     openMenu(sx, sy, 'Run', [
+      ...(mine.length ? [['Take out of the queue', 'It will not run when its turn comes.', () => {
+        for (const q of mine) fetchImpl(`/api/graph-runs/${q.id}/cancel`, { method: 'POST' }).catch(() => {});
+        say('Taken out of the queue.');
+        setTimeout(watch, 300);
+      }]] : []),
       ['Run this box', 'Runs just this step, from what the boxes before it made last time. Replaces what it made.', () => start({ node: id, mode: 'only' })],
       ...(made && isChoice(graph, id) ? [['Make another', 'One more try beside the ones it has. Pick the best after.', () => start({ node: id, mode: 'only', again: true })]] : []),
       ...(below ? [['Run from here', 'Runs this step and every box after it.', () => start({ node: id, mode: 'from' })]] : []),

@@ -883,6 +883,10 @@ class GraphRun:
     cancel_requested: bool = False
     again: bool = False          # a box made again: its new tries join the old ones
     started: float = field(default_factory=time.time)
+    # a queued run: what was asked for, planned only at its turn (from what the runs before it made)
+    request: dict[str, Any] = field(default_factory=dict)
+    position: int = 0            # its place in the queue, 1 first
+    after: str = ""              # the canvas running when it was queued
 
     def doing(self) -> str:
         """What the run is on now, in the plan's words: "3D model, once for each of 3 parts"."""
@@ -898,6 +902,12 @@ class GraphRun:
         results = {k: list(v) for k, v in self.results.items()}
         for export, source in self.plan.exports.items():
             results[export] = list(results.get(source, []))
+        if self.status == "queued":
+            what = self.request.get("label") or "every box"
+            return {"id": self.id, "graph": self.graph_id, "name": self.name, "status": "queued", "stage": 0, "stages": [],
+                    "plan": [f"Queued: {what}, after “{self.after}” ends"], "chains": [], "current_chain": None,
+                    "results": {}, "error": "", "waiting_for_pick": [], "again": False, "redo": None, "elapsed": 0,
+                    "queued_for": self.request.get("node"), "mode": self.request.get("mode"), "position": self.position}
         return {"id": self.id, "graph": self.graph_id, "name": self.name, "status": self.status,
                 "stage": self.stage, "stages": [s.to_dict() for s in self.plan.stages],
                 "plan": describe_plan(self.plan), "chains": list(self.chains),
@@ -915,10 +925,15 @@ class GraphRunner:
         self.poll, self.sleep = poll, sleep
         self.random = random or (lambda: int.from_bytes(os.urandom(3), "big"))
         self.runs: dict[str, GraphRun] = {}
+        self.queue: list[GraphRun] = []   # asked for while another ran: each starts when the one before ends
+        self.working = False              # a run, or the queue behind it, is being worked through
         self.lock = threading.Lock()
 
     def running(self) -> GraphRun | None:
         return next((r for r in self.runs.values() if r.status == "running"), None)
+
+    def busy(self) -> bool:
+        return self.working
 
     def plan(self, graph: dict[str, Any], node: str | None = None, mode: str = "all", *,
              redo_try: str | None = None, note: str | None = None) -> Plan:
@@ -932,24 +947,88 @@ class GraphRunner:
     def start(self, graph: dict[str, Any], *, node: str | None = None, mode: str = "all", client: str | None = None,
               again: bool = False, redo_try: str | None = None, note: str | None = None, background: bool = True,
               before_stage: Callable[[GraphRun, int], Any] | None = None) -> GraphRun:
-        plan = self.plan(graph, node, mode, redo_try=redo_try, note=note)   # refused here, before anything starts
+        name = _clean_text(graph.get("name"), NAME_LIMIT) or "Canvas"
         with self.lock:
-            busy = self.running()
-            if busy is not None:
-                raise RuntimeError(f"“{busy.name}” is running ({busy.doing()}). Wait for it to finish, or stop it there.")
-            run = GraphRun(graph_id=graph.get("id"), name=_clean_text(graph.get("name"), NAME_LIMIT) or "Canvas", plan=plan,
-                           again=again and mode == "only" and not redo_try)
-            recent = sorted(self.runs.values(), key=lambda r: r.started)[-(KEEP_RUNS - 1):]
-            self.runs = {r.id: r for r in recent} | {run.id: run}   # finished runs pile up otherwise
-        work = lambda: self._run(run, client, before_stage)
+            if self.working:   # another run is going: this one waits its turn, planned when it comes
+                return self._enqueue(graph, name, node=node, mode=mode, again=again, redo_try=redo_try, note=note,
+                                     client=client, before_stage=before_stage)
+            plan = self.plan(graph, node, mode, redo_try=redo_try, note=note)   # refused here, before anything starts
+            run = GraphRun(graph_id=graph.get("id"), name=name, plan=plan, again=again and mode == "only" and not redo_try)
+            self._keep(run)
+            self.working = True
+        work = lambda: self._work(run, client, before_stage)
         if background:
             threading.Thread(target=work, daemon=True, name=f"graph-{run.id[:8]}").start()
         else:
             work()
         return run
 
+    def _keep(self, run: GraphRun) -> None:
+        """Remember a run to be read back; finished ones beyond KEEP_RUNS are let go, never a live one."""
+        done = sorted((r for r in self.runs.values() if r.status not in ("running", "queued")), key=lambda r: r.started)
+        live = [r for r in self.runs.values() if r.status in ("running", "queued")]
+        self.runs = {r.id: r for r in [*done[-(KEEP_RUNS - 1):], *live]} | {run.id: run}
+
+    def _enqueue(self, graph: dict[str, Any], name: str, **request: Any) -> GraphRun:
+        key = (graph.get("id"), request["node"], request["mode"], request["redo_try"], request["note"], request["again"])
+        same = next((q for q in self.queue if q.request.get("key") == key), None)
+        if same is not None:   # asked again: it keeps its place
+            return same
+        box = next((n for n in graph.get("nodes", []) if n.get("id") == request["node"]), None)
+        label = LABELS.get(box["type"], "a box") if box else None
+        ahead = self.running()
+        run = GraphRun(graph_id=graph.get("id"), name=name, plan=Plan(stages=[], exports={}, labels={}, types={}),
+                       status="queued", request={**request, "key": key, "graph": graph, "label": label},
+                       after=ahead.name if ahead else (self.queue[-1].name if self.queue else name))
+        self.queue.append(run)
+        self._number()
+        self._keep(run)
+        return run
+
+    def _number(self) -> None:
+        for i, q in enumerate(self.queue, 1):
+            q.position = i
+
+    def _work(self, run: GraphRun | None, client: str | None, before_stage) -> None:
+        """Run `run`, then each queued run in turn until the queue is empty."""
+        while run is not None:
+            if run.status == "queued":
+                self._begin(run)
+            if run.status == "running":
+                self._run(run, client, before_stage)
+            with self.lock:
+                run = self.queue.pop(0) if self.queue else None
+                self._number()
+                if run is None:
+                    self.working = False
+                else:
+                    client, before_stage = run.request.get("client"), run.request.get("before_stage")
+
+    def _begin(self, run: GraphRun) -> None:
+        """A queued run's turn: plan it from the canvas as it is now (with what the runs before it
+        made), or say why it cannot run."""
+        ask = run.request
+        try:
+            graph = ask["graph"]
+            if run.graph_id:
+                try:
+                    graph = get_graph(self.output, run.graph_id)   # saved since: its latest boxes and results
+                except ValueError:
+                    pass   # never saved: as it was asked for
+            run.plan = self.plan(graph, ask["node"], ask["mode"], redo_try=ask["redo_try"], note=ask["note"])
+            run.again = ask["again"] and ask["mode"] == "only" and not ask["redo_try"]
+            run.started, run.status = time.time(), "running"
+        except ValueError as exc:
+            run.status, run.error = "error", str(exc)
+
     def cancel(self, run_id: str) -> bool:
         run = self.runs.get(run_id)
+        with self.lock:
+            if run is not None and run in self.queue:   # not started: it just leaves the queue
+                self.queue.remove(run)
+                self._number()
+                run.status = "cancelled"
+                return True
         if run is None or run.status != "running":
             return False
         run.cancel_requested = True

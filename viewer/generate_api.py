@@ -2900,11 +2900,14 @@ class Handler(SimpleHTTPRequestHandler):
                 node, mode = (body.get("node"), body.get("mode", "only")) if body.get("node") else (None, "all")
                 # {"try": file, "note": what is wrong}: one try of that box done over, in its place
                 redo_try, note = (str(body["try"]), str(body.get("note") or "")) if body.get("try") and node else (None, None)
-                plan = self._graphs().plan(graph, node, mode, redo_try=redo_try, note=note)
-                # before the picture and the 3D model, not ten minutes later at Finish or the split
-                if any(set(s.steps) & activity_api.NEEDS_BLENDER for s in plan.stages) and find_blender() is None:
-                    self._send_json(409, {"error": blender_missing_help(), "needs_blender": True})
-                    return
+                # a run asked for while another goes is queued, and planned at its turn (the box above it may
+                # not have made anything yet); otherwise it is checked now, before anything starts
+                if not self._graphs().busy():
+                    plan = self._graphs().plan(graph, node, mode, redo_try=redo_try, note=note)
+                    # before the picture and the 3D model, not ten minutes later at Finish or the split
+                    if any(set(s.steps) & activity_api.NEEDS_BLENDER for s in plan.stages) and find_blender() is None:
+                        self._send_json(409, {"error": blender_missing_help(), "needs_blender": True})
+                        return
                 run = self._graphs().start(graph, node=node, mode=mode, again=body.get("again") is True,
                                            redo_try=redo_try, note=note,
                                            client=usage_api.source_of(self.headers.get(usage_api.CLIENT_HEADER)))
@@ -3819,7 +3822,8 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parts == ["api", "graph-runs"]:
             running = self._graphs().running()
-            self._send_json(200, {"running": running.to_dict() if running else None})
+            self._send_json(200, {"running": running.to_dict() if running else None,
+                                  "queued": [q.to_dict() for q in list(self._graphs().queue)]})
             return
         if len(parts) == 3 and parts[:2] == ["api", "graph-runs"]:
             run = self._graphs().runs.get(parts[2])

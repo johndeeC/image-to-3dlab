@@ -198,6 +198,17 @@ picked. Those boxes don't run again, so their own settings aren't checked. Below
 runs once for each prop that got that far. Picking a Picture option shows **Carry on with
 this one**, which runs everything below it (mode `after`).
 
+### The queue
+
+One canvas run goes at a time. A run asked for while another goes (a ▶, Run all, a fix, an
+agent's `run_canvas`) joins a **queue** and starts by itself when the one before it ends.
+It is planned only at its turn, from the canvas as saved then, so a 3D model box queued
+behind the Pick out parts run above it starts from the parts that run made. A box in line
+shows **Queued (2)**, dashed; only boxes a run will reach show **Waiting**. The line above
+the board counts the queue, and a queued box's ▶ menu has **Take out of the queue**. Asking
+for the same run twice keeps one place. One that cannot run at its turn says why, and the
+next still goes. `GET /api/graph-runs` lists `running` and `queued`.
+
 ### Fan-out: one sheet, many props
 
 ```

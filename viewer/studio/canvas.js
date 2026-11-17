@@ -288,7 +288,8 @@ export function nodeState(run, id) {
   else if (files.length || results.some((r) => r.status === 'done')) state = 'done';
   else if (results.length && results.every((r) => r.status === 'waiting')) state = 'waiting';
   else if (results.length) state = 'skipped';
-  else if (run?.status === 'running') state = 'waiting';
+  // only a box this run will reach waits for it; the others are left as they are
+  else if (run?.status === 'running' && (run.stages || []).some((s) => s.nodes?.includes(id))) state = 'waiting';
   return { state, files, errors };
 }
 
@@ -423,7 +424,7 @@ export function finishRun(graph, run) {
 /** What a canvas run is doing and where, for the line above the board: `here` when it is this
  *  canvas's run (its boxes show it too), else which canvas it is on. Null when nothing runs.
  *  "Run 2, once for each part: 3D model" reads "3D model, once for each part" (graph_api.doing). */
-export function runBanner(run, graphId) {
+export function runBanner(run, graphId, queued = 0) {
   if (!run || run.status !== 'running') return null;
   const line = run.plan?.[Math.min(run.stage, run.plan.length - 1)] || 'starting';
   const hit = /^Run \d+(?:, (.*?))?: (.*)$/.exec(line);
@@ -432,7 +433,21 @@ export function runBanner(run, graphId) {
   const time = secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)} min ${secs % 60} s`;
   const here = run.graph === graphId;
   const where = here ? 'Running' : run.name ? `Running on “${run.name}”` : 'Running on another canvas';
-  return { here, text: `${where}: ${doing} · ${time}` };
+  return { here, text: `${where}: ${doing} · ${time}${queued ? ` · ${queued} queued` : ''}` };
+}
+
+/** The boxes of canvas `graphId` that queued runs will run, each with its best place in line:
+ *  Run all queues every box; from a box, it and every box below; after, the boxes below. */
+export function queuedBoxes(queued, graph, graphId) {
+  const out = new Map();
+  for (const q of queued || []) {
+    if (q.graph !== graphId) continue;
+    const ids = !q.queued_for ? graph.nodes.map((n) => n.id)
+      : q.mode === 'from' ? [q.queued_for, ...downstreamOf(graph, q.queued_for)]
+        : q.mode === 'after' ? downstreamOf(graph, q.queued_for) : [q.queued_for];
+    for (const id of ids) out.set(id, Math.min(out.get(id) ?? Infinity, q.position));
+  }
+  return out;
 }
 
 /** Where a line's wires start: from the try it carries; from every tile of a box whose results

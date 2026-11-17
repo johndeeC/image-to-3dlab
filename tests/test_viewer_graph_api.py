@@ -937,19 +937,60 @@ def test_a_failed_fix_keeps_the_old_try(tmp_path):
     assert last["results"]["x"] == PART_TRIES["x"] and last["error"] == "it broke"
 
 
-def test_a_second_run_is_told_which_canvas_is_running_and_what_it_is_doing(tmp_path):
+def test_a_run_asked_for_while_another_runs_waits_its_turn_then_starts_from_what_that_made(tmp_path):
+    saved = ga.save_graph(tmp_path, {**PARTS, "id": None})
+    runner, jobs = _graph_runner(tmp_path)
+    queued = []
+
+    def ask_more(run, index):   # while the parts are drawn, the 3D model box below them is asked for
+        if not queued:
+            queued.append(runner.start(ga.get_graph(tmp_path, saved["id"]), node="m", mode="only", background=False))
+            queued.append(runner.start(ga.get_graph(tmp_path, saved["id"]), node="m", mode="only", background=False))
+
+    first = runner.start(ga.get_graph(tmp_path, saved["id"]), node="x", mode="only", background=False, before_stage=ask_more)
+    assert queued[0] is queued[1]                  # asked twice: one place in the queue
+    # it had nothing to start from when asked; at its turn the parts were there
+    assert first.status == "done" and queued[0].status == "done", queued[0].error
+    assert jobs.started == ["part", "part", "model", "model"]
+    results = ga.get_graph(tmp_path, saved["id"])["last_run"]["results"]
+    assert [r["label"] for r in results["x"]] == ["helmet", "left hand"] and [r["label"] for r in results["m"]] == ["helmet", "left hand"]
+    assert runner.running() is None and runner.queue == [] and not runner.busy()
+
+
+def test_a_queued_run_says_where_it_is_in_line_and_can_be_taken_out(tmp_path):
+    saved = ga.save_graph(tmp_path, {**PARTS, "id": None})
     runner, _jobs = _graph_runner(tmp_path)
-    held = []
+    seen = {}
 
-    def hold(run, index):   # the first run stays "running" while a second one is asked for
-        if not held:
-            held.append(run)
-            with pytest.raises(RuntimeError) as busy:
-                runner.start({**PARTS, "name": "Other"}, background=False)
-            held.append(str(busy.value))
+    def ask_more(run, index):
+        if seen:
+            return
+        seen["a"] = runner.start(ga.get_graph(tmp_path, saved["id"]), node="m", mode="only", background=False)
+        seen["b"] = runner.start(ga.get_graph(tmp_path, saved["id"]), node="f", mode="only", background=False)
+        seen["a dict"], seen["b dict"] = seen["a"].to_dict(), seen["b"].to_dict()
+        assert runner.cancel(seen["a"].id)
 
-    runner.start(PARTS, background=False, before_stage=hold)
-    assert held[1] == "“Knight parts” is running (Starts from Picture you gave). Wait for it to finish, or stop it there."
+    runner.start(ga.get_graph(tmp_path, saved["id"]), node="x", mode="only", background=False, before_stage=ask_more)
+    a, b = seen["a dict"], seen["b dict"]
+    assert a["status"] == "queued" and a["queued_for"] == "m" and a["position"] == 1 and b["position"] == 2
+    assert a["plan"] == ["Queued: 3D model, after “Knight parts” ends"]
+    assert seen["a"].status == "cancelled"
+    assert seen["b"].status in ("done", "error")   # the one behind it still had its turn
+
+
+def test_a_queued_run_that_cannot_run_at_its_turn_says_why_and_the_next_still_runs(tmp_path):
+    saved = ga.save_graph(tmp_path, {**CHARACTER, "id": None})
+    runner, jobs = _graph_runner(tmp_path, fail="picture")
+    later = []
+
+    def ask_more(run, index):
+        if not later:
+            later.append(runner.start(ga.get_graph(tmp_path, saved["id"]), node="n2", mode="only", background=False))
+            later.append(runner.start(ga.get_graph(tmp_path, saved["id"]), node="n1", mode="only", background=False))
+
+    runner.start(ga.get_graph(tmp_path, saved["id"]), node="n1", mode="only", background=False, before_stage=ask_more)
+    assert later[0].status == "error" and "Run Picture first" in later[0].error   # the picture it needed failed
+    assert later[1].status == "error" and jobs.started == ["picture", "picture"]   # but the next one did run
 
 
 # ---------------------------------------------------------------- Drawn by, on the boxes that redraw a picture
