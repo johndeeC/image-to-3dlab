@@ -79,7 +79,7 @@ def test_a_line_is_a_curve_from_one_box_to_the_next():
 
 
 def test_the_starters_are_graphs_the_server_would_run():
-    for kind in ("character", "sheet", "compare"):
+    for kind in ("character", "sheet", "compare", "parts"):
         g = _run(f"console.log(JSON.stringify(m.starter('{kind}', {{ engines: ['pixal3d', 'sf3d'], move: 'walk' }})))")
         g["nodes"][0]["settings"]["prompt"] = "a rune knight"
         plan = ga.plan_graph(g, {"goals": {}})
@@ -92,10 +92,12 @@ def test_what_a_node_shows_after_a_run():
     out = _run("""const run = { status: 'running', stage: 1,
         stages: [{ nodes: ['a', 'b'], steps: ['picture', 'model'] }, { nodes: ['c'], steps: ['rigged'] }],
         results: { a: [{ status: 'done', file: 'p.png' }], c: [{ status: 'done', file: 'r1.glb', label: 'axe' }, { status: 'error', error: 'it broke', label: 'sword' }] } };
+      run.results.b = [{ status: 'waiting' }];
       const graph = { nodes: [{ id: 'a', type: 'picture' }, { id: 'b', type: 'model' }, { id: 'c', type: 'rig' }, { id: 'd', type: 'move' }] };
-      console.log(JSON.stringify({ a: m.nodeState(run, 'a'), c: m.nodeState(run, 'c'), d: m.nodeState(run, 'd'), none: m.nodeState(null, 'a'),
+      console.log(JSON.stringify({ b: m.nodeState(run, 'b').state, a: m.nodeState(run, 'a'), c: m.nodeState(run, 'c'), d: m.nodeState(run, 'd'), none: m.nodeState(null, 'a'),
         running: m.runningNode(run, graph, { current: 'rigged' }), idle: m.runningNode(run, graph, null) }))""")
     assert out["a"] == {"state": "done", "files": [{"file": "p.png", "label": None}], "errors": []}
+    assert out["b"] == "waiting"                                # below a Picture whose options wait for a pick
     assert out["c"]["state"] == "error" and out["c"]["files"] == [{"file": "r1.glb", "label": "axe"}]
     assert out["c"]["errors"] == ["sword: it broke"]
     assert out["d"] == {"state": "waiting", "files": [], "errors": []}

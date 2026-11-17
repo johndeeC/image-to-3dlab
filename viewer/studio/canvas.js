@@ -223,6 +223,10 @@ export function starter(kind, { engines = [], move = null } = {}) {
     const g = row([['picture', {}], ['model', engine], ['split', {}], ['export', {}]], 'set');
     return { ...g, name: 'Nine props' };
   }
+  if (kind === 'parts') {
+    const g = row([['picture', {}], ['model', engine], ['split', { names: 'head, hair, body, left hand, right hand' }], ['export', {}]], 'set');
+    return { ...g, name: 'Parts by name' };
+  }
   if (kind === 'compare') {
     let g = row([['picture', {}], ['model', engine]], 'prop');
     g = addNode(g, 'model', 290, 260, engines[1] ? { engine: engines[1] } : engine);
@@ -241,6 +245,7 @@ export function nodeState(run, id) {
   if (errors.length) state = 'error';
   else if (results.some((r) => r.status === 'cancelled')) state = 'cancelled';
   else if (files.length || results.some((r) => r.status === 'done')) state = 'done';
+  else if (results.length && results.every((r) => r.status === 'waiting')) state = 'waiting';
   else if (results.length) state = 'skipped';
   else if (run?.status === 'running') state = 'waiting';
   return { state, files, errors };

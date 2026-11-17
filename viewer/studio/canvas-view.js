@@ -56,3 +56,11 @@ export function fitAll(nodes, sizes, w, h, pad = 40) {
 export function zoomPercent(view) {
   return `${Math.round(view.k * 100)}%`;
 }
+
+/** What a wheel event means: 'zoom' (pinch, Cmd/Ctrl + wheel, or a mouse wheel's whole notches)
+ *  or 'pan' (a two-finger scroll on a trackpad). */
+export function wheelIntent({ deltaX = 0, deltaY = 0, deltaMode = 0, ctrlKey = false, metaKey = false }) {
+  if (ctrlKey || metaKey) return 'zoom';
+  if (deltaMode === 1 || deltaMode === 2) return 'zoom';
+  return deltaX === 0 && Number.isInteger(deltaY) && Math.abs(deltaY) >= 50 ? 'zoom' : 'pan';
+}

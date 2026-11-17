@@ -125,6 +125,9 @@ def test_tidy_lays_each_line_left_to_right_and_stacks_branches():
     ({"key": "Tab", "code": "Tab"}, False, "add"),
     ({"key": "?", "code": "Slash", "shiftKey": True}, False, "help"),
     ({"key": "a", "code": "KeyA", "ctrlKey": True}, False, None),   # on a Mac, Ctrl is not the shortcut key
+    ({"key": "v", "code": "", "metaKey": True}, False, "paste"),    # no code: the letter decides
+    ({"key": "", "code": "Slash", "shiftKey": True}, False, "help"),
+    ({"key": "ƒ", "code": "", "altKey": True, "shiftKey": True}, False, None),   # neither place nor letter
 ])
 def test_each_key_means_one_thing_and_typing_in_a_box_is_left_alone(event, typing, action):
     out = _run("canvas-keys", f"console.log(JSON.stringify(m.actionFor({json.dumps(event)}, {{ typing: {json.dumps(typing)}, mac: true }})))")
@@ -134,3 +137,14 @@ def test_each_key_means_one_thing_and_typing_in_a_box_is_left_alone(event, typin
 def test_every_shortcut_says_what_it_does():
     rows = _run("canvas-keys", "console.log(JSON.stringify(m.SHORTCUTS.map(([a, w, k]) => [a, w, k])))")
     assert all(a and w and k for a, w, k in rows) and len({a for a, _, _ in rows}) == len(rows)
+
+
+@pytest.mark.parametrize("event, intent", [
+    ({"deltaY": 4.5, "ctrlKey": True}, "zoom"),          # a trackpad pinch
+    ({"deltaY": 100}, "zoom"),                           # a mouse wheel notch
+    ({"deltaY": 3}, "pan"),                              # a slow two-finger scroll
+    ({"deltaX": 12, "deltaY": 100}, "pan"),
+    ({"deltaY": 3, "deltaMode": 1}, "zoom"),             # Firefox counts mouse wheels in lines
+])
+def test_a_wheel_event_zooms_or_pans(event, intent):
+    assert _run("canvas-view", f"console.log(JSON.stringify(m.wheelIntent({json.dumps(event)})))") == intent

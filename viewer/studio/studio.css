@@ -469,32 +469,71 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .kit-props .prop img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; background: #0c0a09; justify-self: center; }
 .kit-props .prop b { font-size: 12.5px; font-weight: 600; }
 
-/* Canvas: step boxes placed freely and joined by lines (canvas-pane.js). Boxes reuse the kit's .node look. */
+/* Canvas: step boxes on a board you zoom and pan, joined by lines (canvas-pane.js). Boxes reuse the kit's .node look. */
 .make-row { display: flex; gap: 8px; }
 .make-row .primary { flex: 1; }
-.canvas-sheet { display: flex; flex-direction: column; gap: 10px; place-items: stretch; padding: 18px 20px; overflow: hidden; }
-.canvas-top { display: flex; align-items: center; gap: 10px; }
-.canvas-top .canvas-name { flex: 1; min-width: 0; font: 800 20px/1.2 var(--f-display); }
-.canvas-top select { max-width: 220px; background: var(--raise); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
-.canvas-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.canvas-tools .meta { margin-left: 6px; }
-.canvas-say { margin: 0; min-height: 1.5em; }
-.canvas-say.bad, .cnode .bad { color: var(--x); }
-.canvas-board { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: 12px;
-  background: radial-gradient(circle, var(--line) 1px, transparent 1px) 0 0 / 22px 22px, #0c0a09; }
-.canvas-space { position: relative; min-width: 100%; min-height: 100%; }
-.canvas-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.canvas-sheet { display: flex; flex-direction: column; gap: 8px; place-items: stretch; padding: 12px 14px; overflow: hidden; }
+.canvas-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.canvas-top .canvas-name { flex: 1 1 160px; min-width: 0; font: 800 18px/1.2 var(--f-display); }
+.canvas-top select, .canvas-sheet .cnode select, .canvas-sheet .cnode input[type="text"], .canvas-sheet .cnode input[type="number"] {
+  background: var(--raise); border: 1px solid var(--line); border-radius: 8px; padding: 4px 7px; font-size: 12.5px; }
+.canvas-top select { max-width: 200px; }
+.canvas-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.canvas-tools .seg { display: inline-flex; }
+.canvas-tools .seg .ghost { border-radius: 0; }
+.canvas-tools .seg .ghost:first-child { border-radius: 8px 0 0 8px; }
+.canvas-tools .seg .ghost:last-child { border-radius: 0 8px 8px 0; }
+.canvas-tools [aria-pressed="true"] { border-color: var(--ember); color: var(--bone); }
+.canvas-tools .zoom { font: 400 12px/1.4 var(--f-num); min-width: 52px; }   /* a number: the one place mono belongs */
+.canvas-say { margin: 0; min-height: 1.5em; font-size: 12.5px; }
+.canvas-say.bad, .cnode .bad, .canvas-picker .bad { color: var(--x); }
+.canvas-board { position: relative; flex: 1; min-height: 240px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; outline: none;
+  background: radial-gradient(circle, var(--line) 1px, transparent 1px) 0 0 / 22px 22px, #0c0a09; touch-action: none; }
+.canvas-board:focus-visible { border-color: var(--flame); }
+.canvas-board.hand, .canvas-board.hand * { cursor: grab !important; }
+.canvas-space { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
+.canvas-lines { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
 .canvas-lines .wire { fill: none; stroke: var(--line-hi); stroke-width: 2; }
 .canvas-lines .wire.draft { stroke: var(--ember); stroke-dasharray: 5 4; }
 .canvas-lines .hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }
 .canvas-lines .edge:hover .wire { stroke: var(--x); }
-.canvas-empty { position: absolute; left: 24px; top: 20px; margin: 0; }
-.cnode { position: absolute; max-width: none; flex: none; box-shadow: 0 6px 18px #0008; }
+.canvas-board.no-lines .canvas-lines { display: none; }
+.canvas-empty { position: absolute; left: 20px; top: 16px; margin: 0; pointer-events: none; }
+.canvas-marquee { position: absolute; border: 1px dashed var(--flame); background: color-mix(in srgb, var(--flame) 10%, transparent); pointer-events: none; }
+.canvas-menu { position: absolute; z-index: 5; width: 230px; max-height: 70%; overflow-y: auto; display: grid; gap: 2px; padding: 6px;
+  background: var(--panel); border: 1px solid var(--line-hi); border-radius: 10px; box-shadow: 0 10px 30px #000a; }
+.canvas-menu > p { margin: 2px 6px 4px; }
+.canvas-menu button { display: grid; gap: 1px; text-align: left; padding: 6px 8px; border: 0; border-radius: 7px; background: none; }
+.canvas-menu button:hover, .canvas-menu button:focus-visible { background: var(--raise); }
+.canvas-menu button b { font-size: 13px; font-weight: 600; }
+.canvas-menu button .hint { font-size: 11.5px; line-height: 1.3; }
+.canvas-keys, .canvas-picker { position: absolute; z-index: 6; right: 10px; top: 10px; width: min(360px, calc(100% - 20px)); max-height: calc(100% - 20px); overflow-y: auto;
+  padding: 12px; background: var(--panel); border: 1px solid var(--line-hi); border-radius: 12px; box-shadow: 0 10px 30px #000a; }
+.canvas-picker { position: fixed; right: 24px; top: 90px; width: min(520px, calc(100vw - 48px)); max-height: 70vh; }
+.canvas-keys .row, .canvas-picker .row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.canvas-keys dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 12.5px; }
+.canvas-keys dt { color: var(--flame); white-space: nowrap; }
+.canvas-keys dd { margin: 0; color: var(--ash); }
+.frame { position: absolute; left: 0; top: 0; border: 1px dashed var(--line-hi); border-radius: 14px; background: color-mix(in srgb, var(--raise) 35%, transparent); }
+.frame-bar { height: 26px; padding: 3px 8px; cursor: move; }
+.frame-label { background: none; border: 0; color: var(--ash); font-size: 12px; font-weight: 600; width: 100%; padding: 0; }
+.frame-label:focus { color: var(--bone); outline: none; }
+.cnode { position: absolute; left: 0; top: 0; max-width: none; flex: none; box-shadow: 0 6px 18px #0008; }
+.cnode.chosen { outline: 2px solid var(--flame); outline-offset: 2px; }
 .cnode header { cursor: grab; user-select: none; align-items: center; }
 .cnode header b { flex: 1; }
-.cnode .x { border: 0; background: none; color: var(--ash); padding: 0 2px; line-height: 1; font-size: 16px; }
+.cnode .x { border: 0; background: none; color: var(--ash); padding: 0 2px; line-height: 1; font-size: 14px; }
 .cnode .x:hover { color: var(--bone); }
-.cnode textarea, .cnode select { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; font-size: 12.5px; resize: vertical; }
+.cnode textarea { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; font-size: 12.5px; resize: vertical; }
+.cnode .cfield { display: grid; gap: 2px; font-size: 11.5px; color: var(--ash); }
+.cnode .cfield select, .cnode .cfield input { width: 100%; }
+.cnode .ccheck { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ash); }
+.cnode .cfile { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 12px; min-width: 0; }
+.cnode .cfile .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.cnode .cmore summary { cursor: pointer; font-size: 12px; color: var(--ash); }
+.cnode .cmore[open] { display: grid; gap: 6px; }
+.cnode .hint { font-size: 11.5px; }
+.cnode .option[data-pick-file][aria-pressed="true"] { border: 2px solid var(--ember); }
 .cnode .port { position: absolute; top: 15px; width: 14px; height: 14px; border-radius: 50%; background: var(--raise); border: 2px solid var(--line-hi); }
 .cnode .port.in { left: -8px; }
 .cnode .port.out { right: -8px; cursor: crosshair; }
@@ -504,4 +543,9 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .cnode.error { border-color: color-mix(in srgb, var(--x) 55%, var(--line)); }
 .cnode.done { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
 .cnode.done .state { color: var(--ok); }
-.cnode.skipped, .cnode.cancelled { opacity: .65; }
+.cnode.skipped, .cnode.cancelled, .cnode.waiting { opacity: .7; }
+/* Below 1150 px the studio stacks its columns and the stage is only part of the page: the canvas
+   takes the whole window under the top bar instead, as a workspace of its own. */
+@media (max-width: 1150px) {
+  .canvas-sheet { position: fixed; inset: var(--canvas-top, 56px) 0 0 0; z-index: 40; }
+}
