@@ -5,7 +5,8 @@
 
 import { NODES, NODE_W, PORT_Y, newGraph, addNode, removeNodes, moveNodes, setSetting, connect, canConnect, removeEdge,
   edgePath, starter, nodeState, runningNode, takersOf, addConnected, connectSelected, group, ungroup, renameGroup,
-  groupBounds, pickResult, downstreamOf } from './canvas.js';
+  groupBounds, pickResult, downstreamOf, isChoice, edgeFile, useResult, addFromResult } from './canvas.js';
+import { openPeek } from './canvas-peek.js';
 import { identity, screenToBoard, zoomAt, zoomTo, zoomStep, panBy, wheelFactor, wheelIntent, fitAll, zoomPercent, rememberView, recallView } from './canvas-view.js';
 import { nodesInRect, toggle, addAll, keepExisting } from './canvas-select.js';
 import { createHistory, record, undo, redo } from './canvas-history.js';
@@ -155,23 +156,46 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     }
   }
 
-  const merged = () => ({ status: run?.status, results: { ...(graph.last_run?.results || {}), ...(run?.results || {}) } });
+  const merged = () => {
+    const before = graph.last_run?.results || {}, now = run?.results || {};
+    const joined = run?.again   // a box made again: its new tries sit beside the old ones
+      ? Object.fromEntries(Object.entries(now).map(([k, v]) => [k, [...(before[k] || []).filter((r) => r.status === 'done'), ...v]]))
+      : now;
+    return { status: run?.status, results: { ...before, ...joined } };
+  };
 
   function resultsHtml(node) {
     const { state, files, errors } = nodeState(merged(), node.id);
-    const picking = node.type === 'picture' && files.length > 1;
-    const shown = files.slice(0, 9).map((f) => {
+    const choice = isChoice(graph, node.id) && files.length > 1;
+    const carried = new Set(graph.edges.filter((e) => e.from === node.id && e.file).map((e) => e.file));
+    const shown = files.slice(0, 12).map((f, i) => {
       const img = PICTURE.test(f.file)
-        ? `<img src="/api/thumb?path=${encodeURIComponent(f.file)}" alt="" loading="lazy">`
-        : `<img class="mark" data-kit-file="${esc(f.file)}" src="./studio/mark.svg" alt="">`;
-      const tip = picking ? (node.picked === f.file ? 'The picture that carries on' : 'Pick this one') : (f.label || 'Open in the viewer');
-      return `<button type="button" class="option" data-file="${esc(f.file)}" ${picking ? `data-pick-file aria-pressed="${node.picked === f.file}"` : ''} data-tip="${esc(tip)}">${img}</button>`;
+        ? `<img src="/api/thumb?path=${encodeURIComponent(f.file)}" alt="" loading="lazy" draggable="false">`
+        : `<img class="mark" data-kit-file="${esc(f.file)}" src="./studio/mark.svg" alt="" draggable="false">`;
+      const name = f.label || (choice ? `Try ${i + 1}` : '');
+      const picked = choice && node.picked === f.file;
+      return `<button type="button" class="try${picked ? ' picked' : ''}${carried.has(f.file) ? ' carried' : ''}" data-result="${esc(f.file)}"
+        data-name="${esc(name)}" data-tip="${esc(`${name ? `${name}: ` : ''}click to look closer, drag onto the board to carry on from it`)}">${img}${name && choice ? `<small>${esc(name)}</small>` : ''}</button>`;
     }).join('');
-    const more = files.length > 9 ? `<small class="hint">+${files.length - 9} more</small>` : '';
-    const carry = picking && node.picked && downstreamOf(graph, node.id).length
-      ? '<button type="button" class="primary small" data-carry>Carry on with this one</button>' : '';
+    const more = files.length > 12 ? `<small class="hint">+${files.length - 12} more</small>` : '';
+    // a line that carries its own try needs no pick on the box
+    const below = graph.edges.filter((e) => e.from === node.id && !e.file).length;
+    const carry = choice && node.picked && below
+      ? '<button type="button" class="primary small" data-carry>Carry on with the picked one</button>'
+      : choice && below && !node.picked ? '<small class="hint">Pick one to carry on: click a try, or drag it onto the next box.</small>' : '';
     return { state, partly: state === 'error' && files.length > 0,
-      html: `${shown || more ? `<div class="options">${shown}${more}</div>` : ''}${carry}${errors.length ? `<small class="bad">${esc(errors[0])}</small>` : ''}` };
+      html: `${shown || more ? `<div class="tries">${shown}${more}</div>` : ''}${carry}${errors.length ? `<small class="bad">${esc(errors[0])}</small>` : ''}` };
+  }
+
+  function peek(id, file, name) {
+    const node = graph.nodes.find((n) => n.id === id);
+    const choice = isChoice(graph, id) && nodeState(merged(), id).files.length > 1;   // nothing to choose between one
+    const title = `${NODES[node.type].label}${name ? ` · ${name}` : ''}`;
+    openPeek(board, { file, url: tools.url || ((f) => `/output/${f}`), title, onClose: () => board.focus({ preventScroll: true }),
+      actions: [
+        ...(choice ? [['Use this one', 'The boxes after this one carry on from it.', () => { apply(pickResult(graph, id, file)); say('Picked. Carry on, or drag it onto the next box.'); }]] : []),
+        ['Open in the viewer', 'Closes the canvas (it keeps everything) and opens this in the studio.', () => { on.open?.(file); close(); }],
+      ] });
   }
 
   function renderNodes() {
@@ -218,7 +242,8 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       const a = at.get(e.from), b = at.get(e.to);
       if (!a || !b) return '';
       const d = edgePath(a, b);
-      return `<g class="edge" data-from="${esc(e.from)}" data-to="${esc(e.to)}"><path class="hit" d="${d}"><title>Click to remove this line</title></path><path class="wire" d="${d}"/></g>`;
+      const carries = e.file ? ' carries' : '';
+      return `<g class="edge${carries}" data-from="${esc(e.from)}" data-to="${esc(e.to)}"><path class="hit" d="${d}"><title>${e.file ? 'Carries one try. ' : ''}Click to remove this line</title></path><path class="wire" d="${d}"/></g>`;
     }).join('') + (extra ? `<path class="wire draft" d="${extra}"/>` : '');
   }
 
@@ -406,8 +431,10 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
 
   function runMenu(id, sx, sy) {
     const below = downstreamOf(graph, id).length;
+    const made = nodeState(merged(), id).files.length;
     openMenu(sx, sy, 'Run', [
-      ['Run this box', 'Runs just this step, from what the boxes before it made last time.', () => start({ node: id, mode: 'only' })],
+      ['Run this box', 'Runs just this step, from what the boxes before it made last time. Replaces what it made.', () => start({ node: id, mode: 'only' })],
+      ...(made && isChoice(graph, id) ? [['Make another', 'One more try beside the ones it has. Pick the best after.', () => start({ node: id, mode: 'only', again: true })]] : []),
       ...(below ? [['Run from here', 'Runs this step and every box after it.', () => start({ node: id, mode: 'from' })]] : []),
     ]);
   }
@@ -521,6 +548,10 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     const pt = boardPoint(event);
     if (event.button === 1 || ((tool === 'hand' || spaceHeld) && event.button === 0)) {
       drag = { kind: 'pan', x: event.clientX, y: event.clientY };
+    } else if (card && event.target.closest('[data-result]')) {
+      const thumb = event.target.closest('[data-result]');
+      drag = { kind: 'result', from: card.dataset.node, file: thumb.dataset.result, name: thumb.dataset.name,
+        img: thumb.querySelector('img')?.src, sx: event.clientX, sy: event.clientY, moved: false };
     } else if (card && event.target.closest('[data-port]')) {
       drag = { kind: 'line', from: card.dataset.node };
     } else if (card && event.target.closest('[data-grip]') && !event.target.closest('button')) {
@@ -547,6 +578,24 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
 
   board.addEventListener('pointermove', (event) => {
     if (!drag) return;
+    if (drag.kind === 'result') {
+      if (!drag.moved && Math.hypot(event.clientX - drag.sx, event.clientY - drag.sy) < 6) return;
+      drag.moved = true;
+      const a = graph.nodes.find((n) => n.id === drag.from);
+      const pt = boardPoint(event);
+      renderLines(edgePath(a, { x: pt.x, y: pt.y - PORT_Y }));
+      const r = board.getBoundingClientRect();
+      let ghost = board.querySelector('.canvas-ghost');
+      if (!ghost) {
+        ghost = document.createElement('img');
+        ghost.className = 'canvas-ghost';
+        ghost.alt = '';
+        if (drag.img) ghost.src = drag.img;
+        board.appendChild(ghost);
+      }
+      Object.assign(ghost.style, { left: `${event.clientX - r.left + 8}px`, top: `${event.clientY - r.top + 8}px` });
+      return;
+    }
     if (drag.kind === 'pan') {
       setView(panBy(view, event.clientX - drag.x, event.clientY - drag.y));
       drag.x = event.clientX;
@@ -589,6 +638,31 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     } else if (was.kind === 'marquee') {
       if (Math.abs(event.clientX - was.sx) < 3 && Math.abs(event.clientY - was.sy) < 3 && !was.additive) selection = [];
       render();
+    } else if (was.kind === 'result') {
+      board.querySelector('.canvas-ghost')?.remove();
+      renderLines();
+      if (!was.moved) { peek(was.from, was.file, was.name); return; }
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('.cnode');
+      if (target?.dataset.node === was.from) return;
+      if (target) {
+        try {
+          apply(useResult(graph, was.from, was.file, target.dataset.node));
+          say(`${NODES[graph.nodes.find((n) => n.id === target.dataset.node).type].label} will start from ${was.name || 'that one'}. Press its ▶ to make it.`);
+        } catch (error) { say(error.message, true); }
+        return;
+      }
+      const r = board.getBoundingClientRect();
+      const sx = event.clientX - r.left, sy = event.clientY - r.top;
+      const at = screenToBoard(view, sx, sy);
+      const type = graph.nodes.find((n) => n.id === was.from).type;
+      const items = takersOf(type).map((t) => [NODES[t].label, NODES[t].hint, () => {
+        apply(addFromResult(graph, was.from, was.file, t, at.x, at.y - PORT_Y, defaultsFor(t, tools)));
+        selection = [graph.nodes.at(-1).id];
+        render();
+        say(`A new ${NODES[t].label} box, starting from ${was.name || 'that one'}. Press its ▶ to make it.`);
+      }]);
+      if (items.length) openMenu(sx, sy, `Make from ${was.name || 'this one'}`, items);
+      else say(`Nothing takes what ${NODES[type].label} makes.`, true);
     } else if (was.kind === 'line') {
       const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('.cnode');
       renderLines();
@@ -647,13 +721,8 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     if (t.dataset.clearFile !== undefined) { apply(setSetting(graph, id, 'file', '')); return; }
     if (t.dataset.remove !== undefined) { apply(removeNodes(graph, [id])); return; }
     if (t.dataset.boxRun !== undefined) { runMenu(id, ...near()); return; }
-    if (t.dataset.pickFile !== undefined) { apply(pickResult(graph, id, t.dataset.file)); return; }
+    if (t.dataset.result !== undefined) return;   // a try: click and drag are handled on the pointer
     if (t.dataset.carry !== undefined) { start({ node: id, mode: 'after' }); return; }
-    if (t.dataset.file) {
-      on.open?.(t.dataset.file);
-      if (getComputedStyle(el).position === 'fixed') say('Opened in the viewer. Close the canvas to look at it; the canvas keeps everything.');
-      return;
-    }
     if (t.dataset.check !== undefined) {
       try { say((await json(await post(fetchImpl, '/api/graphs/check', graph))).plan.join(' · ')); } catch (error) { say(error.message, true); }
     } else if (t.dataset.run !== undefined) {

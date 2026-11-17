@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Canvas boxes: **Your 3D model** (start from one in the Library), **Front + back**, a picture
   uploaded or picked from the Library, and prop names on **Split into props** (**Parts by
   name**).
+- Canvas tries: each box shows what it made as thumbs. Click one for a quick view (a picture
+  large, or a 3D model you can turn), **Make another** to add a try beside the old ones, and
+  drag a try onto the board or onto a box to carry on from that one; each line keeps its own.
 - Agents can build and run canvases: `box_types`, `list_canvases`, `get_canvas`, `edit_canvas`,
   `save_canvas`, `check_canvas`, `run_canvas`, `canvas_status`, `cancel_canvas_run`.
 

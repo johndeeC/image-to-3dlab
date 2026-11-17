@@ -73,7 +73,7 @@ Saved in `output/.graphs.json`, beside the run history (`.activity.jsonl`) and t
     {"id": "n2", "type": "model",   "x": 300, "y": 80, "settings": {"engine": "pixal3d"}},
     {"id": "n3", "type": "finish",  "x": 560, "y": 80, "settings": {"detail": "hero", "texture_size": 1024}}
   ],
-  "edges": [{"from": "n1", "to": "n2"}, {"from": "n2", "to": "n3"}],
+  "edges": [{"from": "n1", "to": "n2", "file": "images/rune-knight__b2.png"}, {"from": "n2", "to": "n3"}],
   "groups": [{"id": "g1", "label": "Body", "nodes": ["n2", "n3"]}],
   "last_run": {"status": "done", "results": {"n2": [{"file": "pixal3d/.../model.glb", "status": "done"}]}}
 }]}
@@ -81,7 +81,8 @@ Saved in `output/.graphs.json`, beside the run history (`.activity.jsonl`) and t
 
 - Every box has at most one line in; a Picture or Your 3D model has none. A box may have any
   number of lines out: that is the branching.
-- `picked` is the result that carries on, for a Picture asked for several options.
+- `picked` is the try that carries on from a box with several. A line's own `file`, when it
+  has one, wins: it is the try dragged onto that line.
 - `groups` are the frames. Where you left the board (zoom and pan) is kept in each browser, not
   here: two tabs on one board would otherwise refuse each other's saves over a pan. `view`
   is still read if present, and ignored.
@@ -111,6 +112,25 @@ Stages run one after another, a parent before its children (the studio makes one
 a time). A failed stage skips what hangs off it; other branches still run. Stop ends the
 running step and skips the rest. The run lives on the server (`GraphRunner`): closing the
 tab does not stop it.
+
+### Tries: look, make another, carry on from one
+
+Each box shows what it made as thumbs. **Click** one for a quick view over the canvas: a
+picture large, or a 3D model you can turn (`viewer/studio/canvas-peek.js`). **Make
+another** in a box's ▶ menu adds a new try beside the old ones instead of replacing them.
+A Picture with 2–4 options gives you tries from the start.
+
+**Drag** a try out of its box to carry on from it:
+
+- onto empty board, for a menu of only the boxes that take it (3D model, Front + back…).
+  The new box arrives joined, and its line carries that try;
+- onto a box that takes it, to join them, or to change which try that line carries.
+
+So one Picture box can feed Option 1 to one 3D model box and Option 3 to another. The try
+lives on the line (`"file"` on the edge), not the box, so each branch keeps its own.
+**Use this one** in the quick view sets the box's pick for lines that carry none. A new box
+is not run on its own; press its ▶. Run all makes everything fresh, so it does not use the
+tries on the lines.
 
 ### One box at a time
 

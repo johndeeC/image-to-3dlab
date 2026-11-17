@@ -213,3 +213,23 @@ def test_a_form_value_becomes_what_the_box_keeps():
         m.toggleValue('surface_maps', {}), m.toggleValue('surface_maps', { surface_maps: false }),
         m.defaultsFor('model', { engines: [{ id: 'sf3d' }] }), m.defaultsFor('move', { presets: [{ id: 't', take: true }, { id: 'walk' }] })]))""")
     assert out == [512, "", 1.7, False, "", True, False, {"engine": "sf3d"}, {"move": "walk"}]
+
+
+def test_a_try_dragged_out_of_a_box_starts_the_next_box_from_it():
+    out = _run("""let g = m.newGraph('B');
+      for (const t of ['picture', 'model', 'model', 'split', 'rig', 'move']) g = m.addNode(g, t, 0, 0);
+      g = m.connect(g, 'n1', 'n2');
+      g = m.useResult(g, 'n1', 'images/b.png', 'n2');          // already joined: the line now carries b
+      g = m.useResult(g, 'n1', 'images/c.png', 'n3');          // joined by the drag
+      const fresh = m.addFromResult(g, 'n2', 'm/2.glb', 'finish', 300, 0);
+      let refused = null;
+      try { m.useResult(g, 'n1', 'images/a.png', 'n6'); } catch (e) { refused = e.message; }
+      g = m.connect(m.connect(g, 'n2', 'n4'), 'n4', 'n5');
+      console.log(JSON.stringify({ edges: g.edges, b: m.edgeFile(g, 'n1', 'n2'), none: m.edgeFile(g, 'n2', 'n4'),
+        fresh: fresh.edges.at(-1), refused,
+        choice: ['n1', 'n2', 'n4', 'n5'].map((id) => m.isChoice(g, id)) }))""")
+    assert out["edges"][:2] == [{"from": "n1", "to": "n2", "file": "images/b.png"}, {"from": "n1", "to": "n3", "file": "images/c.png"}]
+    assert out["b"] == "images/b.png" and out["none"] is None
+    assert out["fresh"] == {"from": "n2", "to": "n7", "file": "m/2.glb"}
+    assert out["refused"].startswith("Move takes a rigged model")
+    assert out["choice"] == [True, True, False, False]      # a split's props, and the rigs below it, all carry on

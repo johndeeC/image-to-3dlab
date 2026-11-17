@@ -83,3 +83,10 @@ export function recallView(storage, id) {
     return null;
   }
 }
+
+/** How far back a camera with a `fovDeg` vertical view stands to see a model `size` across
+ *  (its longest side), with a little room round it. */
+export function fitDistance(size, fovDeg = 35, room = 1.35) {
+  const half = Math.max(1e-6, Number(size) || 0) / 2;
+  return (half / Math.tan(((fovDeg * Math.PI) / 180) / 2)) * room;
+}

@@ -161,3 +161,9 @@ def test_where_you_left_a_board_is_kept_in_this_browser_and_a_missing_store_is_f
       console.log(JSON.stringify([m.recallView(storage, 'graph-1'), m.recallView(storage, 'graph-2'), m.recallView(broken, 'graph-1'),
         m.recallView(null, 'graph-1'), store.size]))""")
     assert out == [{"x": 10, "y": -4, "k": 2.5}, None, None, None, 2]
+
+
+def test_the_quick_view_camera_stands_back_far_enough_to_see_the_whole_model():
+    out = _run("canvas-view", "console.log(JSON.stringify([m.fitDistance(2, 90, 1), m.fitDistance(4, 35), m.fitDistance(0, 35)]))")
+    assert out[0] == pytest.approx(1.0)                    # a 90° view sees 2 across from 1 away
+    assert out[1] > 2 * 1.35 * 2 and out[2] > 0             # narrower view, further back; a flat model still has a camera

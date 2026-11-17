@@ -764,7 +764,7 @@ function assetWithFile(file) {
 }
 
 $('canvasBtn').addEventListener('click', () => {
-  openCanvasPane({ stage: $('stage'), tools: { engines, presets, pictureEngines }, on: {
+  openCanvasPane({ stage: $('stage'), tools: { engines, presets, pictureEngines, url }, on: {
     open: (file) => {
       const asset = assetWithFile(file);
       if (!asset) return;

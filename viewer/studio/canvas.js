@@ -258,3 +258,32 @@ export function runningNode(run, graph, chain) {
   const types = new Map(graph.nodes.map((n) => [n.id, n.type]));
   return stage?.nodes.find((id) => NODES[types.get(id)]?.step === chain.current) ?? null;
 }
+
+/** Whether a box's results are tries to choose between (a Picture's options, a box made again),
+ *  not a set that all carries on (a Split's props, and every box below a Split). */
+export function isChoice(graph, id) {
+  const types = new Map(graph.nodes.map((n) => [n.id, n.type]));
+  if (!types.has(id) || ['split', 'export'].includes(types.get(id))) return false;
+  return !upstreamOf(graph, id).some((up) => types.get(up) === 'split');
+}
+
+/** The try a line carries, or null. */
+export function edgeFile(graph, from, to) {
+  return graph.edges.find((e) => e.from === from && e.to === to)?.file ?? null;
+}
+
+/** A try of `from` dragged onto box `to`: join them if they are not, and the line carries that try.
+ *  Throws the reason, in words, when `to` cannot take it. */
+export function useResult(graph, from, file, to) {
+  let g = graph;
+  if (!g.edges.some((e) => e.from === from && e.to === to)) g = connect(g, from, to);
+  g = clone(g);
+  g.edges.find((e) => e.from === from && e.to === to).file = file;
+  return g;
+}
+
+/** A try of `from` dragged onto empty board, made into a new box of `type` that starts from it. */
+export function addFromResult(graph, from, file, type, x, y, settings = {}) {
+  const g = addConnected(graph, from, type, x, y, settings);
+  return useResult(g, from, file, g.nodes.at(-1).id);
+}
