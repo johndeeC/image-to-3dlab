@@ -41,12 +41,33 @@ class Hunyuan3DShapePipeline:
         mx.eval(cond_cat)
         return cond_cat
 
+    def encode_views(self, views: dict, border_ratio=0.15):
+        """Hunyuan3D-2mv: {"front": path, "left": ..., "back": ..., "right": ...} (any of them,
+        front included) -> [2, V*1370, 1536], each view tagged by its index, cond first."""
+        index = getattr(self.dino, "VIEWS", None)
+        if index is None:
+            raise ValueError("this model reads one picture; several views need Hunyuan3D-2mv")
+        unknown = sorted(set(views) - set(index))
+        if unknown:
+            raise ValueError(f"views are {', '.join(index)}; not {', '.join(unknown)}")
+        order = sorted(views, key=index.__getitem__)
+        pixels = mx.concatenate([
+            dino_transform(load_image(views[v], size=512, border_ratio=border_ratio)[0]).astype(self.dtype)
+            for v in order], axis=0)                                          # [V,518,518,3]
+        cond = self.dino.encode_views(pixels, [index[v] for v in order])
+        uncond = self.dino.unconditional_embedding(1, dtype=self.dtype, views=len(order))
+        cond_cat = mx.concatenate([cond, uncond], axis=0)
+        mx.eval(cond_cat)
+        return cond_cat
+
     def generate(self, image_path: str, num_inference_steps=30, guidance_scale=5.0,
                  octree_resolution=256, num_chunks=None, box_v=1.01, mc_level=0.0,
                  seed=0, border_ratio=0.15, octree_decode=False, compile_dit=False,
-                 verbose=True):
+                 verbose=True, views: dict | None = None):
+        """`views`: Hunyuan3D-2mv's pictures by side ({"front", "left", "back", "right"}), in place
+        of `image_path`'s one picture."""
         t0 = time.time()
-        cond_cat = self.encode_image(image_path, border_ratio)
+        cond_cat = self.encode_views(views, border_ratio) if views else self.encode_image(image_path, border_ratio)
         if verbose:
             print(f"[dino] cond {cond_cat.shape} in {time.time() - t0:.1f}s")
 

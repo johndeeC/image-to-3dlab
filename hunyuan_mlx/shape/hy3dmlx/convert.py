@@ -19,7 +19,7 @@ from safetensors import safe_open
 from .models.dit import Hunyuan3DDiT
 from .models.dit_plain import HunYuanDiTPlain
 from .models.shape_vae import ShapeVAE
-from .models.dinov2 import DinoImageEncoder
+from .models.dinov2 import DinoImageEncoder, DinoImageEncoderMV
 
 COND_PREFIX = "conditioner.main_image_encoder."
 
@@ -56,7 +56,9 @@ def _build_dino(cfg: dict, dino_items: dict):
     # FFN inner dim straight from the weights (SwiGLU weights_out / plain fc2: [hidden, ffn_dim]).
     wkey = "model.encoder.layer.0.mlp." + ("weights_out" if swiglu else "fc2") + ".weight"
     ffn_dim = dino_items[wkey].shape[1]
-    return DinoImageEncoder(
+    # Hunyuan3D-2mv names DinoImageEncoderMV: the same weights, run per view and tagged
+    multi = cfg["conditioner"]["params"]["main_image_encoder"].get("type") == "DinoImageEncoderMV"
+    return (DinoImageEncoderMV if multi else DinoImageEncoder)(
         hidden=dcfg["hidden_size"], heads=dcfg["num_attention_heads"],
         layers=dcfg["num_hidden_layers"], ffn_dim=ffn_dim, swiglu=swiglu,
         patch=dcfg["patch_size"], eps=float(dcfg["layer_norm_eps"]),

@@ -7,6 +7,7 @@ Input is NHWC pixel values already resized/cropped/ImageNet-normalized.
 """
 import mlx.core as mx
 import mlx.nn as nn
+import numpy as np
 
 from ..layers import LayerNorm, gelu_erf, sdpa
 
@@ -164,3 +165,35 @@ class DinoImageEncoder(nn.Module):
 
     def unconditional_embedding(self, batch_size: int, dtype=mx.float32) -> mx.array:
         return mx.zeros((batch_size, self.num_patches, self.hidden), dtype=dtype)
+
+
+def sincos_1d(embed_dim: int, positions) -> np.ndarray:
+    """The 1-D sine/cosine position embedding Hunyuan3D-2mv tags its views with
+    (hy3dgen get_1d_sincos_pos_embed_from_grid): [len(positions), embed_dim], sines then cosines."""
+    assert embed_dim % 2 == 0
+    omega = 1.0 / 10000 ** (np.arange(embed_dim // 2, dtype=np.float64) / (embed_dim / 2.0))
+    out = np.einsum("m,d->md", np.asarray(positions, dtype=np.float64).reshape(-1), omega)
+    return np.concatenate([np.sin(out), np.cos(out)], axis=1)
+
+
+class DinoImageEncoderMV(DinoImageEncoder):
+    """Hunyuan3D-2mv's encoder: the same DINOv2, run on each view (front, left, back, right), each
+    view's tokens tagged with a fixed sine/cosine embedding of its index, all joined into one
+    sequence (hy3dgen DinoImageEncoderMV). The tags are computed, not learned: no extra weights."""
+
+    VIEWS = {"front": 0, "left": 1, "back": 2, "right": 3}
+
+    def __init__(self, *args, view_num: int = 4, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.view_num = view_num
+        # numpy, not mx: an mx.array attribute would count as a weight to load
+        self._view_tags = sincos_1d(self.hidden, np.arange(view_num)).astype(np.float32)
+
+    def encode_views(self, pixel_nhwc: mx.array, view_idxs: list[int]) -> mx.array:
+        """[V, 518, 518, 3] pictures (in `view_idxs` order) -> [1, V * 1370, hidden]."""
+        hidden = self.model(pixel_nhwc)                                   # [V, 1370, H]
+        tags = mx.array(self._view_tags[np.asarray(view_idxs)])[:, None, :].astype(hidden.dtype)
+        return (hidden + tags).reshape(1, -1, hidden.shape[-1])
+
+    def unconditional_embedding(self, batch_size: int, dtype=mx.float32, views: int = 1) -> mx.array:
+        return mx.zeros((batch_size, self.num_patches * views, self.hidden), dtype=dtype)

@@ -76,12 +76,19 @@ containing `config.yaml` + `model.fp16.safetensors`):
 | **2.0-turbo** ⭐ | `Hunyuan3D-2/hunyuan3d-dit-v2-0-turbo` | DINOv2-giant | FLUX 1.1B distilled | **fast+quality sweet spot** — 8 steps, ~17 s, ≈ base-2.0 |
 | 2.1 | `Hunyuan3D-2.1/hunyuan3d-dit-v2-1` | DINOv2-large | MoE 3.3B | supported (`dit_plain.py`); large conditioner softens fine detail |
 | mini-turbo | `Hunyuan3D-2mini/hunyuan3d-dit-v2-mini-turbo` | DINOv2-giant | FLUX 0.6B distilled | fast, but stripes thin features (too small to distill cleanly) |
+| **2mv** | `Hunyuan3D-2mv/hunyuan3d-dit-v2-mv` | DINOv2-giant, per view | FLUX 1.1B | several views: `generate(views={"front": ..., "left": ..., "back": ..., "right": ...})` (any of them, front included); 4.93 GB |
 
 Distilled (`*-turbo`) models are auto-detected (`guidance_embed` → single forward, no CFG;
 consistency scheduler → run with `--steps 8`). All `weights dir` are under `weights/`.
 
 Adding 2.0/2.1 required **no new loader code** — `convert.py` reads the DiT class and DINO FFN
 type from each config.
+
+**2mv (several views)** is the 2.0 DiT with `DinoImageEncoderMV`: the same DINOv2 run on each view,
+each view's tokens tagged with a fixed 1-D sine/cosine embedding of its index (front 0, left 1,
+back 2, right 3 — "left" is the front turned a quarter clockwise seen from above), all joined into
+one sequence for the DiT's cross-attention. The tags are computed, so it needs no weights beyond the
+checkpoint (`hy3dmlx/models/dinov2.py`, tested in `tests/test_multiview.py`).
 
 ## Generate
 
