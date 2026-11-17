@@ -2388,3 +2388,23 @@ def test_a_repaint_keeps_its_settings_in_bounds_and_builds_its_command(tmp_path,
     assert args[:3] == [str((tmp_path / "run" / "m.glb").resolve()), str(tmp_path / "in.png"), str(tmp_path / "out.glb")]
     assert args[args.index("--paint-seed") + 1] == "3"
     assert spec.wrapper.name == "hunyuan_mlx_retexture.py"
+
+
+# --- several views (Hunyuan3D-2mv) -----------------------------------------------------
+
+def test_the_fast_and_clean_route_passes_each_saved_view_and_ignores_a_client_name(tmp_path):
+    spec = api.BACKENDS["hunyuan-mlx-xiong"]
+    settings = spec.validate_settings({"model": "2mv", "left_name": "../../etc/passwd"})
+    assert "left_name" not in settings and settings["model"] == "2mv"
+    settings.update(left_name="left.png", right_name="right.png")
+    job = api.Job("0" * 32, tmp_path, tmp_path / "in.png", tmp_path / "out.glb", settings, "hunyuan-mlx-xiong")
+    args = spec.build_args(job)
+    assert args[args.index("--left") + 1] == str(tmp_path / "left.png")
+    assert args[args.index("--right") + 1] == str(tmp_path / "right.png") and "--back" not in args
+    assert api.HUNYUAN_XIONG_SHAPE_MODELS["2mv"].parts[-2:] == ("Hunyuan3D-2mv", "hunyuan3d-dit-v2-mv")
+
+
+def test_a_request_s_extra_views_are_the_named_sides_with_a_file():
+    form = {"left": {"filename": "l.png", "data": b"x"}, "back": {"filename": ""}, "right": {"filename": "r.jpg", "data": b"y"},
+            "image": {"filename": "f.png"}}
+    assert set(api.view_fields(form)) == {"left", "right"}

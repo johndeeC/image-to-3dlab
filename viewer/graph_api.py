@@ -42,23 +42,27 @@ _LOCK = threading.Lock()     # the server answers on threads; one write at a tim
 # viewer/studio/canvas.js has the same table; tests/test_studio_canvas.py checks they agree.
 LABELS = {"picture": "Picture", "asset": "Your 3D model", "back": "Front + back", "parts": "Pick out parts", "model": "3D model", "repaint": "Repaint",
           "cutout": "Cut out background", "remesh": "Quad remesh", "unwrap": "UV unwrap", "saveas": "Save as",
-          "combine": "Put together",
+          "combine": "Put together", "views": "Four views",
           "split": "Split into props", "finish": "Finish", "rig": "Rig", "move": "Move", "export": "Export"}
-TAKES = {"picture": (), "asset": (), "back": ("picture",), "parts": ("picture",), "model": ("picture", "pair"),
+TAKES = {"picture": (), "asset": (), "back": ("picture",), "parts": ("picture",), "views": ("picture",),
+         "model": ("picture", "pair", "views"),
          "repaint": ("model", "finished", "props"), "cutout": ("picture",),
          "remesh": ("model", "finished", "props"), "unwrap": ("model", "finished", "props"),
          "saveas": ("model", "finished", "rigged", "animated", "props"), "combine": ("model", "finished", "props"), "split": ("model",),
          "finish": ("model",), "rig": ("model", "finished", "props"), "move": ("rigged",),
          "export": ("model", "finished", "rigged", "animated", "props")}
 MAKES = {"picture": "picture", "asset": "model", "back": "pair", "parts": "picture", "model": "model", "repaint": "model",
-         "cutout": "picture", "remesh": "model", "unwrap": "model", "saveas": None, "combine": "model", "split": "props",
+         "cutout": "picture", "remesh": "model", "unwrap": "model", "saveas": None, "combine": "model", "views": "views", "split": "props",
          "finish": "finished", "rig": "rigged", "move": "animated", "export": None}
 STEP = {"picture": "picture", "back": "back", "parts": "part", "model": "model", "repaint": "repaint",
-        "cutout": "cutout", "remesh": "remesh", "unwrap": "unwrap", "saveas": "export", "combine": "combine", "split": "split", "finish": "finished",
+        "cutout": "cutout", "remesh": "remesh", "unwrap": "unwrap", "saveas": "export", "combine": "combine",
+        "views": "views",   # three runner steps: left, back, right (VIEW_STEPS)
+        "split": "split", "finish": "finished",
         "rig": "rigged", "move": "animated"}
 # the runner's `made` key each box's file lands under (split: the folder its props went to)
 MADE_KEY = {"picture": "picture", "asset": "model", "back": "back", "parts": "picture", "model": "model", "repaint": "model",
-            "cutout": "picture", "remesh": "model", "unwrap": "model", "saveas": "export", "combine": "model", "split": "split",
+            "cutout": "picture", "remesh": "model", "unwrap": "model", "saveas": "export", "combine": "model",
+            "views": "left", "split": "split",
             "finish": "finished", "rig": "rigged", "move": "animated"}
 ROOTS = ("picture", "asset")
 # Boxes whose results all carry on, each its own run below: a Split's props, a Pick out parts' parts.
@@ -66,7 +70,9 @@ ROOTS = ("picture", "asset")
 FANS = {"split": "finished", "parts": "picture"}
 MAX_PARTS = 12
 GOALS = {"character": "a character", "prop": "one prop", "set": "a sheet of nine", "picture": "just a picture"}
-TAKE_WORDS = {"picture": "a picture", "pair": "a front and back picture", "model": "a 3D model",
+VIEW_STEPS = ("left", "back", "right")   # what a Four views box draws, in order
+FOUR_VIEW_ENGINE = "hunyuan_xiong"         # the engine with Hunyuan3D-2mv (the studio's "Fast and clean")
+TAKE_WORDS = {"views": "four views", "picture": "a picture", "pair": "a front and back picture", "model": "a 3D model",
               "finished": "a game-ready model", "rigged": "a rigged model", "animated": "a moving model", "props": "props"}
 SHAPES = {"square": (1024, 1024), "tall": (832, 1216), "wide": (1216, 832)}
 
@@ -84,6 +90,7 @@ SETTINGS: dict[str, dict[str, tuple]] = {
     "unwrap": {"size": ("choice", 512, 1024, 2048, 4096)},
     "saveas": {"format": ("choice", "fbx", "obj", "usdz")},
     "combine": {},
+    "views": {},
     "model": {"engine": ("text",)},
     "split": {"names": ("text",)},
     "finish": {"detail": ("choice", *FINISH_DETAILS), "pixel_match": ("bool",),
@@ -297,6 +304,7 @@ class Stage:
     paint_from: str | None = None   # a Repaint box's own picture (else the picture the model was made from)
     tool_settings: dict[str, dict[str, Any]] = field(default_factory=dict)   # step -> Quad remesh / UV unwrap / Save as choices
     gather: bool = False            # Put together: one run, with every model the stage before made
+    four_views: bool = False        # a 3D model after Four views: built from front, left, back, right
     only_part: str | None = None # below Pick out parts: just this part (one dragged onto the line)
     want: str = "character"
     prompt: str | None = None
@@ -393,6 +401,9 @@ def _check(raw: Any, keep: set[str] | None = None, above: set[str] = frozenset()
             raise ValueError("Your 3D model: pick one from the Library.")
         if kind == "model" and not s.get("engine"):
             raise ValueError("3D model: pick an engine.")
+        if kind == "model" and parent.get(i) in nodes and nodes[parent[i]]["type"] == "views" \
+                and s.get("engine") != FOUR_VIEW_ENGINE:
+            raise ValueError("3D model: four views need the Fast and clean engine (it has Hunyuan3D-2mv).")
         if kind == "move" and not s.get("move"):
             raise ValueError("Move: pick a move.")
         if kind == "parts":
@@ -494,6 +505,8 @@ class _Planner:
                 stage.made["picture"] = s["file"]
             elif kind == "asset":
                 stage.made["model"] = s["file"]
+            elif kind == "views":
+                stage.steps += list(VIEW_STEPS)
             else:
                 stage.steps.append(STEP[kind])
             if kind == "picture" and not s.get("file"):
@@ -504,6 +517,7 @@ class _Planner:
                 stage.count = s.get("count", 1)
             elif kind == "model":
                 stage.engine = s["engine"]
+                stage.four_views = g.nodes.get(g.parent.get(at), {}).get("type") == "views"
             elif kind == "parts":
                 stage.parts = part_names(s["names"])
             elif kind == "repaint" and s.get("file"):
@@ -592,6 +606,14 @@ def _seeds(g: _Graph, path: list[str], results: dict[str, list[dict[str, Any]]],
     if split_at is None:
         made = {}
         for i, b in enumerate(path):
+            if g.nodes[b]["type"] == "views":   # every side it drew goes on, not one of them
+                for r in results.get(b, []):
+                    side = str(r.get("label") or "").split(" ")[0]
+                    if r.get("status") == "done" and r.get("file") and side in VIEW_STEPS:
+                        made[side] = r["file"]
+                if not any(side in made for side in VIEW_STEPS):
+                    raise ValueError(f"Run {g.label[b]} first: it has made nothing yet.")
+                continue
             made[MADE_KEY[g.nodes[b]["type"]]] = _chosen(g, b, results, path[i + 1] if i + 1 < len(path) else below)
         return [{"made": made, "label": None}]
     seeds = []
@@ -897,7 +919,7 @@ class GraphRunner:
                           split_settings=dict(stage.split_settings), rig_settings=dict(stage.rig_settings),
                           move_settings=dict(stage.move_settings), made=made, client=client,
                           part_name=job.get("part"), tool_settings=dict(stage.tool_settings),
-                          gather=list(job.get("gather") or []),
+                          gather=list(job.get("gather") or []), four_views=stage.four_views,
                           model_seed=self.random() if {"model", "repaint"} & set(stage.steps) else None)
             run.current_chain = chain.id
             try:
@@ -916,6 +938,13 @@ class GraphRunner:
         """What each box of the stage made in this run, or why it did not."""
         for node_id in stage.nodes:
             kind = run.plan.types[node_id]
+            if kind == "views":   # the three sides it drew, each its own result
+                for side in VIEW_STEPS:
+                    if side in chain.done and chain.made.get(side):
+                        self._add(run, node_id, {"status": "done", "file": chain.made[side], "label": f"{side} view"})
+                    elif chain.status != "done" and chain.current == side:
+                        self._add(run, node_id, {"status": chain.status, "error": chain.error, "label": f"{side} view"})
+                continue
             file = chain.made.get(MADE_KEY[kind])
             step = STEP.get(kind)
             if kind == "split" and step in chain.done:

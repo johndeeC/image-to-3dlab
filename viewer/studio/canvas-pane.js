@@ -557,8 +557,8 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
     const type = graph.nodes.find((n) => n.id === from)?.type;
     const items = takersOf(type).map((t) => [NODES[t].label, NODES[t].hint, () => {
       const shown = file || shownTry(from);
-      apply(shown ? addFromResult(graph, from, shown, t, at.x, at.y - PORT_Y, defaultsFor(t, tools))
-        : addConnected(graph, from, t, at.x, at.y - PORT_Y, defaultsFor(t, tools)));
+      apply(shown ? addFromResult(graph, from, shown, t, at.x, at.y - PORT_Y, defaultsFor(t, tools, type))
+        : addConnected(graph, from, t, at.x, at.y - PORT_Y, defaultsFor(t, tools, type)));
       selection = [];   // the new box stays in view; click it for its settings
       render();
     }]);
@@ -875,7 +875,7 @@ export function openCanvasPane({ stage, tools, on, fetchImpl = fetch, interval =
       const at = screenToBoard(view, sx, sy);
       const type = graph.nodes.find((n) => n.id === was.from).type;
       const items = takersOf(type).map((t) => [NODES[t].label, NODES[t].hint, () => {
-        apply(addFromResult(graph, was.from, was.file, t, at.x, at.y - PORT_Y, defaultsFor(t, tools)));
+        apply(addFromResult(graph, was.from, was.file, t, at.x, at.y - PORT_Y, defaultsFor(t, tools, type)));
         selection = [];   // the new box stays in view; click it for its settings
         render();
         say(`A new ${NODES[t].label} box, starting from ${was.name || 'that one'}. Press its ▶ to make it.`);

@@ -925,3 +925,27 @@ def test_a_part_job_redraws_the_picture_it_was_given(tmp_path):
     assert job.reference == source and job.mode == "edit (part)" and job.instruction == "helmet"
     assert job.output_path.parent.name.startswith("helmet__part__") and job.settings["seed"] == 5
     assert "Only the helmet" in job.prompt
+
+
+# ---------------------------------------------------------------- side views for a four-view build (Hunyuan3D-2mv)
+def test_a_side_view_asks_for_that_side_and_lands_beside_the_front(tmp_path):
+    from PIL import Image
+
+    from image_to_3dlab import back_view
+
+    left = back_view.view_prompt("left")
+    assert "seen from its left side" in left and "faces the right edge" in left
+    assert "faces the left edge" in back_view.view_prompt("right")
+    assert back_view.view_prompt("back") == back_view.BACK_PROMPT
+    with pytest.raises(ValueError, match="back, left or right"):
+        back_view.view_prompt("top")
+    front = tmp_path / "knight" / "knight.png"
+    front.parent.mkdir()
+    cut = Image.new("RGBA", (64, 64), (0, 0, 0, 0))          # already cut out: no remover needed
+    cut.paste((10, 10, 10, 255), (16, 16, 48, 48))
+    cut.save(front)
+    manager = api.ImageJobManager(output_root=tmp_path)
+    job = api.create_back_job(manager, front, side="right")
+    assert job.output_path == front.with_name("knight__right.png") and "right side" in job.prompt
+    with pytest.raises(ValueError):
+        api.create_back_job(api.ImageJobManager(output_root=tmp_path), front, side="top")

@@ -58,6 +58,7 @@ export const FIELDS = {
     ['goal', 'It is', 'Finish stands a character 1.8 m tall and a prop upright.', 'select', () => [['character', 'A character'], ['prop', 'A prop']]],
   ],
   back: [],
+  views: [],
   parts: [
     ['names', 'Parts', 'One per line or with commas: head, hair, left hand. Each is redrawn on its own.', 'area'],
   ],
@@ -113,8 +114,13 @@ export function settingKeys() {
   return Object.fromEntries(Object.entries(FIELDS).map(([type, fields]) => [type, fields.map((f) => f[0])]));
 }
 
-/** A new box's settings: the first ready engine, the first move, a character picture. */
-export function defaultsFor(type, tools = {}) {
+/** The engine that builds from four views (Hunyuan3D-2mv), the studio's "Fast and clean". */
+export const FOUR_VIEW_ENGINE = 'hunyuan_xiong';
+
+/** A new box's settings: the first ready engine (the four-view one after Four views), the first
+ *  move, a character picture. `after` is the type of the box it is joined to, if any. */
+export function defaultsFor(type, tools = {}, after = null) {
+  if (type === 'model' && after === 'views') return { engine: FOUR_VIEW_ENGINE };
   if (type === 'model' && tools.engines?.[0]) return { engine: tools.engines[0].id };
   if (type === 'move') {
     const move = (tools.presets || []).find((p) => !p.take);

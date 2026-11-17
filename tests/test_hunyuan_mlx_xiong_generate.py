@@ -149,3 +149,17 @@ def test_run_paint_keeps_stage_licence_record(tmp_path, monkeypatch):
     assert record["components"][0]["weights"] == "chosen-weights"
     assert record["output"]["path"] == str(output)
     assert record["output"]["sha256"] == sha256_file(output)
+
+
+def test_several_views_go_to_the_shape_stage_only_with_hunyuan3d_2mv():
+    front = Path("front.png")
+    assert xiong.views_for(front, {"left": None, "back": None, "right": None}, "2.0") is None
+    views = xiong.views_for(front, {"left": Path("l.png"), "back": Path("b.png"), "right": None}, "2mv")
+    assert views == {"front": "front.png", "left": "l.png", "back": "b.png"}
+    import pytest
+    with pytest.raises(SystemExit, match="need --model 2mv"):
+        xiong.views_for(front, {"left": Path("l.png")}, "2.0")
+    assert xiong.views_for(front, {"left": None}, "2mv") == {"front": "front.png"}
+    assert xiong.SHAPE_MODELS["2mv"].parts[-2:] == ("Hunyuan3D-2mv", "hunyuan3d-dit-v2-mv")
+    args = xiong.parse_args(["in.png", "out.glb", "--model", "2mv", "--left", "l.png"])
+    assert args.left == Path("l.png") and args.back is None

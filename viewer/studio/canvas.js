@@ -9,7 +9,8 @@ export const NODES = {
   asset: { tone: 'source', label: 'Your 3D model', hint: 'Starts from a 3D model already in your Library.', takes: [], makes: 'model', step: null },
   back: { tone: 'draw', label: 'Front + back', hint: 'Draws the back too, so the 3D model is right all round. Best detail engine only.', takes: ['picture'], makes: 'pair', step: 'back' },
   parts: { tone: 'draw', label: 'Pick out parts', hint: 'Redraws each part you name (head, hair, hands) on its own, so each can become its own 3D model.', takes: ['picture'], makes: 'picture', step: 'part' },
-  model: { tone: 'shape', label: '3D model', hint: 'Builds a 3D model from the picture.', takes: ['picture', 'pair'], makes: 'model', step: 'model' },
+  views: { tone: 'draw', label: 'Four views', hint: 'Draws its left, back and right too, so the 3D model is built from all four sides. Needs the Fast and clean engine.', takes: ['picture'], makes: 'views', step: 'views' },
+  model: { tone: 'shape', label: '3D model', hint: 'Builds a 3D model from the picture.', takes: ['picture', 'pair', 'views'], makes: 'model', step: 'model' },
   split: { tone: 'shape', label: 'Split into props', hint: 'Cuts a sheet of nine into separate game-ready props.', takes: ['model'], makes: 'props', step: 'split' },
   repaint: { tone: 'finish', label: 'Repaint', hint: 'Paints the model again from a picture: a new look on the same shape.', takes: ['model', 'finished', 'props'], makes: 'model', step: 'repaint' },
   cutout: { tone: 'draw', label: 'Cut out background', hint: 'Takes the background off a picture, leaving just the subject.', takes: ['picture'], makes: 'picture', step: 'cutout' },
@@ -26,7 +27,7 @@ export const NODES = {
 /** What a Picture is for: it picks the wording added to your words, and Finish's defaults. */
 export const GOALS = { character: 'A character', prop: 'One prop', set: 'Sheet of nine', picture: 'Just a picture' };
 
-const THING = { picture: 'a picture', pair: 'a front and back picture', model: 'a 3D model', finished: 'a game-ready model', rigged: 'a rigged model', animated: 'a moving model', props: 'props' };
+const THING = { views: 'four views', picture: 'a picture', pair: 'a front and back picture', model: 'a 3D model', finished: 'a game-ready model', rigged: 'a rigged model', animated: 'a moving model', props: 'props' };
 
 // A box is a square preview tile: its width (and height), and how far down its in and out dots
 // sit (the middle, so lines meet tiles side-on).
@@ -296,14 +297,16 @@ export function runningNode(run, graph, chain) {
   if (!run || run.status !== 'running' || !chain?.current) return null;
   const stage = run.stages?.[run.stage];
   const types = new Map(graph.nodes.map((n) => [n.id, n.type]));
-  return stage?.nodes.find((id) => NODES[types.get(id)]?.step === chain.current) ?? null;
+  // a Four views box runs three steps (left, back, right)
+  const step = (id) => (types.get(id) === 'views' && ['left', 'back', 'right'].includes(chain.current) ? chain.current : NODES[types.get(id)]?.step);
+  return stage?.nodes.find((id) => step(id) === chain.current) ?? null;
 }
 
 /** Whether a box's results are tries to choose between (a Picture's options, a box made again),
  *  not a set that all carries on (a Split's props, and every box below a Split). */
 export function isChoice(graph, id) {
   const types = new Map(graph.nodes.map((n) => [n.id, n.type]));
-  if (!types.has(id) || ['split', 'parts', 'export'].includes(types.get(id))) return false;
+  if (!types.has(id) || ['split', 'parts', 'views', 'export'].includes(types.get(id))) return false;
   return !upstreamOf(graph, id).some((up) => FANS.includes(types.get(up)));
 }
 

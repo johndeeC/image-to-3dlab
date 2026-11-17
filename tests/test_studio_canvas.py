@@ -116,7 +116,7 @@ def test_a_line_dropped_on_the_board_offers_only_the_boxes_that_take_it():
     out = _run("""console.log(JSON.stringify({ model: m.takersOf('model'), picture: m.takersOf('picture'),
       export: m.takersOf('export'), back: m.takersOf('back') }))""")
     assert out["model"] == ["split", "repaint", "remesh", "unwrap", "combine", "saveas", "finish", "rig", "export"]
-    assert out["picture"] == ["back", "parts", "model", "cutout"]
+    assert out["picture"] == ["back", "parts", "views", "model", "cutout"]
     assert out["export"] == [] and out["back"] == ["model"]
 
 
@@ -306,3 +306,16 @@ def test_an_engine_is_named_by_what_it_does_then_by_its_own_name_with_a_note():
     assert out[:3] == ["Hunyuan3D-MLX", "Stable Fast 3D", "FLUX.2 [klein] 4B"]
     assert out[3].startswith("A quick look in seconds") and out[4] == ""
     assert out[5] == "The engine Create would use." and out[6].startswith("Slower, but sticks closely")
+
+
+def test_four_views_runs_three_steps_on_one_box_and_its_3d_model_gets_the_four_view_engine():
+    out = _run("""let g = m.newGraph('B');
+      for (const t of ['picture', 'views', 'model']) g = m.addNode(g, t, 0, 0);
+      g = m.connect(m.connect(g, 'n1', 'n2'), 'n2', 'n3');
+      const run = { status: 'running', stage: 0, stages: [{ nodes: ['n1', 'n2', 'n3'], steps: ['picture', 'left', 'back', 'right', 'model'] }] };
+      console.log(JSON.stringify({ busy: ['left', 'right', 'model'].map((current) => m.runningNode(run, g, { current })),
+        choice: m.isChoice(g, 'n2'), sides: m.tileFace(g, g.nodes[1], { files: [{ file: 'l.png' }, { file: 'b.png' }, { file: 'r.png' }] }).kind }))""")
+    assert out == {"busy": ["n2", "n2", "n3"], "choice": False, "sides": "mosaic"}
+    picked = _settings("""console.log(JSON.stringify([m.defaultsFor('model', { engines: [{ id: 'pixal3d' }] }, 'views'),
+      m.defaultsFor('model', { engines: [{ id: 'pixal3d' }] }, 'picture')]))""")
+    assert picked == [{"engine": "hunyuan_xiong"}, {"engine": "pixal3d"}]

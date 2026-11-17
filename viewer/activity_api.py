@@ -26,16 +26,18 @@ HISTORY_NAME = ".activity.jsonl"
 TERMINAL = {"done", "error", "cancelled"}
 STALL_SECONDS = 180
 STEPS = ("picture", "back", "model", "finished", "split", "rigged", "animated", "part", "repaint",
-         "cutout", "remesh", "unwrap", "export", "combine")
+         "cutout", "remesh", "unwrap", "export", "combine", "left", "right")
 # The short tool jobs (viewer/tool_jobs.py): what each reads from `made`, in order of preference.
 TOOL_STEPS = {"cutout", "remesh", "unwrap", "export", "combine"}
 LABELS = {"picture": "Picture", "back": "Back picture", "model": "3D model", "finished": "Finish",
           "split": "Split into props", "rigged": "Rig", "animated": "Animate", "skin": "Skin",
           "part": "Pick out a part", "repaint": "Repaint", "cutout": "Cut out background",
-          "remesh": "Quad remesh", "unwrap": "UV unwrap", "export": "Save as", "combine": "Put together"}
+          "remesh": "Quad remesh", "unwrap": "UV unwrap", "export": "Save as", "combine": "Put together",
+          "left": "Left view", "right": "Right view"}
 KIND = {"picture": "image", "back": "image", "model": "generate", "finished": "finish", "split": "props",
         "rigged": "animate", "animated": "animate", "part": "image", "repaint": "generate",
-        **{step: "tool" for step in ("cutout", "remesh", "unwrap", "export", "combine")}}
+        **{step: "tool" for step in ("cutout", "remesh", "unwrap", "export", "combine")},
+        "left": "image", "right": "image"}
 # The Finish choices a plan may carry (the same ones the Steps panel's Finish sends).
 MOVE_KEYS = ("speed", "arm_spread", "in_place")
 SPLIT_KEYS = ("names",)       # what a plan may tell the props job (props_api.normalise_names checks them)
@@ -111,6 +113,7 @@ class Chain:
     part_name: str | None = None                                     # the part a "part" step picks out (the canvas)
     tool_settings: dict[str, Any] = field(default_factory=dict)      # step -> its choices: faces, size, format
     gather: list[str] = field(default_factory=list)                  # the models a "combine" step puts together
+    four_views: bool = False                                         # the 3D model reads front, left, back, right (Hunyuan3D-2mv)
     picture_settings: dict[str, Any] = field(default_factory=dict)  # size, steps, seed (the image job checks them)
     picture_engine: str | None = None                                # "flux" / "flux-light" / "qwen"; None = the default
     back_settings: dict[str, Any] = field(default_factory=dict)      # a back redraw: seed, what to change
@@ -320,8 +323,8 @@ class ChainRunner:
         event = final.get("last_event") or {}
         if step == "picture":
             chain.made["picture"] = final.get("picture")
-        elif step == "back":
-            chain.made["back"] = final.get("picture")
+        elif step in ("back", "left", "right"):
+            chain.made[step] = final.get("picture")
         elif step == "part":
             # the part is the picture from here on: the 3D model and Finish work from it
             chain.made["picture"] = final.get("picture")
@@ -413,13 +416,14 @@ class ChainRunner:
                                "engine": chain.picture_engine,
                                "picture_only": not {"back", "model"} & set(chain.steps)}).encode()
             return kind, self._post("/api/image", body, "application/json")
-        if step == "back":
+        if step in ("back", "left", "right"):
             front = chain.made.get("picture") or (self._kept_upload(chain) if chain.upload else None)
             if not front:
                 raise ValueError("the back picture needs a front picture, and there is none yet")
             # the front's engine is a preference (any engine that can draw backs will do); a redraw's
             # own choice in back_settings is an ask
-            body = {"picture": front, "prefer_engine": chain.picture_engine, **chain.back_settings}
+            body = {"picture": front, "prefer_engine": chain.picture_engine, **chain.back_settings,
+                    **({"side": step} if step != "back" else {})}
             return kind, self._post("/api/image/back", json.dumps(body).encode(), "application/json")
         if step == "part":
             if not chain.made.get("picture") or not chain.part_name:
@@ -443,7 +447,12 @@ class ChainRunner:
             if chain.keep_everything:
                 settings["debug"] = True
             files = {"image": self._picture(chain)}
-            if chain.made.get("back") and chain.engine in FRONT_BACK_ENGINES:
+            if chain.four_views:   # Hunyuan3D-2mv: the front and whichever sides were drawn
+                settings["model"] = "2mv"
+                for side in ("left", "back", "right"):
+                    if chain.made.get(side):
+                        files[side] = self._file(chain.made[side])
+            elif chain.made.get("back") and chain.engine in FRONT_BACK_ENGINES:
                 files["back"] = self._file(chain.made["back"])
             body, ctype = multipart({"settings": json.dumps(settings)}, files)
             return kind, self._post("/api/generate", body, ctype)
@@ -522,7 +531,7 @@ class ChainRunner:
                                           "animated": "animated", "split": "split",
                                           "part": "picture", "repaint": "model", "cutout": "picture",
                                           "remesh": "model", "unwrap": "model", "combine": "model",
-                                          "export": "export"}.get(step, ""), None),
+                                          "export": "export", "left": "left", "right": "right"}.get(step, ""), None),
                   "log": str(log or "")[-3000:]}
         append_history(self.output, record)
 

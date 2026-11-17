@@ -29,6 +29,29 @@ BACK_PROMPT = (
     "even lighting, plain light grey background."
 )
 
+# The side views for a four-view build (Hunyuan3D-2mv reads front, left, back and right). Its
+# "left" is the front turned a quarter clockwise seen from above: the subject's own left side
+# faces the camera, so the subject faces the right edge of the picture. Same rules as the back:
+# name no parts, keep the height and size, plain grey.
+SIDE_PROMPT = (
+    "The same subject as in the reference image, seen from its {side} side: the camera has moved "
+    "90 degrees around it to the subject's {side}, so the subject faces the {edge} edge of the picture. "
+    "Same pose, same proportions, same height and the same size in the frame. The view shows the "
+    "{side} side of exactly the parts that are in the reference. Keep the colours, materials and "
+    "design consistent with the reference. Flat even lighting, plain light grey background."
+)
+SIDE_EDGE = {"left": "right", "right": "left"}
+
+
+def view_prompt(side: str) -> str:
+    """What the picture engine is asked for one view of a four-view build: back, left or right."""
+    if side == "back":
+        return BACK_PROMPT
+    if side not in SIDE_EDGE:
+        raise ValueError(f"a view is back, left or right; not {side!r}")
+    return SIDE_PROMPT.format(side=side, edge=SIDE_EDGE[side])
+
+
 # The backdrop the reference is laid on: light grey, like the backgrounds our prompts ask for.
 GREY = 236
 

@@ -288,7 +288,10 @@ HUNYUAN_XIONG_SHAPE_MODELS = {
     "2.1": HUNYUAN_XIONG_SHAPE_ROOT / "Hunyuan3D-2.1" / "hunyuan3d-dit-v2-1",
     "2.0": HUNYUAN_XIONG_SHAPE_ROOT / "Hunyuan3D-2" / "hunyuan3d-dit-v2-0",
     "2.0-turbo": HUNYUAN_XIONG_SHAPE_ROOT / "Hunyuan3D-2" / "hunyuan3d-dit-v2-0-turbo",
+    # several views (front, left, back, right): the canvas's 4 views box
+    "2mv": HUNYUAN_XIONG_SHAPE_ROOT / "Hunyuan3D-2mv" / "hunyuan3d-dit-v2-mv",
 }
+VIEW_SIDES = ("left", "back", "right")   # beside the front, for Hunyuan3D-2mv
 
 SF3D_REPO_DEFAULT = REPO / "vendor" / "stable-fast-3d"
 
@@ -2120,7 +2123,8 @@ def _hunyuan_xiong_validate_settings(raw: Any) -> dict[str, Any]:
         raw = {}
     if not isinstance(raw, dict):
         raise ValueError("settings must be a JSON object")
-    settings = {**HUNYUAN_XIONG_DEFAULT_SETTINGS, **raw}
+    # "<side>_name" is the server's own record of a saved view: never the client's
+    settings = {**HUNYUAN_XIONG_DEFAULT_SETTINGS, **{k: v for k, v in raw.items() if not k.endswith("_name")}}
     if settings["model"] not in HUNYUAN_XIONG_SHAPE_MODELS:
         raise ValueError(
             f"model must be one of {sorted(HUNYUAN_XIONG_SHAPE_MODELS)}"
@@ -2159,7 +2163,29 @@ def _hunyuan_xiong_build_args(job: Job) -> list[str]:
         "--paint-res", str(s["paint_res"]),
         "--paint-steps", str(s["paint_steps"]),
         "--paint-tex", str(s["paint_tex"]),
+        *[arg for side in VIEW_SIDES if s.get(f"{side}_name")
+          for arg in (f"--{side}", str(job.directory / s[f"{side}_name"]))],
     ]
+
+
+def view_fields(form: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The extra views a generate request carries: left, back and right pictures beside the front."""
+    return {side: form[side] for side in VIEW_SIDES if (form.get(side) or {}).get("filename")}
+
+
+def matte_view(path: Path) -> Path:
+    """Cut a view out like the front (matte_upload), as `<side>.png`; the original stays as `<side>_original`."""
+    from PIL import Image
+
+    from image_to_3dlab.matte import cut_out
+
+    original = path.with_name(f"{path.stem}_original{path.suffix}")
+    path.replace(original)
+    with Image.open(original) as opened:
+        cut, _model = cut_out(opened.convert("RGB"))
+    destination = path.with_name(f"{path.stem}.png")
+    cut.save(destination)
+    return destination
 
 
 def _hunyuan_xiong_shape_weights_status() -> dict[str, dict[str, Any]]:
@@ -3209,6 +3235,8 @@ class Handler(SimpleHTTPRequestHandler):
             front = image_api.back_source(OUTPUT_ROOT, str(payload.get("picture", "")))
             seed = int(payload.get("seed", 3))
             instruction = str(payload.get("instruction") or "")
+            side = str(payload.get("side") or "back")   # a four-view build also draws left and right
+            image_api.back_view.view_prompt(side)
             # asked for by name: that engine. Otherwise the one Create drew the front with, else the
             # one the front's record names (one model's pictures should match), else any that can
             engine = image_api.choose_engine(str(payload.get("engine") or "") or None, front, edit=True,
@@ -3229,7 +3257,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json(503, {"error": str(exc), "needs_setup": True, "missing": exc.missing})
             return
         try:
-            job = image_api.start_back(front, seed, engine, instruction)
+            job = image_api.start_back(front, seed, engine, instruction, side)
         except (ValueError, OSError) as exc:      # an unreadable or oversized front
             self._send_json(422, {"error": str(exc)})
             return
@@ -4048,7 +4076,20 @@ class Handler(SimpleHTTPRequestHandler):
                     f"({type(exc).__name__}: {exc}). This is a bug in the route's settings "
                     f"check, not in your picture. The server's terminal has the traceback.")})
                 return
-            back_field = form.get("back")
+            views = view_fields(form)
+            several = spec.id == "hunyuan-mlx-xiong" and settings.get("model") == "2mv"
+            if views and several:
+                for side, field in views.items():
+                    view_suffix = Path(str(field["filename"])).suffix.lower()
+                    if view_suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+                        self._send_json(422, {"error": f"unsupported {side} picture; use PNG, JPG or WebP"})
+                        return
+                    settings[f"{side}_name"] = f"{side}{view_suffix}"
+            elif views and set(views) != {"back"}:
+                self._send_json(422, {"error": "left and right views work with Hunyuan3D-2mv only "
+                                               "(the fast-and-clean engine, model 2mv)"})
+                return
+            back_field = None if several else form.get("back")
             if back_field is not None and back_field.get("filename"):
                 if backend_id != "pixal3d":
                     self._send_json(422, {"error": "a back picture works with Pixal3D only"})
@@ -4077,6 +4118,17 @@ class Handler(SimpleHTTPRequestHandler):
                 handle.write(image_field["data"])
             if back_field is not None:
                 (provisional / settings["back_name"]).write_bytes(back_field["data"])
+            if several:
+                try:
+                    for side, field in views.items():
+                        view_path = provisional / settings[f"{side}_name"]
+                        view_path.write_bytes(field["data"])
+                        if needs_cut(view_path):   # each view is read like the front: cut out
+                            settings[f"{side}_name"] = matte_view(view_path).name
+                except Exception as exc:
+                    shutil.rmtree(provisional, ignore_errors=True)
+                    self._send_json(422, {"error": f"A view could not be read or cut out ({exc})."})
+                    return
             try:
                 cut_needed = spec.requires_alpha and needs_cut(image_path)
             except RuntimeError as exc:

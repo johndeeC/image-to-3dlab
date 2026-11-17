@@ -57,7 +57,7 @@ def studio(tmp_path, monkeypatch):
 
 def test_an_agent_builds_checks_runs_and_reads_a_canvas(studio):
     types = ms.box_types(studio)["types"]
-    assert types["model"]["takes"] == ["picture", "pair"] and types["finish"]["settings"]["detail"]["one_of"][0] == "light"
+    assert types["model"]["takes"] == ["picture", "pair", "views"] and types["finish"]["settings"]["detail"]["one_of"][0] == "light"
     made = ms.edit_canvas(studio, name="Swords", ops=[
         {"add": "picture", "id": "s1", "settings": {"prompt": "nine swords", "goal": "set"}},
         {"add": "model", "id": "s2", "after": "s1", "settings": {"engine": "sf3d"}},

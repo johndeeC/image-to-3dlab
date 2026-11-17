@@ -179,7 +179,7 @@ class FakeJobs:
         if method == "POST" and path.endswith("/cancel"):
             return 200, {"ok": True}
         if method == "POST":
-            kind = {"/api/image": "picture", "/api/generate": "model", "/api/finish": "finished",
+            kind = {"/api/image": "picture", "/api/image/back": "back", "/api/generate": "model", "/api/finish": "finished",
                     "/api/animate/rig": "rigged", "/api/animate/play": "animated", "/api/props": "split",
                     "/api/image/part": "part", "/api/tool/cutout": "cutout", "/api/tool/remesh": "remesh",
                     "/api/tool/unwrap": "unwrap", "/api/tool/export": "export", "/api/tool/combine": "combine"}[path]
@@ -188,6 +188,10 @@ class FakeJobs:
                 self.bodies.append(json.loads(body))
             if kind == "part":
                 self.parts.append(json.loads(body)["part"])
+            if path == "/api/image/back":
+                self.bodies.append(json.loads(body))
+            if path == "/api/generate":
+                self.bodies.append({"generate": body})
             job_id = f"job-{len(self.started)}"
             self.jobs[job_id] = kind
             return 202, {"job_id": job_id, "status_url": f"/api/x/{job_id}/status"}
@@ -196,7 +200,8 @@ class FakeJobs:
             return 200, {"status": "error", "error": "it broke", "log_tail": ""}
         n = len(self.started)
         slug = ga.slugged(self.parts[-1]) if self.parts else ""
-        made = {"picture": f"images/{slug}__part__{n}/{slug}__part__{n}.png" if kind == "part" else "images/p.png",
+        made = {"picture": f"images/{slug}__part__{n}/{slug}__part__{n}.png" if kind == "part"
+                else f"images/p__side{n}.png" if kind == "back" else "images/p.png",
                 "model": f"sf3d/m{n}/model.glb", "finished": f"finish/f{n}.glb",
                 "rigged": f"animate/r{n}/rigged.glb", "animated": f"animate/r{n}/walk.glb"}
         event = {"phase": "done", "message": "done", "overall_pct": 100}
@@ -213,13 +218,13 @@ class FakeJobs:
                 (folder / "finished" / name / f"{name}_LOD0.glb").write_bytes(b"x")
             event["directory"] = folder.name
         else:
-            file = made["picture" if kind == "part" else kind]
+            file = made["picture" if kind in ("part", "back") else kind]
             (self.output / file).parent.mkdir(parents=True, exist_ok=True)
             (self.output / file).write_bytes(b"x")
         if kind in ("finished", "rigged", "animated"):
             event["path"] = made[kind]
         return 200, {"status": "done", "last_event": event, "log_tail": "ok",
-                     "picture": made["picture"] if kind in ("picture", "part") else None,
+                     "picture": made["picture"] if kind in ("picture", "part", "back") else None,
                      "model": made["model"] if kind == "model" else None}
 
 
@@ -753,7 +758,7 @@ def test_tool_boxes_run_in_line_each_from_what_the_box_before_made(tmp_path):
     runner, jobs = _graph_runner(tmp_path)
     run = runner.start(g, background=False)
     assert run.status == "done", run.error
-    cut, remesh, unwrap, export = jobs.bodies
+    cut, remesh, unwrap, export = [b for b in jobs.bodies if "generate" not in b]
     assert cut == {"picture": "images/p.png"}
     assert remesh == {"model": "sf3d/m3/model.glb", "faces": 8000, "size": 1024}
     assert unwrap == {"model": "tools/t4/t4.glb", "size": 2048}            # unwraps what the remesh made
@@ -794,3 +799,39 @@ def test_a_dropped_glb_is_kept_where_the_library_finds_models_and_anything_else_
     for name, body in (("x.fbx", b"glTF"), ("x.glb", b"not a glb"), ("x.glb", b"")):
         with pytest.raises(ValueError):
             ga.keep_model_upload(tmp_path, name, body)
+
+
+# ---------------------------------------------------------------- Four views (Hunyuan3D-2mv)
+FOUR = graph([node("p", "picture", prompt="a knight"), node("v", "views"), node("m", "model", engine="hunyuan_xiong")],
+             [("p", "v"), ("v", "m")])
+
+
+def test_four_views_draws_three_sides_and_the_3d_model_reads_all_four(tmp_path):
+    stage = ga.plan_graph(FOUR, RECIPES).stages[0]
+    assert stage.steps == ["picture", "left", "back", "right", "model"] and stage.four_views
+    runner, jobs = _graph_runner(tmp_path)
+    run = runner.start(FOUR, background=False)
+    assert run.status == "done", run.error
+    sides = [b for b in jobs.bodies if "picture" in b]
+    assert [b.get("side", "back") for b in sides] == ["left", "back", "right"]
+    generate = next(b["generate"] for b in jobs.bodies if "generate" in b).decode(errors="replace")
+    assert '"model": "2mv"' in generate
+    for side, n in (("left", 2), ("back", 3), ("right", 4)):
+        assert f'name="{side}"; filename="p__side{n}.png"' in generate
+    assert [r["label"] for r in run.to_dict()["results"]["v"]] == ["left view", "back view", "right view"]
+
+
+def test_four_views_need_the_engine_with_hunyuan3d_2mv():
+    g = json.loads(json.dumps(FOUR))
+    g["nodes"][2]["settings"]["engine"] = "pixal3d"
+    with pytest.raises(ValueError, match="four views need the Fast and clean engine"):
+        ga.plan_graph(g, RECIPES)
+
+
+def test_a_3d_model_run_on_its_own_after_four_views_takes_every_side():
+    results = {"p": [{"status": "done", "file": "images/k.png"}],
+               "v": [{"status": "done", "file": f"images/k__{s}.png", "label": f"{s} view"} for s in ("left", "back", "right")]}
+    stage = ga.plan_from(FOUR, "m", "only", results, RECIPES).stages[0]
+    assert stage.four_views and stage.seeds == [{"made": {"picture": "images/k.png", "left": "images/k__left.png",
+                                                          "back": "images/k__back.png", "right": "images/k__right.png"},
+                                                 "label": None}]

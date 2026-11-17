@@ -625,13 +625,15 @@ def job_command(job: ImageJob, weights: dict[str, Path], vision: Path | None,
 MAX_INSTRUCTION = 500
 
 
-def back_prompt(instruction: str | None = None) -> str:
-    """The back prompt, with what the person wants changed added as its own sentence.
+def back_prompt(instruction: str | None = None, side: str = "back") -> str:
+    """The back (or, for a four-view build, a side) prompt, with what the person wants changed
+    added as its own sentence.
 
     Their words go in as written: they name what they want, the way every prompt here should.
     """
     extra = " ".join(str(instruction or "").split())[:MAX_INSTRUCTION].strip()
-    return f"{back_view.BACK_PROMPT} {extra}" if extra else back_view.BACK_PROMPT
+    base = back_view.view_prompt(side)
+    return f"{base} {extra}" if extra else base
 
 
 def archive_name(path: Path, stamp: str) -> Path:
@@ -867,7 +869,7 @@ def start_brush(picture: Path, stroke, instruction: str, seed: int = 42,
 
 
 def create_back_job(manager: ImageJobManager, front: Path, seed: int = 3,
-                    engine: PictureEngine = QWEN, instruction: str | None = None) -> ImageJob:
+                    engine: PictureEngine = QWEN, instruction: str | None = None, side: str = "back") -> ImageJob:
     """A job drawing the back of the subject in `front`, saved beside it as `<front>__back`.
 
     The reference is the front's cut-out on plain grey (image_to_3dlab/back_view.py), cut
@@ -879,12 +881,13 @@ def create_back_job(manager: ImageJobManager, front: Path, seed: int = 3,
     """
     from PIL import Image
 
+    back_view.view_prompt(side)   # back, left or right, refused before anything is drawn
     reference = front.with_name(f"{front.stem}__back_reference.png")
-    final = front.with_name(f"{front.stem}__back.png")
+    final = front.with_name(f"{front.stem}__{side}.png")
     # the job first: a request refused as busy must not pay for a cut-out, or rewrite the
     # reference a running back is reading
-    job = manager.create(back_prompt(instruction), clean_settings({"seed": seed}, engine),
-                         output_path=final.with_name(f"{front.stem}__back_new.png") if final.exists() else final,
+    job = manager.create(back_prompt(instruction, side), clean_settings({"seed": seed}, engine),
+                         output_path=final.with_name(f"{front.stem}__{side}_new.png") if final.exists() else final,
                          reference=reference, engine=engine)
     try:
         with Image.open(front) as opened:
@@ -1026,8 +1029,8 @@ MANAGER = ImageJobManager()
 
 
 def start_back(front: Path, seed: int = 3, engine: PictureEngine = QWEN,
-               instruction: str | None = None) -> ImageJob:
-    job = create_back_job(MANAGER, front, seed, engine, instruction)
+               instruction: str | None = None, side: str = "back") -> ImageJob:
+    job = create_back_job(MANAGER, front, seed, engine, instruction, side)
     threading.Thread(target=run_job, args=(job, MANAGER), daemon=True).start()
     return job
 

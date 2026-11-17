@@ -49,7 +49,10 @@ SHAPE_MODELS = {
     "2.1": SHAPE_ROOT / "weights" / "Hunyuan3D-2.1" / "hunyuan3d-dit-v2-1",
     "2.0": SHAPE_ROOT / "weights" / "Hunyuan3D-2" / "hunyuan3d-dit-v2-0",
     "2.0-turbo": SHAPE_ROOT / "weights" / "Hunyuan3D-2" / "hunyuan3d-dit-v2-0-turbo",
+    # several views: the front plus any of left, back and right (--left/--back/--right)
+    "2mv": SHAPE_ROOT / "weights" / "Hunyuan3D-2mv" / "hunyuan3d-dit-v2-mv",
 }
+SIDES = ("left", "back", "right")
 PAINT_ROOT = REPO / "hunyuan_mlx" / "paint"
 PAINT_PYTHON = PAINT_ROOT / ".venv" / "bin" / "python"
 PAINT_SCRIPT = PAINT_ROOT / "scripts" / "run_paint_pbr.py"
@@ -67,7 +70,7 @@ MIT_LICENSE_PATH = "hunyuan_mlx/LICENSE"
 sys.path.insert(0, str(SHAPE_ROOT))
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__,
                                       formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("image", type=Path)
@@ -90,11 +93,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--paint-res", type=int, default=512)
     parser.add_argument("--paint-steps", type=int, default=15)
     parser.add_argument("--paint-tex", type=int, default=4096)
-    return parser.parse_args()
+    for side in SIDES:
+        parser.add_argument(f"--{side}", type=Path, default=None,
+                            help=f"the {side} view (model 2mv only): the shape is built from every view given")
+    return parser.parse_args(argv)
+
+
+def views_for(front: Path, sides: dict[str, Path | None], model: str) -> dict[str, str] | None:
+    """The pictures the shape stage reads by side, or None for one picture. Views need 2mv."""
+    given = {side: str(path) for side, path in sides.items() if path}
+    if model == "2mv":   # its encoder tags every view, the front too, even when it is the only one
+        return {"front": str(front), **given}
+    if not given:
+        return None
+    if model != "2mv":
+        raise SystemExit(f"--{'/--'.join(given)} need --model 2mv (Hunyuan3D-2mv reads several views)")
+    return {"front": str(front), **given}
 
 
 def run_shape(image: Path, model: str, octree_resolution: int, seed: int, quantize: int,
-              compile_dit: bool, octree_decode: bool, t0: float):
+              compile_dit: bool, octree_decode: bool, t0: float, views: dict[str, str] | None = None):
     import mlx.core as mx
     from hy3dmlx.pipeline import Hunyuan3DShapePipeline
 
@@ -112,7 +130,7 @@ def run_shape(image: Path, model: str, octree_resolution: int, seed: int, quanti
     mesh = pipe.generate(
         str(image), num_inference_steps=30, guidance_scale=5.0,
         octree_resolution=octree_resolution, seed=seed,
-        octree_decode=octree_decode, compile_dit=compile_dit,
+        octree_decode=octree_decode, compile_dit=compile_dit, views=views,
     )
     print(f"shape generated ({time.time() - t0:.0f}s): "
           f"{len(mesh.vertices)} verts, {len(mesh.faces)} faces", flush=True)
@@ -199,8 +217,11 @@ def main() -> None:
     print(f"[hunyuan-mlx-xiong] image={args.image} model={args.model} "
           f"octree={args.octree_resolution} quantize={args.quantize}", flush=True)
 
+    views = views_for(args.image, {side: getattr(args, side) for side in SIDES}, args.model)
+    if views:
+        print(f"[hunyuan-mlx-xiong] views: {', '.join(views)}", flush=True)
     mesh = run_shape(args.image, args.model, args.octree_resolution, args.seed,
-                      args.quantize, args.compile_dit, args.octree_decode, t0)
+                      args.quantize, args.compile_dit, args.octree_decode, t0, views)
     shape_seconds = time.time() - t0
 
     mesh, remeshed = run_remesh(mesh, args.decimation_target, t0)
@@ -237,6 +258,7 @@ def main() -> None:
         "output": str(args.output),
         "parameters": {
             "model": args.model,
+            "views": sorted(views) if views else ["front"],
             "octree_resolution": args.octree_resolution,
             "seed": args.seed,
             "quantize": args.quantize,
