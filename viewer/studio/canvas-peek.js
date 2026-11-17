@@ -26,7 +26,7 @@ export function openPeek(container, { file, url, title, actions = [], ask = null
       ${ask ? `<form class="row peek-ask"><input type="text" maxlength="300" placeholder="${esc(ask.placeholder)}" aria-label="What is wrong with it">
         <button type="submit" class="primary small" title="${esc(ask.hint)}">${esc(ask.label)}</button></form>` : ''}
       ${note ? `<small class="hint">${esc(note)}</small>` : ''}
-      <div class="row end">${actions.map(([label, hint], i) => `<button type="button" class="${i === 0 ? 'primary' : 'ghost'} small" data-peek-act="${i}" title="${esc(hint)}">${esc(label)}</button>`).join('')}</div>
+      <div class="row end">${actions.map(([label, hint], i) => `<button type="button" class="${i === 0 && !ask ? 'primary' : 'ghost'} small" data-peek-act="${i}" title="${esc(hint)}">${esc(label)}</button>`).join('')}</div>
     </div>`;
   container.appendChild(box);
   let stop = () => {};

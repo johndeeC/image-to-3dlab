@@ -78,7 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Canvas boxes each show the file their own step made, not the run's final model.
 - Cut out background works on generated pictures (their licence record was read wrong).
 - Canvas: opening the canvas while another one was running no longer showed that run's
-  results on the wrong boxes. The quick view fits a short window.
+  results on the wrong boxes. The quick view fits a short window, buttons and all.
 
 ## [0.5.11] - 2026-11-17
 
