@@ -49,6 +49,9 @@ STUDIO_ONLY = {
     "api/fix-spot/keep": "keeping a fix is the person's verdict after comparing before and after",
     "api/fix-spot/discard": "part of the same on-screen editing session",
     "api/sounds/*/variations": "listening to a set before saving it; make_variations saves one and answers its files",
+    "api/sound/layers/mix": "listening to a stack of layers before saving it; make_layered_sound saves one",
+    "api/sound/layers/upload": "a person brings their own file and says what its licence is; an agent must not say it for them",
+    "api/sounds/*/layers": "opens a kept stack on the Layers screen for a person to edit",
     "api/assets/*/delete": "deleting is the user's call, made in the studio",
     "api/assets/*/hidden": "Library tidying, a person's choice",
     "api/assets/*/main": "marking the main version is the user's verdict",
@@ -97,7 +100,8 @@ USED = {"api/chains", "api/chains/*/cancel", "api/setup/*/download", "api/reveal
         "api/image/brush", "api/image/versions/use", "api/image/versions/delete",
         "api/kits", "api/kits/*/add",
         "api/graphs", "api/graphs/check", "api/graphs/*/run", "api/graph-runs/*/cancel",
-        "api/sound", "api/sound/*/keep", "api/sound/*/cancel", "api/sounds/*/set", "api/footsteps"}
+        "api/sound", "api/sound/*/keep", "api/sound/*/cancel", "api/sounds/*/set", "api/footsteps",
+        "api/sound/layers/split", "api/sound/layers/add", "api/sound/layers/save"}
 
 
 class StudioError(RuntimeError):
@@ -1131,6 +1135,8 @@ def sound_summary(sound: dict[str, Any]) -> dict[str, Any]:
             "sound_kind": sound.get("sound_kind"),
             "seconds": sound.get("seconds"), "prompt": sound.get("prompt"), "licence": sound.get("licence"),
             "file": str(REPO / "output" / sound["file"]) if sound.get("file") else None}
+    if sound.get("layers"):
+        told["layers"] = sound["layers"]
     if sound.get("kind") == "sound_set":
         told.update(count=sound.get("count"), of=sound.get("of"),
                     files=[str(REPO / "output" / name) for name in sound.get("files") or []])
@@ -1276,6 +1282,91 @@ def make_variations(studio: Studio, *, sound_id: str, count: int = 6, how_differ
             "files": [{"file": str(REPO / "output" / item["file"]), "seconds": item.get("seconds"),
                        "what": item.get("note")} for item in saved.get("files") or []],
             "next": "In a game, play one of these at random each time, never the same one twice running."}
+
+
+def split_sound(studio: Studio, *, description: str) -> dict[str, Any]:
+    """A description as layers to make one at a time. A rule table, no model."""
+    told = studio.post_json("api/sound/layers/split", {"description": description})
+    layers = [{"describe": item["describe"], "start_ms": item["start_ms"], "part": item.get("label")}
+              for item in told.get("layers") or []]
+    if told.get("rule") is None:
+        return {"split": False, "layers": layers,
+                "next": "No rule fits this description, so it is one layer as typed. make_sound makes it. "
+                        "To layer it anyway, write the parts yourself: one thing happening in each."}
+    return {"split": True, "rule": told["rule"], "layers": layers,
+            "next": "Edit the descriptions if you like, then pass these layers to make_layered_sound."}
+
+
+LAYER_KEYS = ("start_ms", "volume_db", "pitch_semitones")
+_KEPT_ID = r"[A-Za-z0-9_-]{1,80}__\d{8}-\d{6}(?:-\d+)?"
+
+
+def make_layered_sound(studio: Studio, *, layers: list[dict[str, Any]], name: str | None = None) -> dict[str, Any]:
+    """One sound from several layers. Each layer is a kept sound (`sound_id`), a try
+    (`job_id` + `try`) or a description to make (`describe`). The engine makes one sound at a
+    time and an MCP call must come back within a minute, so this goes a step per call: it
+    starts the next described layer and answers the layers to send back; once every layer
+    exists it saves the stack as one kept sound."""
+    if not isinstance(layers, list) or not layers:
+        raise StudioError("Give at least one layer: {describe} or {sound_id}, with start_ms, volume_db, pitch_semitones.")
+    stack = []
+    for item in layers:
+        if not isinstance(item, dict):
+            raise StudioError("Each layer is an object: {describe} or {sound_id}, with start_ms, volume_db, pitch_semitones.")
+        layer = {key: item[key] for key in (*LAYER_KEYS, "describe", "seconds") if item.get(key) is not None}
+        if item.get("sound_id") is not None:
+            if not re.fullmatch(_KEPT_ID, str(item["sound_id"])):
+                raise StudioError('sound_id is a kept sound\'s id, as list_assets(kind="sound") gives it.')
+            layer["sound_id"] = item["sound_id"]
+        elif item.get("job_id") is not None:
+            if not re.fullmatch(r"[0-9a-f]{32}", str(item["job_id"])):
+                raise StudioError("job_id is the 32-character id make_sound gave you.")
+            layer.update(job_id=item["job_id"], **{"try": int(item.get("try") or 1)})
+        elif not str(item.get("describe") or "").strip():
+            raise StudioError("Each layer needs one of: describe (words to make it from), sound_id (a kept sound), "
+                              "or job_id and try (a try from make_sound).")
+        stack.append(layer)
+    # every described layer already being made: is it done?
+    waiting = None
+    for layer in stack:
+        if layer.get("job_id") and waiting is None:
+            job = studio.get(f"api/sound/{layer['job_id']}/status")
+            if job.get("status") in {"error", "cancelled"}:
+                raise StudioError(f"The layer \"{layer.get('describe') or layer['job_id']}\" was not made: "
+                                  f"{job.get('error') or job.get('status')}. Drop its job_id to make it again.")
+            if job.get("status") != "done":
+                waiting = layer["job_id"]
+    if waiting is None:
+        todo = next((layer for layer in stack if "job_id" not in layer and "sound_id" not in layer), None)
+        if todo is not None:
+            body: dict[str, Any] = {"prompt": todo["describe"], "count": 1}
+            if todo.get("seconds") is not None:
+                body["seconds"] = todo["seconds"]
+            started = studio.post_json("api/sound", body)
+            todo.update(job_id=started["job_id"], **{"try": 1})
+            waiting = started["job_id"]
+    if waiting is not None:
+        left = sum(1 for layer in stack if "job_id" not in layer and "sound_id" not in layer)
+        return {"status": "making", "job_id": waiting, "layers": stack, "still_to_make": left,
+                "next": f"A layer is being made (under a minute). Call sound_status(\"{waiting}\", wait_seconds=50) "
+                        "until it is done, then call make_layered_sound again with exactly these layers"
+                        + (" and the same name." if name else ".")}
+    staged = []
+    for layer in stack:
+        source = ({"sound_id": layer["sound_id"]} if "sound_id" in layer
+                  else {"job_id": layer["job_id"], "try": layer["try"]})
+        added = studio.post_json("api/sound/layers/add", source)
+        staged.append({"layer": added["layer"], **{key: layer[key] for key in LAYER_KEYS if key in layer}})
+    saved = studio.post_json("api/sound/layers/save", {"layers": staged, **({"name": name} if name else {})})
+    file = REPO / "output" / saved["file"]
+    return {"status": "saved", "sound_id": saved.get("id"), "file": str(file),
+            "licence": saved.get("licence"), "licence_checked": saved.get("checked"),
+            "licence_record": str(file.with_name(saved.get("record", "sound.provenance.json"))),
+            "seconds": saved.get("seconds"), "layers": saved.get("layers"),
+            "turned_down_db": saved.get("turned_down_db"),
+            "next": "It is a kept sound now: make_variations and footsteps take its sound_id. Each layer's own "
+                    "file is in the layers folder beside it; the user can change the mix in the studio "
+                    "(Library, Sounds, Edit layers)."}
 
 
 def footsteps(studio: Studio, *, asset_id: str, move: str, sound_id: str | None = None,
@@ -1829,6 +1920,31 @@ def build_server(studio: Studio | None = None):
         The same sound_id, numbers and seed make the same set again."""
         return safe(lambda: make_variations(studio, sound_id=sound_id, count=count, how_different=how_different,
                                             change=change, name=name, seed=seed))
+
+    @server.tool(name="split_sound", structured_output=False)
+    def tool_split_sound(description: str):
+        """Split a sound made of two or three things ("an arrow whooshes past and thuds into a target") into
+        layers to make one at a time: a lead-in, the hit, a tail. The engine blurs several things asked for at
+        once; made separately and stacked they stay clean. A small rule table, no model, instant. Answers
+        layers ({describe, start_ms}) to edit and pass to make_layered_sound. If no rule fits it says so and
+        answers the description as one layer: then make_sound is enough, or write the parts yourself."""
+        return safe(lambda: split_sound(studio, description=description))
+
+    @server.tool(name="make_layered_sound", structured_output=False)
+    def tool_make_layered_sound(layers: list[dict[str, Any]], name: str | None = None):
+        """Build one sound from up to 8 layers and save it as a kept sound (mono 48 kHz WAV + licence record).
+        Each layer is one of: {"describe": "arrow whoosh past, fast air, dry"} (made by the sound engine, one try;
+        optional "seconds"), {"sound_id": ...} (a kept sound, from list_assets(kind="sound")), or
+        {"job_id": ..., "try": 2} (a try from make_sound you chose). Plus where it sits: start_ms (0 to 10000),
+        volume_db (-40 to 12, 0 = as made), pitch_semitones (-12 to 12; pitch is resampling, so higher is also
+        shorter). Out of range is refused, not clipped. Layers are summed and the sum is turned down once if it
+        would clip; nothing is turned up, so your volumes hold.
+        Described layers take under a minute each and are made one per call: while any is unmade this answers
+        status "making" with a job_id and the layers to send back. Wait with sound_status(job_id,
+        wait_seconds=50), then call again with exactly those layers. When all exist it answers status "saved"
+        with the file. Licence: engine layers are Apache-2.0; mixed sources follow the kept sounds' own records,
+        and any unchecked layer makes the result "not checked" (licence_checked false). Never downloads the engine."""
+        return safe(lambda: make_layered_sound(studio, layers=layers, name=name))
 
     @server.tool(name="footsteps", structured_output=False)
     def tool_footsteps(asset_id: str, move: str, sound_id: str | None = None, save: bool = True):

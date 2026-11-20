@@ -166,7 +166,8 @@ def test_the_server_registers_every_tool():
                      "usage_counts", "brush_back", "picture_status", "back_versions",
                      "list_kits", "make_kit", "add_to_kit", "box_types", "list_canvases", "get_canvas", "edit_canvas",
                      "save_canvas", "check_canvas", "run_canvas", "canvas_status", "cancel_canvas_run",
-                     "make_sound", "sound_status", "make_variations", "footsteps"}
+                     "make_sound", "sound_status", "make_variations", "footsteps",
+                     "split_sound", "make_layered_sound"}
 
 
 # --------------------------------------------------------------------------- create
@@ -1394,3 +1395,119 @@ def test_footsteps_passes_on_the_studios_refusal():
     http = StepsHttp(error=(404, {"error": "no feet found on this skeleton"}))
     with pytest.raises(ms.StudioError, match="no feet found"):
         ms.footsteps(sound_studio(http), asset_id="knight", move="walk")
+
+
+# --------------------------------------------------------------------------- layers
+class LayerHttp:
+    """The studio's layer endpoints as an agent meets them: jobs that finish, layers that stage."""
+
+    def __init__(self, statuses=None, error=None):
+        self.calls, self.statuses, self.error, self.jobs = [], dict(statuses or {}), error, 0
+
+    def get(self, url, params=None, timeout=None):
+        path = url.split("8777/", 1)[1]
+        self.calls.append(("GET", path, None))
+        job_id = path.split("/")[2]
+        return Response(200, {"job_id": job_id, "status": self.statuses.get(job_id, "done"), "error": None, "tries": []})
+
+    def post(self, url, json=None, files=None, timeout=None):
+        path = url.split("8777/", 1)[1]
+        self.calls.append(("POST", path, json))
+        if self.error and path == self.error[0]:
+            return Response(*self.error[1:])
+        if path == "api/sound":
+            self.jobs += 1
+            return Response(202, {"job_id": f"{self.jobs:x}" * 32, "seed": 7, "count": 1})
+        if path == "api/sound/layers/split":
+            from image_to_3dlab import sound_split
+            return Response(200, sound_split.split(json["description"]))
+        if path == "api/sound/layers/add":
+            return Response(200, {"layer": f"{len([c for c in self.calls if c[1] == path]):x}" * 32, "licence": "Apache-2.0"})
+        return Response(200, {"id": "arrow__20261120-121500", "name": "arrow", "file": "sounds/arrow__20261120-121500/sound.wav",
+                              "record": "sound.provenance.json", "seconds": 1.4, "layers": len(json["layers"]),
+                              "turned_down_db": -1.2, "licence": "Apache-2.0", "checked": True})
+
+
+def test_split_sound_answers_layers_ready_for_make_layered_sound():
+    http = LayerHttp()
+    out = ms.split_sound(sound_studio(http), description="arrow hits a wooden target")
+    assert http.calls == [("POST", "api/sound/layers/split", {"description": "arrow hits a wooden target"})]
+    assert out["split"] is True and out["rule"] == "thrown-hit" and "make_layered_sound" in out["next"]
+    assert out["layers"] == [{"describe": "arrow whoosh past, fast air, dry", "start_ms": 0, "part": "Lead-in"},
+                             {"describe": "arrow thudding into wood, one hit, dry", "start_ms": 250, "part": "Hit"}]
+    plain = ms.split_sound(sound_studio(LayerHttp()), description="coin pickup")
+    assert plain["split"] is False and len(plain["layers"]) == 1 and "make_sound" in plain["next"]
+
+
+def test_kept_sounds_are_stacked_and_saved_in_one_call():
+    http = LayerHttp()
+    out = ms.make_layered_sound(sound_studio(http), name="Arrow", layers=[
+        {"sound_id": "whoosh__20261120-101500"},
+        {"sound_id": "thud__20261120-101600", "start_ms": 250, "volume_db": -3, "pitch_semitones": -2}])
+    assert http.calls == [
+        ("POST", "api/sound/layers/add", {"sound_id": "whoosh__20261120-101500"}),
+        ("POST", "api/sound/layers/add", {"sound_id": "thud__20261120-101600"}),
+        ("POST", "api/sound/layers/save", {"name": "Arrow", "layers": [
+            {"layer": "1" * 32}, {"layer": "2" * 32, "start_ms": 250, "volume_db": -3, "pitch_semitones": -2}]})]
+    file = ms.REPO / "output" / "sounds/arrow__20261120-121500/sound.wav"
+    assert out["status"] == "saved" and out["file"] == str(file) and out["sound_id"] == "arrow__20261120-121500"
+    assert out["licence"] == "Apache-2.0" and out["licence_checked"] is True and out["layers"] == 2
+    assert out["licence_record"] == str(file.with_name("sound.provenance.json"))
+
+
+def test_described_layers_are_made_one_per_call_then_saved():
+    http = LayerHttp(statuses={"1" * 32: "running"})
+    studio = sound_studio(http)
+    asked = [{"describe": "arrow whoosh past"}, {"describe": "arrow thud", "start_ms": 250, "seconds": 1}]
+    first = ms.make_layered_sound(studio, layers=asked)
+    assert http.calls == [("POST", "api/sound", {"prompt": "arrow whoosh past", "count": 1})]      # one job, not two
+    assert first["status"] == "making" and first["job_id"] == "1" * 32 and first["still_to_make"] == 1
+    assert first["layers"][0] == {"describe": "arrow whoosh past", "job_id": "1" * 32, "try": 1}
+    assert "sound_status" in first["next"] and "exactly these layers" in first["next"]
+    assert asked[0] == {"describe": "arrow whoosh past"}                                           # the caller's list is not touched
+
+    http.calls.clear()
+    same = ms.make_layered_sound(studio, layers=first["layers"])                                   # asked again too soon
+    assert same["status"] == "making" and [c[0] for c in http.calls] == ["GET"]                    # nothing new started
+
+    http.statuses["1" * 32] = "done"
+    http.calls.clear()
+    second = ms.make_layered_sound(studio, layers=first["layers"])
+    assert ("POST", "api/sound", {"prompt": "arrow thud", "count": 1, "seconds": 1}) in http.calls
+    assert second["status"] == "making" and second["job_id"] == "2" * 32 and second["still_to_make"] == 0
+
+    http.calls.clear()
+    done = ms.make_layered_sound(studio, layers=second["layers"])
+    assert [c[1] for c in http.calls if c[0] == "POST"] == ["api/sound/layers/add", "api/sound/layers/add", "api/sound/layers/save"]
+    assert http.calls[-3][2] == {"job_id": "1" * 32, "try": 1}
+    assert http.calls[-1][2] == {"layers": [{"layer": "1" * 32}, {"layer": "2" * 32, "start_ms": 250}]}
+    assert done["status"] == "saved"
+
+
+def test_a_layer_that_failed_is_said_and_nothing_is_saved():
+    http = LayerHttp(statuses={"a" * 32: "error"})
+    with pytest.raises(ms.StudioError, match="was not made"):
+        ms.make_layered_sound(sound_studio(http), layers=[{"describe": "x", "job_id": "a" * 32}])
+    assert [c for c in http.calls if c[0] == "POST"] == []
+
+
+@pytest.mark.parametrize("layers, why", [
+    ([], "at least one layer"), (["x"], "Each layer is an object"), ([{}], "needs one of"),
+    ([{"sound_id": "../../etc"}], "kept sound"), ([{"job_id": "../x", "try": 1}], "32-character id"),
+])
+def test_layers_that_make_no_sense_never_reach_the_studio(layers, why):
+    http = LayerHttp()
+    with pytest.raises(ms.StudioError, match=why):
+        ms.make_layered_sound(sound_studio(http), layers=layers)
+    assert http.calls == []
+
+
+def test_a_refusal_from_the_studio_reaches_the_agent_in_its_words():
+    http = LayerHttp(error=("api/sound/layers/save", 422, {"error": "Volume must be between -40 and 12 dB"}))
+    with pytest.raises(ms.StudioError, match="between -40 and 12 dB"):
+        ms.make_layered_sound(sound_studio(http), layers=[{"sound_id": "a__20261120-101500", "volume_db": 99}])
+
+
+def test_a_layered_sound_says_so_in_the_list():
+    assert ms.sound_summary({"id": "a__20261120-101500", "file": "sounds/a__20261120-101500/sound.wav", "layers": 3})["layers"] == 3
+    assert "layers" not in ms.sound_summary({"id": "a", "file": "sounds/a/sound.wav", "layers": 0})
