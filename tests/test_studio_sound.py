@@ -114,6 +114,100 @@ def test_small_words_lengths_bars_and_kept_lines():
     assert out["foot"] == ["0 sounds · saved in output/sounds on this machine", "1 sound · saved in output/sounds on this machine"]
 
 
+VARIATIONS = {
+    "min": 2, "max": 12, "default": 6, "default_how_different": "a little",
+    "how_different": [{"id": "a little", "label": "A little", "hint": "The same thing, done again."},
+                      {"id": "some", "label": "Some", "hint": "Clearly different takes."},
+                      {"id": "a lot", "label": "A lot", "hint": "Nearly a different thing."}],
+    "change": [{"id": "pitch", "label": "Pitch", "hint": "Higher or lower."}, {"id": "volume", "label": "Volume", "hint": ""}],
+}
+
+
+@needs_node
+def test_make_more_like_this_asks_for_the_same_thing_again_with_a_new_seed():
+    out = _run("""console.log(JSON.stringify([
+        m.moreLikeThis({ prompt: 'a door', seconds: 2.5, leave_out: ['music'], seed: 7, count: 4 }),
+        m.moreLikeThis({ prompt: 'a door', seconds: 2.5 }, 2)]))""")
+    assert out[0] == {"kind": "effect", "prompt": "a door", "seconds": 2.5, "leave_out": ["music"], "count": 4}
+    assert "seed" not in out[0] and out[1]["count"] == 2 and out[1]["leave_out"] == []
+
+
+@needs_node
+def test_the_variations_request_is_what_the_form_holds():
+    out = _run("""console.log(JSON.stringify([
+        m.variationsRequest({ count: '8', howDifferent: 'some', change: new Set(['pitch']) }),
+        m.variationsRequest(),
+        m.variationsProblem(m.variationsRequest({ change: [] })),
+        m.variationsProblem(m.variationsRequest({ change: ['volume'] })),
+        m.sameSet({ count: 4, how_different: 'a lot', change: ['pitch', 'volume'], seed: 0, variations: [] })]))""")
+    assert out[0] == {"count": 8, "how_different": "some", "change": ["pitch"]}
+    assert out[1] == {"count": 6, "how_different": "a little", "change": []}
+    assert out[2] == "Tick at least one thing to change." and out[3] is None
+    assert out[4] == {"count": 4, "how_different": "a lot", "change": ["pitch", "volume"], "seed": 0}   # seed 0 is a seed
+
+
+@needs_node
+def test_the_how_different_slider_has_one_stop_per_choice():
+    out = _run(f"""const V = {json.dumps(VARIATIONS)};
+      console.log(JSON.stringify([m.howDifferentStops(V), m.howDifferentStops(V, 'a lot'), m.howDifferentStops(V, 'nope'),
+        m.howDifferentStops(null)]))""")
+    assert out[0] == {"max": 2, "at": 0, "id": "a little", "label": "A little", "hint": "The same thing, done again."}
+    assert (out[1]["at"], out[1]["label"]) == (2, "A lot") and out[2]["at"] == 0
+    assert out[3] == {"max": 0, "at": 0, "label": "", "hint": ""}
+
+
+@needs_node
+def test_takes_are_rows_with_a_plain_note_and_the_playing_one_marked():
+    out = _run("""const preview = { variations: [
+        { index: 1, file: 'boots_01.wav', url: '/a/1.wav', note: 'the original', seconds: 0.5, bars: [1] },
+        { index: 2, file: 'boots_02.wav', url: '/a/2.wav', note: 'a bit higher, softer', seconds: 0.47 }] };
+      console.log(JSON.stringify([m.variationRows(preview, '/a/2.wav'), m.variationRows(null)]))""")
+    assert out[0] == [
+        {"index": 1, "file": "boots_01.wav", "url": "/a/1.wav", "bars": [1], "stem": "boots", "tail": "_01.wav",
+         "note": "the original · 0.5 s", "playing": False},
+        {"index": 2, "file": "boots_02.wav", "url": "/a/2.wav", "bars": [], "stem": "boots", "tail": "_02.wav",
+         "note": "a bit higher, softer · 0.5 s", "playing": True}]
+    assert out[1] == []
+
+
+@needs_node
+def test_play_like_a_game_walks_the_servers_order_and_goes_round():
+    out = _run("""let played = 0; const seen = [];
+      for (let i = 0; i < 7; i += 1) { const next = m.nextInOrder([2, 0, 1], played); played = next.played; seen.push(next.index); }
+      console.log(JSON.stringify([seen, played, m.nextInOrder([], 4), m.nextInOrder(undefined)]))""")
+    assert out[0] == [2, 0, 1, 2, 0, 1, 2] and out[1] == 7
+    assert out[2] == {"index": 0, "played": 5} and out[3] == {"index": 0, "played": 1}
+
+
+def test_the_order_the_page_walks_is_the_real_one_and_never_repeats_going_round():
+    """The page has no shuffle of its own: it walks sound_post.play_order, which is safe to loop."""
+    from itertools import pairwise
+
+    from image_to_3dlab import sound_post
+    for seed in range(50):
+        order = sound_post.play_order(5, 8, seed)
+        walked = [order[i % len(order)] for i in range(len(order) * 3)]
+        assert all(a != b for a, b in pairwise(walked))
+    logic = (STUDIO / "sound.js").read_text(encoding="utf-8") + (STUDIO / "variations-pane.js").read_text(encoding="utf-8")
+    assert "Math.random" not in logic
+
+
+@needs_node
+def test_sets_ids_and_the_save_hint():
+    out = _run("""console.log(JSON.stringify({
+        meta: [m.keptMeta({ kind: 'sound_set', count: 6, sound_kind: 'effect' }), m.keptMeta({ kind: 'sound', sound_kind: 'effect', seconds: 1 })],
+        set: [m.isSet({ kind: 'sound_set' }), m.isSet({ kind: 'sound' }), m.isSet(null)],
+        ids: [m.soundIdOf('sounds/boots__20261120-091306/sound.wav'), m.soundIdOf('sounds/../x/sound.wav'),
+              m.soundIdOf('sounds/a_set__20261120-091306/a_01.wav'), m.soundIdOf(null)],
+        hint: m.saveSetHint(6),
+        found: m.filterSounds([{ kind: 'sound_set', name: 'Boots', prompt: 'gravel' }], 'gravel').length }))""")
+    assert out["meta"] == ["Set · 6 sounds", "Effect · 1 s"] and out["set"] == [True, False, False]
+    assert out["ids"] == ["boots__20261120-091306", None, None, None]
+    assert out["hint"] == ("6 numbered files in one folder, ready to drop into Unity, Godot or Roblox. "
+                           "One licence record covers them all.")
+    assert out["found"] == 1
+
+
 # ------------------------------------------------------------------ the page, as it ships
 
 def test_the_studio_has_a_sound_button_beside_create_and_canvas():
@@ -155,3 +249,63 @@ def test_the_sheet_has_its_styles():
     for rule in (".sound-sheet", ".sound-form", ".sound-tries", ".try-card", ".wave", ".kept-strip"):
         assert rule in css, rule
     assert "#fd6d14" not in css.split("/* Sound sheet")[1].split("/*")[0]      # the studio's own colours, by name
+
+
+# ------------------------------------------------------------------ variations, as they ship
+
+@needs_node
+def test_the_variations_sheet_loads_as_a_module():
+    """A slip in the file would only show when someone opens the sheet: import the real one."""
+    url = (STUDIO / "variations-pane.js").as_uri()
+    result = subprocess.run([NODE, "--input-type=module", "--eval",
+                             f"const m = await import({json.dumps(url)}); console.log(Object.keys(m).join())"],
+                            check=True, capture_output=True, text=True)
+    assert result.stdout.strip() == "openVariationsPane"
+
+
+def test_variations_open_from_a_kept_sound_in_the_library_and_from_a_kept_try():
+    app = (STUDIO / "app.js").read_text(encoding="utf-8")
+    assert "from './variations-pane.js'" in app and "openVariationsPane({ stage: $('stage'), sound" in app
+    assert 'data-variations="${escape(sound.id)}"' in app and "variations: openVariations" in app
+    assert "isSet(sound) ? ''" in app                                   # a set is not varied again
+    pane = (STUDIO / "sound-pane.js").read_text(encoding="utf-8")
+    assert 'data-variations="${esc(soundIdOf(card.kept))}"' in pane and "on.variations?.(" in pane
+    assert ">Make variations</button>" in pane and ">Make variations</button>" in app
+
+
+def test_a_try_can_ask_for_more_like_it():
+    pane = (STUDIO / "sound-pane.js").read_text(encoding="utf-8")
+    assert ">Make more like this</button>" in pane and "moreLikeThis(job, defaults.limits.tries)" in pane
+    tip = re.search(r'data-more [^>]*data-tip="([^"]+)"', pane)[1]
+    assert "same description" in tip and "cleared" in tip and len(tip) < 140
+
+
+def test_the_variations_sheet_says_what_the_design_says_in_plain_words():
+    pane = (STUDIO / "variations-pane.js").read_text(encoding="utf-8")
+    logic = (STUDIO / "sound.js").read_text(encoding="utf-8")
+    for said in ("Make <span>variations", "How many", "How different", "What changes", "Play like a game",
+                 "Save the set", "Make ${form.count} variations", "Save ${preview.count} sounds",
+                 "Small changes so repeats don't sound copied.",
+                 "never the same one twice running, the way your game engine will"):
+        assert said in pane, said
+    assert "ready to drop into Unity, Godot or Roblox. One licence record covers them all." in logic
+    words = " ".join(re.findall(r">([A-Z][^<>{}$=;()]*)<", pane)).lower() + " ".join(
+        re.findall(r"'([A-Z][^'\n]{8,})'", pane)).lower()
+    assert "how many" in words and "save the set" in words               # the reader does see the text
+    for jargon in ("semitone", "decibel", " db", "resampl", "seed", "provenance", "sidecar", "model run", "khz"):
+        assert jargon not in words, jargon
+
+
+def test_the_variations_sheet_only_talks_to_the_variation_endpoints():
+    pane = (STUDIO / "variations-pane.js").read_text(encoding="utf-8")
+    assert set(re.findall(r"post\(\s*[`']([^`'$]+)", pane)) == {"/api/sounds/"}
+    assert sorted(re.findall(r"/api/sounds/\$\{encodeURIComponent\(sound\.id\)\}/(\w+)", pane)) == ["set", "variations"]
+    assert "sameSet(preview)" in pane                                    # Save sends back what was heard
+    assert "/api/setup" not in pane and "/api/sound'" not in pane        # no model, no download
+
+
+def test_the_variations_sheet_has_its_styles():
+    css = (STUDIO / "studio.css").read_text(encoding="utf-8")
+    for rule in (".variations-sheet", ".var-rows", ".var-row", ".var-save", ".game", ".sound-row"):
+        assert rule in css, rule
+    assert "#fd6d14" not in css.split("/* Make variations")[1].split("/*")[0]

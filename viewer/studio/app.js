@@ -22,7 +22,8 @@ import { gearPrompt, kitsWith, tryPlans } from './kit.js';
 import { openKitPane } from './kit-pane.js';
 import { openCanvasPane } from './canvas-pane.js';
 import { openSoundPane, createPlayer, SPEAKER } from './sound-pane.js';
-import { filterSounds, keptMeta, soundsFoot } from './sound.js';
+import { filterSounds, keptMeta, soundsFoot, isSet, nextInOrder } from './sound.js';
+import { openVariationsPane } from './variations-pane.js';
 
 const $ = (id) => document.getElementById(id);
 const LOGO = './studio/mark.svg';
@@ -98,6 +99,7 @@ const openFamilies = new Set();  // families whose versions are listed under the
 let kits = [];             // kits: a character and its gear (viewer/kits_api.py)
 let sounds = [];           // kept sounds (viewer/sound_api.py): a list of their own, played in place
 const soundPlayer = createPlayer(() => { if (filter === 'sounds') renderLibrary(); });
+const setPlays = new Map();   // how many times each saved set has been played: its place in its play order
 let kitPane = null, openKitId = null;
 const kitQueue = [];       // Redo / ×2-×4 tries waiting their turn: the studio runs one thing at a time
 let kitReturn = null;      // the kit to reopen once its tries are done
@@ -170,11 +172,29 @@ function soundRows() {
   const list = filterSounds(sounds, query);
   if (!list.length) return `<li class="empty-lib">${sounds.length ? 'Nothing matches.' : 'No sounds yet. Press Sound to make your first.'}</li>`;
   return list.map((sound) => {
-    const source = url(sound.file);
-    return `<li><button class="asset sound" data-sound="${escape(source)}" title="${escape(sound.prompt || '')}" aria-pressed="${soundPlayer.playing === source}">
+    // a set plays a different take each click, in a game's order; a single sound just plays
+    const files = isSet(sound) ? sound.files.map(url) : [url(sound.file)];
+    const on = files.includes(soundPlayer.playing);
+    const tip = isSet(sound) ? 'Click to hear one. Each click plays a different one, like a game would.' : (sound.prompt || '');
+    return `<li class="sound-row"><button class="asset sound" data-sound="${escape(sound.id)}" title="${escape(tip)}" aria-pressed="${on}">
       <span class="thumb">${SPEAKER}</span>
-      <span style="min-width:0"><span class="nm">${escape(sound.name)}</span><span class="st">${escape(keptMeta(sound))}${soundPlayer.playing === source ? ' · playing' : ''}</span></span></button></li>`;
+      <span style="min-width:0"><span class="nm">${escape(sound.name)}</span><span class="st">${escape(keptMeta(sound))}${on ? ' · playing' : ''}</span></span></button>
+      ${isSet(sound) ? '' : `<button class="ghost small" data-variations="${escape(sound.id)}" data-tip="Small changes of this sound, so repeats don't sound copied. Takes seconds.">Make variations</button>`}</li>`;
   }).join('');
+}
+
+function playSound(id) {
+  const sound = sounds.find((item) => item.id === id);
+  if (!sound) return;
+  if (!isSet(sound)) { soundPlayer.toggle(url(sound.file)).catch(() => {}); return; }
+  const next = nextInOrder(sound.play_order, setPlays.get(id) || 0);
+  setPlays.set(id, next.played);
+  soundPlayer.toggle(url(sound.files[next.index] || sound.file)).catch(() => {});
+}
+
+function openVariations(sound) {
+  soundPlayer.stop();
+  openVariationsPane({ stage: $('stage'), sound, on: { saved: refreshSounds } });
 }
 
 async function refreshSounds() {
@@ -528,8 +548,10 @@ function show(asset) {
 $('assetList').addEventListener('click', (event) => {
   const kitRow = event.target.closest('[data-kit]');
   if (kitRow) { openKit(kitRow.dataset.kit); return; }
+  const vary = event.target.closest('[data-variations]');
+  if (vary) { openVariations(sounds.find((item) => item.id === vary.dataset.variations)); return; }
   const soundRow = event.target.closest('[data-sound]');
-  if (soundRow) { soundPlayer.toggle(soundRow.dataset.sound).catch(() => {}); return; }
+  if (soundRow) { playSound(soundRow.dataset.sound); return; }
   const toggle = event.target.closest('[data-family]');
   if (toggle) {
     const key = toggle.dataset.family;
@@ -790,7 +812,7 @@ $('createBtn').addEventListener('click', () => {
 // ------------------------------------------------------------------ Sound (docs/sound.md)
 $('soundBtn').addEventListener('click', () => {
   soundPlayer.stop();
-  openSoundPane({ stage: $('stage'), on: { kept: refreshSounds } });
+  openSoundPane({ stage: $('stage'), on: { kept: refreshSounds, variations: openVariations } });
 });
 
 // ------------------------------------------------------------------ Canvas (docs/canvas.md)

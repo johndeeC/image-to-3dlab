@@ -2,54 +2,80 @@
 // like. Logic lives in sound.js; this file only draws it and talks to the server.
 // With the engine missing it says so and links to Setup. It never fetches anything itself.
 
-import { lengthText, soundRequest, requestProblem, notInstalledText, kindButtons, tryCards, progressLine, barHeights, keptMeta } from './sound.js';
+import { lengthText, soundRequest, requestProblem, notInstalledText, kindButtons, tryCards, progressLine, barHeights, keptMeta, moreLikeThis, soundIdOf } from './sound.js';
 
-const esc = (text) => String(text ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const PLAY = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>';
-const STOP = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>';
+export const esc = (text) => String(text ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+export const PLAY = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>';
+export const STOP = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>';
 export const SPEAKER = '<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>';
 
-async function getJson(path) {
+export async function getJson(path) {
   const response = await fetch(path);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || 'That did not work.');
   return body;
 }
 
-async function post(path, payload = {}) {
+export async function post(path, payload = {}) {
   const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || 'That did not work.');
   return body;
 }
 
+const GAP_MS = 180;     // the breath between sounds when a set plays on: about a walking step
+
 /** Plays one sound at a time. The file is fetched whole first, so it plays in every browser
- *  (some refuse to stream audio from a server that cannot send it in pieces). */
+ *  (some refuse to stream audio from a server that cannot send it in pieces).
+ *  `playEach(next)` keeps going: when a sound ends it asks `next()` for another, until stopped. */
 export function createPlayer(onChange = () => {}) {
-  let audio = null, playing = null;
+  let audio = null, playing = null, follow = null, wait = null;
   const urls = new Map();
   const stop = () => {
+    clearTimeout(wait);
     audio?.pause();
     audio = null;
     playing = null;
+    follow = null;
     onChange(null);
+  };
+  const start = async (source) => {
+    const mine = follow;
+    if (!urls.has(source)) {
+      const response = await fetch(source);
+      if (!response.ok) throw new Error('That sound could not be played.');
+      urls.set(source, URL.createObjectURL(await response.blob()));
+    }
+    if (follow !== mine) return;          // stopped, or something else started, while it was fetched
+    const made = new Audio(urls.get(source));
+    audio = made;
+    playing = source;
+    made.addEventListener('ended', () => {
+      if (audio !== made) return;
+      if (!follow) { stop(); return; }
+      const going = follow;
+      wait = setTimeout(() => {
+        const next = follow === going ? going() : null;
+        if (next) start(next).catch(stop); else if (follow === going) stop();
+      }, GAP_MS);
+    });
+    onChange(source);
+    await made.play();
   };
   return {
     get playing() { return playing; },
+    get playingOn() { return !!follow; },
     stop,
     async toggle(source) {
-      if (playing === source) { stop(); return; }
+      if (playing === source && !follow) { stop(); return; }
       stop();
-      if (!urls.has(source)) {
-        const response = await fetch(source);
-        if (!response.ok) throw new Error('That sound could not be played.');
-        urls.set(source, URL.createObjectURL(await response.blob()));
-      }
-      audio = new Audio(urls.get(source));
-      playing = source;
-      audio.addEventListener('ended', () => { if (playing === source) stop(); });
-      onChange(source);
-      await audio.play();
+      await start(source);
+    },
+    async playEach(next) {
+      stop();
+      follow = next;
+      const first = next();
+      if (first) await start(first); else stop();
     },
     dispose() {
       stop();
@@ -59,12 +85,12 @@ export function createPlayer(onChange = () => {}) {
   };
 }
 
-function waveHtml(bars) {
-  const heights = barHeights(bars);
+export function waveHtml(bars, tallest = 64) {
+  const heights = barHeights(bars, tallest);
   return `<div class="wave" aria-hidden="true">${(heights.length ? heights : Array(60).fill(3)).map((h) => `<i style="height:${h}px"></i>`).join('')}</div>`;
 }
 
-function tryHtml(card, playing) {
+function tryHtml(card, playing, busy = false) {
   const ready = card.state === 'ready';
   const words = { making: 'Being made…', waiting: 'Waiting', missing: 'Came out silent', empty: '' }[card.state] ?? lengthText(card.seconds);
   const on = ready && playing === card.url;
@@ -75,7 +101,9 @@ function tryHtml(card, playing) {
       </div>
       ${waveHtml(card.bars)}
       <div class="row"><button type="button" class="ghost small keep" data-keep="${card.number}" ${ready && !card.kept ? '' : 'disabled'}
-        data-tip="${card.kept ? 'It is in your Library.' : 'Save this one to your Library. The others are cleared when you make more.'}">${card.kept ? 'Kept' : 'Keep'}</button></div>
+        data-tip="${card.kept ? 'It is in your Library.' : 'Save this one to your Library. The others are cleared when you make more.'}">${card.kept ? 'Kept' : 'Keep'}</button>
+        ${soundIdOf(card.kept) ? `<button type="button" class="ghost small keep" data-variations="${esc(soundIdOf(card.kept))}" data-tip="Small changes of this sound, so repeats don't sound copied. Takes seconds.">Make variations</button>` : ''}
+        ${ready ? `<button type="button" class="ghost small more" data-more ${busy ? 'disabled' : ''} data-tip="New tries from the same description. Tries you have not kept are cleared.">Make more like this</button>` : ''}</div>
     </li>`;
 }
 
@@ -89,7 +117,8 @@ function keptHtml(sounds, base, playing) {
 }
 
 /**
- * Open the sheet over the viewer. `on.kept()` tells the page a sound joined the Library.
+ * Open the sheet over the viewer. `on.kept()` tells the page a sound joined the Library;
+ * `on.variations({ id, name })` asks it to open "Make variations" for a kept sound.
  * Returns { element } so the page can tell whether it is still open.
  */
 export function openSoundPane({ stage, on = {} }) {
@@ -136,7 +165,7 @@ export function openSoundPane({ stage, on = {} }) {
     return `<div class="sound-head"><h3>${job?.count || count} tries</h3><span class="meta">Made on this computer · free to use in games</span></div>
       <p class="hint" data-progress role="status" aria-live="polite">${esc(progressLine(job) || 'Describe a sound and press Make. Your tries show here.')}
         ${running() ? '<button type="button" class="ghost small" data-stop>Stop</button>' : ''}</p>
-      <ul class="sound-tries">${tryCards(job, count).map((card) => tryHtml(card, player.playing)).join('')}</ul>
+      <ul class="sound-tries">${tryCards(job, count).map((card) => tryHtml(card, player.playing, !!running())).join('')}</ul>
       <div class="kept"><h3>In your Library</h3><div class="kept-strip">${keptHtml(kept, base, player.playing)}</div></div>`;
   };
 
@@ -177,8 +206,8 @@ export function openSoundPane({ stage, on = {} }) {
     if (running()) timer = setTimeout(poll, 1000);
   }
 
-  async function make() {
-    const request = soundRequest({ ...form, count: defaults.limits.tries });
+  async function make(again = null) {
+    const request = again || soundRequest({ ...form, count: defaults.limits.tries });
     const problem = requestProblem(request, defaults);
     if (problem) { say(problem); return; }
     say('');
@@ -208,6 +237,16 @@ export function openSoundPane({ stage, on = {} }) {
       if (t.dataset.close !== undefined) close();
       else if (t.dataset.make !== undefined) await make();
       else if (t.dataset.stop !== undefined) { await post(`/api/sound/${job.job_id}/cancel`); }
+      else if (t.dataset.more !== undefined) {
+        // the same description and settings, shown in the form so it is plain what is being made
+        const again = moreLikeThis(job, defaults.limits.tries);
+        Object.assign(form, { prompt: again.prompt, seconds: again.seconds, leaveOut: new Set(again.leave_out) });
+        draw();
+        await make(again);
+      } else if (t.dataset.variations) {
+        const sound = kept.find((item) => item.id === t.dataset.variations);
+        on.variations?.({ id: t.dataset.variations, name: sound?.name || job?.prompt || 'Sound' });
+      }
       else if (t.dataset.kind) { form.kind = t.dataset.kind; draw(); }
       else if (t.dataset.leave) {
         const word = t.dataset.leave;

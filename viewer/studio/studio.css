@@ -683,4 +683,28 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .kept-sound b { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .asset.sound .thumb { color: var(--flame); }
 .asset.sound[aria-pressed="true"] .thumb { background: var(--ember); color: #1b0b02; }
-@container (max-width: 760px) { .sound-card { grid-template-columns: minmax(0, 1fr); } }
+.try-card .row .more { min-height: 34px; padding: 0 14px; }
+.try-card .row .more:disabled { opacity: .5; cursor: default; }
+.sound-row { display: flex; align-items: center; gap: 6px; }
+.sound-row .asset { flex: 1; min-width: 0; width: auto; }
+.sound-row .ghost.small { flex: none; }
+/* Make variations (variations-pane.js): the same sheet, with numbered takes as rows */
+.variations-sheet .link { border: 0; background: none; padding: 0; color: var(--flame); font-size: 13px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.variations-sheet .link:hover { color: var(--ember); }
+.game { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; }
+.game[aria-pressed="true"] { border-color: var(--ember); color: var(--bone); }
+.var-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.var-row { display: grid; grid-template-columns: 44px minmax(90px, 190px) minmax(0, 1fr) minmax(90px, 170px); gap: 14px; align-items: center; padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); min-width: 0; }
+.var-row.playing { border-color: var(--ember); }
+.var-row.playing .play { background: var(--ember); color: #1b0b02; }
+.var-row.playing .wave i { background: var(--ember); }
+.var-row code { display: flex; min-width: 0; font: 13px var(--f-num); color: var(--bone); white-space: nowrap; }
+.var-row code span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.var-row .wave { height: 44px; min-width: 0; gap: 1px; overflow: hidden; }
+.var-row .wave i { min-width: 0; }
+.var-row .meta { text-align: right; font: 400 12px/1.4 var(--f-ui); }
+.var-save { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.var-save > div { flex: 1; min-width: 200px; display: grid; gap: 4px; }
+.var-save .primary { min-height: 44px; padding: 0 18px; }
+.var-save .primary:disabled { opacity: .45; cursor: default; filter: none; }
+@container (max-width: 760px) { .sound-card { grid-template-columns: minmax(0, 1fr); } .var-row { grid-template-columns: 44px minmax(0, 1fr); } .var-row .wave, .var-row .meta { grid-column: 1 / -1; text-align: left; } }

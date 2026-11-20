@@ -80,8 +80,9 @@ export function barHeights(bars, tallest = 64) {
 
 const KIND_WORDS = { effect: 'Effect', loop: 'Background loop', music: 'Music', voice: 'Voice' };
 
-/** The small line under a kept sound's name: "Effect · 1.2 s". */
+/** The small line under a kept sound's name: "Effect · 1.2 s". A set says how many it holds. */
 export function keptMeta(sound) {
+  if (isSet(sound)) return `Set · ${sound.count || sound.files?.length || 0} sounds`;
   const kind = KIND_WORDS[sound?.sound_kind] || 'Sound';
   const length = lengthText(sound?.seconds);
   return length ? `${kind} · ${length}` : kind;
@@ -97,4 +98,73 @@ export function filterSounds(sounds, query = '') {
 export function soundsFoot(sounds) {
   const n = sounds?.length || 0;
   return `${n} sound${n === 1 ? '' : 's'} · saved in output/sounds on this machine`;
+}
+
+// ------------------------------------------------------------------ variation sets
+
+/** A saved set of numbered takes, not a single sound. */
+export function isSet(sound) {
+  return sound?.kind === 'sound_set';
+}
+
+/** A kept sound's id from its file ("sounds/<id>/sound.wav"), or null. */
+export function soundIdOf(file) {
+  return /^sounds\/([A-Za-z0-9_-]+)\/sound\.wav$/.exec(String(file || ''))?.[1] || null;
+}
+
+/** "Make more like this": the same description and settings as the batch a try came from.
+ *  No seed is sent, so the server picks a new one and the tries come out different. */
+export function moreLikeThis(job, count = 4) {
+  return soundRequest({ prompt: job?.prompt || '', seconds: job?.seconds, leaveOut: job?.leave_out || [], count });
+}
+
+/** The "How different" slider: one stop per choice the server offers. */
+export function howDifferentStops(options, chosen) {
+  const list = options?.how_different || [];
+  const at = Math.max(0, list.findIndex((item) => item.id === (chosen ?? options?.default_how_different)));
+  return { max: Math.max(0, list.length - 1), at, id: list[at]?.id, label: list[at]?.label || '', hint: list[at]?.hint || '' };
+}
+
+/** What POST /api/sounds/<id>/variations is sent. The server checks every limit. */
+export function variationsRequest({ count = 6, howDifferent = 'a little', change = [], seed = null } = {}) {
+  const request = { count: Number(count), how_different: howDifferent, change: [...change] };
+  return seed == null ? request : { ...request, seed };
+}
+
+/** Why Make can't start yet, in words, or null. */
+export function variationsProblem(request) {
+  return request.change.length ? null : 'Tick at least one thing to change.';
+}
+
+/** The numbers that make a heard set again, exactly: what Save sends back. */
+export function sameSet(preview) {
+  return variationsRequest({ count: preview.count, howDifferent: preview.how_different, change: preview.change, seed: preview.seed });
+}
+
+/** The takes as rows: file name, wave, a plain note, and whether it is the one playing. */
+export function variationRows(preview, playing = null) {
+  return (preview?.variations || []).map((take) => ({
+    index: take.index, file: take.file, url: take.url, bars: take.bars || [],
+    // the number is the part that matters, so a long name is cut before it, never through it
+    stem: fileParts(take.file)[0], tail: fileParts(take.file)[1],
+    note: [take.note, lengthText(take.seconds)].filter(Boolean).join(' · '),
+    playing: playing === take.url,
+  }));
+}
+
+function fileParts(file) {
+  const found = /^(.*?)(_\d+\.\w+)$/.exec(String(file || ''));
+  return found ? [found[1], found[2]] : [String(file || ''), ''];
+}
+
+/** "Play like a game": the next take in the order the server planned (random, never the same
+ *  one twice running, and safe to go round again). Returns the take's place and the new count. */
+export function nextInOrder(order, played = 0) {
+  if (!order?.length) return { index: 0, played: played + 1 };
+  return { index: order[played % order.length], played: played + 1 };
+}
+
+/** What saving a set of `count` does, under "Save the set". */
+export function saveSetHint(count) {
+  return `${count} numbered files in one folder, ready to drop into Unity, Godot or Roblox. One licence record covers them all.`;
 }
