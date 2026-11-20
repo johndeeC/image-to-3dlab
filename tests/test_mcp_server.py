@@ -166,7 +166,7 @@ def test_the_server_registers_every_tool():
                      "usage_counts", "brush_back", "picture_status", "back_versions",
                      "list_kits", "make_kit", "add_to_kit", "box_types", "list_canvases", "get_canvas", "edit_canvas",
                      "save_canvas", "check_canvas", "run_canvas", "canvas_status", "cancel_canvas_run",
-                     "make_sound", "sound_status", "make_variations"}
+                     "make_sound", "sound_status", "make_variations", "footsteps"}
 
 
 # --------------------------------------------------------------------------- create
@@ -1320,3 +1320,77 @@ def test_listing_sounds_includes_sets_with_every_file():
     assert made["files"] == [str(ms.REPO / "output" / "sounds" / "door_set__20261120-111500" / f"door_0{n}.wav") for n in (1, 2)]
     assert "play_order" not in made
     assert single["kind"] == "sound" and "files" not in single
+
+
+# --------------------------------------------------------------------------- footsteps
+WALK_FILE = "animate/knight__rig__20261120-101010/knight_walk.glb"
+STEP_SET = "boots_set__20261120-093300"
+
+
+class StepsHttp:
+    """A Library with one walking character, and the studio's answer about its steps."""
+
+    def __init__(self, error=None):
+        self.calls, self.error = [], error
+
+    def _found(self, saved: bool, sound: bool):
+        found = {"move": "walk", "words": "2 steps in each 1.2 s loop: left, right.", "loop": True, "seconds": 1.2,
+                 "speed": 1.25, "cues": [{"time_s": 0.3, "foot": "left"}, {"time_s": 0.9, "foot": "right"}],
+                 "feet": [], "saved": None}
+        if saved:
+            found["cues_file"] = WALK_FILE.replace(".glb", ".cues.json")
+            found["sound"] = {"id": STEP_SET, "license": {"name": "Apache-2.0"}, "files": ["a", "b", "c"]} if sound else None
+        return found
+
+    def get(self, url, params=None, timeout=None):
+        path = url.split("8777/", 1)[1]
+        self.calls.append(("GET", path, params))
+        if path == "api/assets":
+            return Response(200, {"assets": [{"id": "knight", "name": "Knight", "kind": "character",
+                                              "clips": [{"name": "walk", "file": WALK_FILE}]},
+                                             {"id": "crate", "name": "Crate", "kind": "prop", "clips": []}]})
+        return Response(*self.error) if self.error else Response(200, self._found(False, False))
+
+    def post(self, url, json=None, files=None, timeout=None):
+        self.calls.append(("POST", url.split("8777/", 1)[1], json))
+        return Response(*self.error) if self.error else Response(200, self._found(True, bool(json.get("sound_id"))))
+
+
+def test_footsteps_finds_saves_and_answers_the_cues_and_the_file():
+    http = StepsHttp()
+    out = ms.footsteps(sound_studio(http), asset_id="knight", move="walk", sound_id=STEP_SET)
+    assert http.calls[-1] == ("POST", "api/footsteps", {"file": WALK_FILE, "sound_id": STEP_SET})
+    assert out["cues"] == [{"time_s": 0.3, "foot": "left"}, {"time_s": 0.9, "foot": "right"}]
+    assert out["found"] == "2 steps in each 1.2 s loop: left, right." and out["seconds"] == 1.2 and out["speed"] == 1.25
+    assert out["cues_file"] == str(ms.REPO / "output" / "animate/knight__rig__20261120-101010/knight_walk.cues.json")
+    assert out["sound"] == {"id": STEP_SET, "licence": "Apache-2.0", "files": 3}
+    assert "no audio" in out["next"]
+
+
+def test_footsteps_can_look_without_saving_and_save_without_a_sound():
+    http = StepsHttp()
+    out = ms.footsteps(sound_studio(http), asset_id="knight", move="walk", save=False)
+    assert http.calls[-1] == ("GET", "api/footsteps", {"file": WALK_FILE})
+    assert "cues_file" not in out and "Nothing was saved" in out["next"] and len(out["cues"]) == 2
+    http = StepsHttp()
+    out = ms.footsteps(sound_studio(http), asset_id="knight", move="walk")
+    assert http.calls[-1] == ("POST", "api/footsteps", {"file": WALK_FILE}) and out["sound"] is None
+
+
+@pytest.mark.parametrize("asked, words", [
+    ({"asset_id": "nobody", "move": "walk"}, "No asset"),
+    ({"asset_id": "knight", "move": "moonwalk"}, "Its moves: walk"),
+    ({"asset_id": "crate", "move": "walk"}, "none yet"),
+    ({"asset_id": "knight", "move": "walk", "sound_id": "../../etc"}, "kept sound"),
+])
+def test_footsteps_refuses_what_it_cannot_find_before_asking_for_steps(asked, words):
+    http = StepsHttp()
+    with pytest.raises(ms.StudioError, match=words):
+        ms.footsteps(sound_studio(http), **asked)
+    assert [call[1] for call in http.calls] == ["api/assets"]
+
+
+def test_footsteps_passes_on_the_studios_refusal():
+    http = StepsHttp(error=(404, {"error": "no feet found on this skeleton"}))
+    with pytest.raises(ms.StudioError, match="no feet found"):
+        ms.footsteps(sound_studio(http), asset_id="knight", move="walk")

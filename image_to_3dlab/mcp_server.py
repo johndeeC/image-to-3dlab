@@ -97,7 +97,7 @@ USED = {"api/chains", "api/chains/*/cancel", "api/setup/*/download", "api/reveal
         "api/image/brush", "api/image/versions/use", "api/image/versions/delete",
         "api/kits", "api/kits/*/add",
         "api/graphs", "api/graphs/check", "api/graphs/*/run", "api/graph-runs/*/cancel",
-        "api/sound", "api/sound/*/keep", "api/sound/*/cancel", "api/sounds/*/set"}
+        "api/sound", "api/sound/*/keep", "api/sound/*/cancel", "api/sounds/*/set", "api/footsteps"}
 
 
 class StudioError(RuntimeError):
@@ -1278,6 +1278,40 @@ def make_variations(studio: Studio, *, sound_id: str, count: int = 6, how_differ
             "next": "In a game, play one of these at random each time, never the same one twice running."}
 
 
+def footsteps(studio: Studio, *, asset_id: str, move: str, sound_id: str | None = None,
+              save: bool = True) -> dict[str, Any]:
+    """Find where the feet land in one of a character's moves; save the marks beside the move
+    (`<move>.cues.json`) unless `save` is False. `sound_id` is the kept sound or set they play."""
+    asset = find_asset(studio, asset_id)
+    clips = asset.get("clips") or []
+    clip = next((c for c in clips if c.get("name") == move), None)
+    if clip is None:
+        have = ", ".join(c["name"] for c in clips) or "none yet (continue_asset(up_to='animated') makes one)"
+        raise StudioError(f"This asset has no move {move!r}. Its moves: {have}.")
+    if sound_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,80}__\d{8}-\d{6}(?:-\d+)?", str(sound_id)):
+        raise StudioError('sound_id is a kept sound\'s or set\'s id, as list_assets(kind="sound") gives it.')
+    if save:
+        body: dict[str, Any] = {"file": clip["file"]}
+        if sound_id:
+            body["sound_id"] = sound_id
+        found = studio.post_json("api/footsteps", body)
+    else:
+        found = studio.get("api/footsteps", file=clip["file"])
+    out = {"move": found.get("move"), "found": found.get("words"), "loop": found.get("loop"),
+           "seconds": found.get("seconds"), "speed": found.get("speed"),
+           "cues": [{"time_s": cue["time_s"], "foot": cue["foot"]} for cue in found.get("cues") or []]}
+    if found.get("cues_file"):
+        out["cues_file"] = str(REPO / "output" / found["cues_file"])
+        sound = found.get("sound") or {}
+        out["sound"] = ({"id": sound.get("id"), "licence": (sound.get("license") or {}).get("name"),
+                         "files": len(sound.get("files") or [])} if sound else None)
+        out["next"] = ("Times are seconds into the move. In the game, fire an event at each one and play the sound "
+                       "there (docs/sound.md says how in Unity, Godot and Roblox). The file holds no audio.")
+    else:
+        out["next"] = "Nothing was saved. Call again with save=True (and a sound_id) to write the cue file."
+    return out
+
+
 def sound_status(studio: Studio, *, job_id: str, wait_seconds: int = 0, keep: int | None = None,
                  name: str | None = None, cancel: bool = False,
                  sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
@@ -1794,6 +1828,18 @@ def build_server(studio: Studio | None = None):
         The same sound_id, numbers and seed make the same set again."""
         return safe(lambda: make_variations(studio, sound_id=sound_id, count=count, how_different=how_different,
                                             change=change, name=name, seed=seed))
+
+    @server.tool(name="footsteps", structured_output=False)
+    def tool_footsteps(asset_id: str, move: str, sound_id: str | None = None, save: bool = True):
+        """Footstep marks on a character's move: finds the moment each foot lands and saves them as a small
+        list of times beside the move (<move>.cues.json), so a game plays a step sound there itself. No model
+        runs; about a second. move: one of the asset's moves (list_assets shows them), e.g. "walk".
+        sound_id: the kept sound or set the steps play, from list_assets(kind="sound"); a set from
+        make_variations sounds best, since no two steps in a row are the same. Leave it out to save the times
+        alone. save=False only looks. A move where the feet never leave the floor (idle, wave) has no steps.
+        Answers the cues ({time_s, foot}), the loop length and the cue file's path. Times are for the move at
+        the speed it was saved; a game playing it faster divides them by the speed-up."""
+        return safe(lambda: footsteps(studio, asset_id=asset_id, move=move, sound_id=sound_id, save=save))
 
     @server.tool(name="preview", structured_output=False)
     def tool_preview(asset_id: str, stage: str = "latest", look: str = "paint", move: str | None = None,
