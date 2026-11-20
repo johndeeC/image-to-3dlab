@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Sound** (beside + Create and Canvas): describe a sound effect, such as a footstep, a hit or
+  a door, and get four tries. Play each, see its wave, and **Keep** the one you like; kept
+  sounds show under **Library → Sounds** and play there. Pick a length up to 30 seconds and
+  what to leave out (music, voices, room echo). Each sound is trimmed, given click-free ends
+  and saved as a one-channel 48 kHz WAV in `output/sounds/`, with its licence record beside it.
+  Effects only for now: background loops, music and voice are marked "later".
+- Sound engine: MOSS-SoundEffect v2.0 (Apache-2.0, about 6.4 GB, Apple Silicon). It is a
+  new card on Setup and is never downloaded until you say yes there; without it the Sound
+  sheet says so and points to Setup. From a terminal: `scripts/bootstrap_sound_effects.py`.
+- Agents: `make_sound` and `sound_status` make, list and keep sounds, and
+  `list_assets(kind="sound")` lists the kept ones. See `docs/sound.md`.
 - **Kits**: a character and the gear made for it, kept together. **Make gear** on a character
   opens Create on a sheet of nine props, already described from the character, and the props
   join its kit. The kit opens as one row of steps per member, with **Redo** or **×2–×4** on any
