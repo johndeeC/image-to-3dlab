@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sheet says so and points to Setup. From a terminal: `scripts/bootstrap_sound_effects.py`.
 - Agents: `make_sound` and `sound_status` make, list and keep sounds, and
   `list_assets(kind="sound")` lists the kept ones. See `docs/sound.md`.
+- **Make variations** on a kept sound: 2 to 12 takes that differ a little in pitch and
+  volume, so a footstep or a hit played over and over does not sound copied. Pick how
+  different (a little, some, a lot), listen, and **Play like a game** to hear them in random
+  order with no repeats. **Save the set** writes numbered files in one folder, ready for
+  Unity, Godot or Roblox, with one licence record for them all. No model runs, so it takes
+  about a second. Higher takes come out a little shorter and lower ones longer. Sets show
+  under **Library → Sounds**; each click plays a different take.
+- **Make more like this** on a sound try: four new tries from the same description and settings.
+- Agents: `make_variations` saves a variation set from a kept sound, and
+  `list_assets(kind="sound")` lists sets with every file.
 - **Kits**: a character and the gear made for it, kept together. **Make gear** on a character
   opens Create on a sheet of nine props, already described from the character, and the props
   join its kit. The kit opens as one row of steps per member, with **Redo** or **×2–×4** on any
