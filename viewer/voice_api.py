@@ -397,7 +397,8 @@ def sidecar(*, engine: VoiceEngine, request: dict[str, Any], number: int, wav: P
         "post": {key: post.get(key) for key in ("trim", "fade_ms", "peak", "gain_db", "tail_s", "fade_out_ms")},
         "loudness": {"target": loudness.get("target"), "measured": loudness.get("measured"),
                      "level": loudness.get("level"), "measure": loudness.get("measure"),
-                     "set_by": loudness.get("set_by"), "held_by_peak": loudness.get("held_by_peak"),
+                     "set_by": loudness.get("set_by"), "pressed_db": loudness.get("pressed_db"),
+                     "held_by_peak": loudness.get("held_by_peak"),
                      "peak": facts["peak"]},
         "loop": None, "made_for": None,
     }

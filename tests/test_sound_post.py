@@ -654,3 +654,49 @@ def test_lines_are_joined_with_a_gap_and_keep_their_own_levels():
     np.testing.assert_array_equal(joined[-quiet.size:], quiet)
     with pytest.raises(sp.SoundProblem, match="no line"):
         sp.join_lines([])
+
+
+def stressed(bang=0.4):
+    """Speech-shaped: quiet words, and one short syllable far louder than the rest. Like real
+    speech, its loudest sample sits well over its level (about 19 dB here)."""
+    word, gap = sine(0.3, 180.0, level=0.05), np.zeros(int(0.1 * sp.RATE), np.float32)
+    return np.concatenate([sine(0.03, 180.0, level=bang), gap] + [word, gap] * 20)
+
+
+def crest_db(sound):
+    return 20 * math.log10(sp.peak_of(sound)) - sp.speech_level_db(sound)
+
+
+def test_pressing_peaks_never_passes_the_ceiling_and_leaves_the_rest_alone():
+    quiet, loud = sine(0.5, level=0.3), sine(0.2, level=1.5)
+    sound = np.concatenate([quiet, loud, quiet])
+    pressed = sp.press_peaks(sound, 0.98)
+    assert sp.peak_of(pressed) <= 0.98 + 1e-6 and pressed.size == sound.size
+    far = int(0.4 * sp.RATE)                                   # well away from the loud part: untouched
+    np.testing.assert_array_equal(pressed[:far], sound[:far])
+    np.testing.assert_array_equal(pressed[-far:], sound[-far:])
+    assert np.abs(np.diff(pressed)).max() < np.abs(np.diff(loud)).max() * 1.01      # no click where it starts
+    untouched = sp.press_peaks(quiet, 0.98)
+    np.testing.assert_array_equal(untouched, quiet)
+
+
+def test_a_peaky_line_still_reaches_its_level_by_pressing_its_peaks():
+    """Real speech peaks 12 to 18 dB over its level, so a plain turn-up would stop short."""
+    raw = stressed()
+    assert 17 < crest_db(raw) < 21                              # a plain line would peak 1 to 5 dB over full scale
+    line, facts = sp.level_voice(raw)
+    assert sp.speech_level_db(line) == pytest.approx(-16.0, abs=0.3) and facts["level"] == sp.speech_level_db(line)
+    assert sp.peak_of(line) <= sp.PEAK + 1e-6 and not facts["held_by_peak"]
+    assert 1.0 < facts["pressed_db"] <= sp.VOICE_PRESS_DB
+    # the quiet words were only turned up, by the same amount: nothing but the loud syllable was pressed
+    tail, was = line[-int(1.0 * sp.RATE):], raw[-int(1.0 * sp.RATE):]
+    np.testing.assert_allclose(tail, was * 10 ** (facts["gain_db"] / 20), rtol=1e-3, atol=1e-5)
+
+
+def test_peaks_are_pressed_by_six_decibels_at_most_and_then_the_line_is_held():
+    raw = stressed()
+    line, facts = sp.level_voice(raw, "shout")
+    assert facts["held_by_peak"] is True and facts["pressed_db"] == pytest.approx(sp.VOICE_PRESS_DB, abs=0.05)
+    assert sp.peak_of(line) <= sp.PEAK + 1e-6
+    # short of a shout's mark, and still louder than the same line said plainly
+    assert sp.speech_level_db(sp.level_voice(raw)[0]) < sp.speech_level_db(line) < sp.voice_target_db("shout")

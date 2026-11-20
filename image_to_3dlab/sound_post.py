@@ -32,7 +32,9 @@ Voice lines have their own volume rule (`level_voice`, `clean_voice`): a line is
 loud it is **while someone is speaking**, about -16 dB, so lines said one after another sit
 level. How a line is said moves that mark (`VOICE_DIRECTION_DB`): a whisper sits 9 dB under a
 plain line and a shout 4 dB over, so a shout stays louder than a whisper. Nothing is ever
-clipped: a line that would pass the peak is held there instead.
+clipped. Speech has sharp peaks, so reaching the mark often means pressing the loudest
+syllables down a little (`press_peaks`, by at most 6 dB); a line that would need more than
+that is held under its mark instead, and its record says so.
 
 Ported from the `postprocess_wav` / `inspect_wav` pair in our older ai-sfx project (trim at
 0.3% of the peak, 5 ms fades, peak 0.98, 16-bit, refuse empty or broken audio).
@@ -113,6 +115,8 @@ VOICE_BLOCK_MS = 50.0          # the line is measured in pieces this long...
 VOICE_GATE_DB = 30.0           # ...and pieces this far under the loudest one are pauses
 VOICE_SHORT_S = 0.4            # less speech than this is too little to measure: set by peak
 VOICE_CREST_DB = 12.0          # speech's loudest sample sits about this far over its level
+VOICE_PRESS_DB = 6.0           # the most the loudest syllables are pressed down to reach the mark
+VOICE_PRESS_MS = 5.0           # ...in pieces this long, each looking one piece either side
 
 
 class SoundProblem(ValueError):
@@ -564,35 +568,77 @@ def voice_target_db(direction: str | None = None) -> float:
     return VOICE_LEVEL_DB + VOICE_DIRECTION_DB.get(str(direction or "").strip().lower(), 0.0)
 
 
+def press_peaks(samples: Any, ceiling: float = PEAK, rate: int = RATE) -> np.ndarray:
+    """Turn down only the parts of a sound that pass `ceiling`, smoothly, leaving the rest as
+    it is: a peak limiter. The sound is read in 5 ms pieces; each piece that would pass the
+    ceiling gets the gain that brings it under, every piece takes the lowest gain of itself
+    and its two neighbours (so the turn-down starts before the peak and ends after it), and
+    the gain slides from one piece to the next. No sample comes out over the ceiling."""
+    data = np.asarray(samples, dtype=np.float32).reshape(-1)
+    if not data.size or peak_of(data) <= ceiling:
+        return data.copy()
+    size = max(1, int(rate * VOICE_PRESS_MS / 1000.0))
+    count = -(-data.size // size)
+    padded = np.zeros(count * size, dtype=np.float32)
+    padded[: data.size] = np.abs(data)
+    need = np.minimum(1.0, ceiling / np.maximum(padded.reshape(count, size).max(axis=1), 1e-12))
+    wide = np.pad(need, 1, mode="edge")
+    held = np.minimum(np.minimum(wide[:-2], wide[1:-1]), wide[2:])
+    gain = np.interp(np.arange(data.size), (np.arange(count) + 0.5) * size, held)
+    return (data * gain).astype(np.float32)
+
+
 def level_voice(samples: Any, direction: str | None = None, *, rate: int = RATE,
                 peak: float = PEAK) -> tuple[np.ndarray, dict[str, Any]]:
     """A voice line at its standard volume, up or down. Returns (the line, what was done).
 
     The mark is `voice_target_db(direction)`. A line too short to measure is set by its
-    loudest sample instead, 12 dB over that mark (about where speech peaks). Either way it is
-    never turned up by more than `MAX_BOOST_DB`, and never past `peak`: a line that would clip
-    is held at the peak instead (`held_by_peak`), so a shout is as loud as the file allows.
+    loudest sample instead, 12 dB over that mark (about where speech peaks). It is never
+    turned up by more than `MAX_BOOST_DB`.
+
+    Nothing is clipped. Where the mark puts the loudest syllables past `peak`, they are
+    pressed down to it (`press_peaks`), by at most `VOICE_PRESS_DB`: `pressed_db` says how
+    far. A line that would need more than that is turned down as a whole until it does not,
+    so it ends under its mark (`held_by_peak`).
     """
     data = np.asarray(samples, dtype=np.float32)
     target = voice_target_db(direction)
     measured, loudest = speech_level_db(data, rate), peak_of(data)
-    facts: dict[str, Any] = {"target": target, "measured": measured, "peak": round(loudest, 4), "gain_db": 0.0,
+    facts: dict[str, Any] = {"target": target, "measured": measured, "level": measured, "peak": round(loudest, 4),
+                             "gain_db": 0.0, "pressed_db": 0.0,
                              "measure": "average power while speaking, dB below full scale",
                              "set_by": "level", "held_by_peak": False}
     if loudest < SILENT_PEAK:
         return data.copy(), facts
     if measured is None:
         facts["set_by"] = "peak"
-        gain_db = target + VOICE_CREST_DB - 20.0 * math.log10(loudest)
-    else:
-        gain_db = target - measured
-    gain_db = min(gain_db, MAX_BOOST_DB)
-    room_db = 20.0 * math.log10(peak / loudest)
-    if gain_db > room_db:
-        gain_db, facts["held_by_peak"] = room_db, True
-    out = change_volume(data, gain_db)
-    facts.update(gain_db=round(gain_db, 2), peak=round(peak_of(out), 4),
-                 level=None if measured is None else round(measured + gain_db, 2))
+        gain_db = min(target + VOICE_CREST_DB - 20.0 * math.log10(loudest), MAX_BOOST_DB,
+                      20.0 * math.log10(peak / loudest))
+        out = change_volume(data, gain_db)
+        facts.update(gain_db=round(gain_db, 2), peak=round(peak_of(out), 4), level=None)
+        return out, facts
+    out, gain_db, pressed = data, 0.0, 0.0
+    for _ in range(6):                      # pressing peaks costs a little level: go round again for it
+        level = speech_level_db(out, rate)
+        if level is None:
+            break
+        step = min(target - level, MAX_BOOST_DB - gain_db)
+        over = 20.0 * math.log10(peak_of(out) / peak) + step        # how far the peaks would pass
+        if over > VOICE_PRESS_DB - pressed:
+            step -= over - (VOICE_PRESS_DB - pressed)
+            facts["held_by_peak"] = True
+        if abs(step) < 0.05:
+            break
+        out = change_volume(out, step)
+        gain_db += step
+        before = peak_of(out)
+        if before > peak:
+            out = press_peaks(out, peak, rate)
+            pressed += 20.0 * math.log10(before / peak)
+        if facts["held_by_peak"]:
+            break
+    facts.update(gain_db=round(gain_db, 2), pressed_db=round(pressed, 2), peak=round(peak_of(out), 4),
+                 level=speech_level_db(out, rate))
     return out, facts
 
 
