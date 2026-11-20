@@ -167,7 +167,7 @@ def test_the_server_registers_every_tool():
                      "list_kits", "make_kit", "add_to_kit", "box_types", "list_canvases", "get_canvas", "edit_canvas",
                      "save_canvas", "check_canvas", "run_canvas", "canvas_status", "cancel_canvas_run",
                      "make_sound", "sound_status", "make_variations", "footsteps",
-                     "split_sound", "make_layered_sound"}
+                     "split_sound", "make_layered_sound", "list_voices", "make_voice", "join_voice_lines"}
 
 
 # --------------------------------------------------------------------------- create
@@ -1221,6 +1221,111 @@ def test_a_running_sound_job_can_be_stopped():
     http = SoundHttp(statuses=("cancelling",))
     ms.sound_status(sound_studio(http), job_id=SOUND_JOB, cancel=True)
     assert http.calls[0] == ("POST", f"api/sound/{SOUND_JOB}/cancel", {})
+
+
+class VoiceHttp:
+    """The studio's voice routes, answering what the real ones answer (viewer/voice_api.py)."""
+
+    def __init__(self, error=None):
+        self.calls, self.error = [], error
+
+    def get(self, url, params=None, timeout=None):
+        path = url.split("8777/", 1)[1]
+        self.calls.append(("GET", path, params))
+        if path == "api/voice/defaults":
+            import sys
+            sys.path.insert(0, str(ms.REPO / "viewer"))
+            import voice_api
+            return Response(200, voice_api.defaults_payload())
+        return Response(200, {"job_id": SOUND_JOB, "status": "done", "kind": "voice", "prompt": "Halt! Go away.",
+                              "seed": 7, "error": None, "elapsed_seconds": 3.0,
+                              "voice": {"voice": "ryan", "lines": ["Halt, who goes there?", "Go away, now."]},
+                              "tries": [{"number": 1, "line": 1, "take": 1, "seed": 7, "seconds": 1.4, "kept": None,
+                                         "bars": [1.0], "guessed": []},
+                                        {"number": 2, "line": 2, "take": 1, "seed": 8, "seconds": 1.1, "kept": None,
+                                         "bars": [1.0], "guessed": ["Zog"]}]})
+
+    def post(self, url, json=None, files=None, timeout=None):
+        path = url.split("8777/", 1)[1]
+        self.calls.append(("POST", path, json))
+        if self.error:
+            return Response(*self.error)
+        if path == "api/voice/join":
+            return Response(200, {"id": "halt__20261120-101600", "file": "sounds/halt__20261120-101600/sound.wav",
+                                  "record": "sound.provenance.json", "seconds": 2.75, "lines": 2,
+                                  "licence": "Apache-2.0"})
+        return Response(202, {"job_id": SOUND_JOB, "seed": 7, "count": 2, "takes": 1, "engine": json["engine"],
+                              "lines": ["Halt, who goes there?", "Go away, now."]})
+
+
+def test_list_voices_names_every_voice_and_the_rule_against_copying_people():
+    out = ms.list_voices(sound_studio(VoiceHttp()))
+    kokoro, qwen = out["engines"]
+    assert (kokoro["engine"], qwen["engine"]) == ("kokoro", "qwen")
+    assert kokoro["what_it_does"].startswith("Clear and quick:") and qwen["what_it_does"].startswith("With feeling:")
+    assert len(kokoro["voices"]) == 28 and len(qwen["voices"]) == 9
+    assert qwen["voices"][0] == {"voice": "ryan", "who": "Man. Lively, with drive. English.", "language": "english"}
+    assert (kokoro["takes_direction"], qwen["takes_direction"]) == (False, True)
+    assert kokoro["languages"] == "follows the voice" and "english" in qwen["languages"]
+    assert kokoro["setup_id"] == "voice-kokoro" and qwen["download_size"] == "3.08 GB"
+    assert out["directions"] == ["angry", "sad", "whisper", "shout", "calm", "excited"]
+    assert "does not copy a person's voice" in out["rule"] and "install_backend" in out["next"]
+
+
+def test_make_voice_sends_what_was_asked_and_says_what_to_do_next():
+    http = VoiceHttp()
+    out = ms.make_voice(sound_studio(http), text="Halt, who goes there? Go away, now.", engine="qwen", voice="ryan",
+                        direction="shout", tries=1, seed=7)
+    assert http.calls == [("POST", "api/voice", {"text": "Halt, who goes there? Go away, now.", "engine": "qwen",
+                                                 "voice": "ryan", "direction": "shout", "count": 1, "seed": 7})]
+    assert out["job_id"] == SOUND_JOB and out["lines"] == ["Halt, who goes there?", "Go away, now."]
+    assert (out["tries_per_line"], out["tries"], out["seed"]) == (1, 2, 7)
+    assert "sound_status" in out["next"] and "join_voice_lines" in out["next"]
+    # left out, the voice, the tries and the seed are the studio's to choose
+    http = VoiceHttp()
+    ms.make_voice(sound_studio(http), text="Halt!")
+    assert http.calls[0][2] == {"text": "Halt!", "engine": "kokoro"}
+
+
+def test_a_missing_voice_engine_or_a_refusal_reaches_the_agent_in_words():
+    http = VoiceHttp(error=(503, {"error": "Kokoro 82M is not set up yet. Missing: its model files (0.34 GB). "
+                                           "Open Setup to download it.", "needs_setup": True}))
+    with pytest.raises(ms.StudioError, match="not set up yet"):
+        ms.make_voice(sound_studio(http), text="Halt!")
+    assert [c[1] for c in http.calls] == ["api/voice"]           # no install was started on the agent's behalf
+    http = VoiceHttp(error=(422, {"error": "AssetFurnace does not copy a person's voice. Pick one of the voices listed."}))
+    with pytest.raises(ms.StudioError, match="does not copy a person's voice"):
+        ms.make_voice(sound_studio(http), text="Halt!", voice="me.wav")
+
+
+def test_a_voice_job_reads_through_sound_status_with_its_lines():
+    out = ms.sound_status(sound_studio(VoiceHttp()), job_id=SOUND_JOB)
+    assert out["lines"] == ["Halt, who goes there?", "Go away, now."] and out["voice"] == "ryan"
+    assert out["tries"] == [{"try": 1, "seed": 7, "seconds": 1.4, "kept": None, "line": 1, "take": 1},
+                            {"try": 2, "seed": 8, "seconds": 1.1, "kept": None, "line": 2, "take": 1,
+                             "guessed": ["Zog"]}]
+
+
+def test_join_voice_lines_saves_the_chosen_tries_in_order():
+    http = VoiceHttp()
+    out = ms.join_voice_lines(sound_studio(http), job_id=SOUND_JOB, tries=[1, 2], gap_ms=300, name="Halt")
+    assert http.calls == [("POST", "api/voice/join", {"parts": [{"job_id": SOUND_JOB, "try": 1},
+                                                                {"job_id": SOUND_JOB, "try": 2}],
+                                                      "gap_ms": 300, "name": "Halt"})]
+    assert out["status"] == "saved" and out["lines"] == 2 and out["licence"] == "Apache-2.0"
+    assert out["file"] == str(ms.REPO / "output" / "sounds/halt__20261120-101600/sound.wav")
+    assert out["licence_record"].endswith("sound.provenance.json")
+
+
+@pytest.mark.parametrize("job_id,tries,why", [
+    ("../../skins", [1], "32-character id"), (SOUND_JOB, [], "list of try numbers"),
+    (SOUND_JOB, ["1"], "list of try numbers"), (SOUND_JOB, [True], "list of try numbers"),
+])
+def test_join_voice_lines_checks_what_goes_into_the_request(job_id, tries, why):
+    http = VoiceHttp()
+    with pytest.raises(ms.StudioError, match=why):
+        ms.join_voice_lines(sound_studio(http), job_id=job_id, tries=tries)
+    assert http.calls == []
 
 
 @pytest.mark.parametrize("job_id", ["../../skins", "abc", "A" * 32])

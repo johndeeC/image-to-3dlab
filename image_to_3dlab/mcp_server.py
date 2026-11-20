@@ -101,7 +101,8 @@ USED = {"api/chains", "api/chains/*/cancel", "api/setup/*/download", "api/reveal
         "api/kits", "api/kits/*/add",
         "api/graphs", "api/graphs/check", "api/graphs/*/run", "api/graph-runs/*/cancel",
         "api/sound", "api/sound/*/keep", "api/sound/*/cancel", "api/sounds/*/set", "api/footsteps",
-        "api/sound/layers/split", "api/sound/layers/add", "api/sound/layers/save"}
+        "api/sound/layers/split", "api/sound/layers/add", "api/sound/layers/save",
+        "api/voice", "api/voice/join"}
 
 
 class StudioError(RuntimeError):
@@ -1239,10 +1240,15 @@ def picture_status(studio: Studio, *, job_id: str, wait_seconds: int = 0,
 def sound_job_summary(job: dict[str, Any]) -> dict[str, Any]:
     """A sound job for an agent: where it is, and each try with the full path once it is kept."""
     tries = [{"try": t.get("number"), "seed": t.get("seed"), "seconds": t.get("seconds"),
-              "kept": str(REPO / "output" / t["kept"]) if t.get("kept") else None}
+              "kept": str(REPO / "output" / t["kept"]) if t.get("kept") else None,
+              # a voice job: which line this try says, which take of it, and words it had to guess
+              **{key: t[key] for key in ("line", "take", "guessed") if t.get(key)}}
              for t in job.get("tries") or []]
+    voice = job.get("voice") if isinstance(job.get("voice"), dict) else None
     return {k: v for k, v in {"job_id": job.get("job_id"), "status": job.get("status"), "error": job.get("error"),
                               "description": job.get("prompt"), "seconds": job.get("seconds"),
+                              "lines": voice.get("lines") if voice else None,
+                              "voice": voice.get("voice") if voice else None,
                               "seed": job.get("seed"), "tries": tries,
                               "elapsed_seconds": job.get("elapsed_seconds")}.items() if v is not None}
 
@@ -1260,6 +1266,64 @@ def make_sound(studio: Studio, *, description: str, seconds: float | None = None
             "next": "Takes a few minutes: sound_status(job_id, wait_seconds=50) until done. Then ask the user "
                     "which try to keep (they can listen in the studio's Sound page) and call "
                     "sound_status(job_id, keep=<try>)."}
+
+
+def list_voices(studio: Studio) -> dict[str, Any]:
+    """The voice engines, every voice of each, and what each can be told."""
+    told = studio.get("api/voice/defaults")
+    engines = [{"engine": e.get("id"), "what_it_does": f"{e.get('label')}: {e.get('hint')}", "model": e.get("model"),
+                "installed": bool(e.get("installed")), "setup_id": e.get("setup_id"),
+                "download_size": e.get("download_size"), "tries_per_line": e.get("tries"),
+                "takes_direction": bool(e.get("directions")), "speed": e.get("speed"),
+                "languages": [item.get("id") for item in e.get("languages") or []] or "follows the voice",
+                "licence": (e.get("license") or {}).get("name"),
+                "voices": [{"voice": v.get("id"), "who": v.get("hint"), "language": v.get("language")}
+                           for v in e.get("voices") or []]}
+               for e in told.get("engines") or []]
+    return {"engines": engines, "directions": [item.get("id") for item in told.get("directions") or []],
+            "limits": told.get("limits"), "rule": told.get("no_cloning"),
+            "next": "make_voice(text, engine, voice, direction). An engine that is not installed is added with "
+                    "install_backend(setup_id), which asks the user first."}
+
+
+def make_voice(studio: Studio, *, text: str, engine: str = "kokoro", voice: str | None = None,
+               direction: str | None = None, language: str | None = None, speed: float | None = None,
+               tries: int | None = None, seed: int | None = None) -> dict[str, Any]:
+    """Start a voice line (or one line per sentence). Never downloads an engine."""
+    body: dict[str, Any] = {"text": text, "engine": engine}
+    for key, value in (("voice", voice), ("direction", direction), ("language", language), ("speed", speed),
+                       ("count", tries), ("seed", seed)):
+        if value is not None:
+            body[key] = value
+    started = studio.post_json("api/voice", body)
+    lines = started.get("lines") or []
+    return {"job_id": started["job_id"], "lines": lines, "tries_per_line": started.get("takes"),
+            "tries": started.get("count"), "seed": started.get("seed"),
+            "next": "Takes seconds: sound_status(job_id, wait_seconds=30) until done. Each try says which line it is. "
+                    "Ask the user which to keep (they can listen on the studio's Sound page, under Voice), then "
+                    "sound_status(job_id, keep=<try>) for one line"
+                    + (", or join_voice_lines(job_id, tries=[one try per line, in order]) for all of them as one sound."
+                       if len(lines) > 1 else ".")}
+
+
+def join_voice_lines(studio: Studio, *, job_id: str, tries: list[int], gap_ms: float | None = None,
+                     name: str | None = None) -> dict[str, Any]:
+    """Save the chosen try of each line of one make_voice job as one kept sound, in the order given."""
+    if not re.fullmatch(r"[0-9a-f]{32}", str(job_id)):
+        raise StudioError("job_id is the 32-character id make_voice gave you.")
+    if not isinstance(tries, list) or not tries or not all(isinstance(n, int) and not isinstance(n, bool) for n in tries):
+        raise StudioError("tries is a list of try numbers, one per line, in the order they are said: [1, 6, 9].")
+    body: dict[str, Any] = {"parts": [{"job_id": job_id, "try": number} for number in tries]}
+    if gap_ms is not None:
+        body["gap_ms"] = gap_ms
+    if name:
+        body["name"] = name
+    saved = studio.post_json("api/voice/join", body)
+    file = REPO / "output" / saved["file"]
+    return {"status": "saved", "sound_id": saved.get("id"), "file": str(file), "seconds": saved.get("seconds"),
+            "lines": saved.get("lines"), "licence": saved.get("licence"),
+            "licence_record": str(file.with_name(saved.get("record", "sound.provenance.json"))),
+            "next": "It is a kept sound now, in the Library under Sounds."}
 
 
 def make_variations(studio: Studio, *, sound_id: str, count: int = 6, how_different: str = "a little",
@@ -1893,19 +1957,53 @@ def build_server(studio: Studio | None = None):
         runs a little longer, so it is not cut off. leave_out: things it must not
         have, e.g. ["music", "voices", "room echo"]. tries: 1 to 4 made from one seed (try n uses seed + n - 1).
         Needs the "sound-effects" engine (list_engines); if it is missing this says so and downloads nothing:
-        install_backend asks the user first. Effects only for now: no loops, music or voice."""
+        install_backend asks the user first. Effects only: no loops or music yet; a spoken line is make_voice."""
         return safe(lambda: make_sound(studio, description=description, seconds=seconds, leave_out=leave_out,
                                        tries=tries, seed=seed))
 
     @server.tool(name="sound_status", structured_output=False)
     def tool_sound_status(job_id: str, wait_seconds: int = 30, keep: int | None = None, name: str | None = None,
                           cancel: bool = False):
-        """Status of a make_sound job and its tries; waits up to wait_seconds (max 50) for it to end.
+        """Status of a make_sound or make_voice job and its tries; waits up to wait_seconds (max 50) for it to end.
         keep=<try number> puts that try in the Library (name: optional) and answers its WAV path; its
         licence record sits beside it as sound.provenance.json. Tries nobody keeps are cleared by the next batch.
         cancel=true stops a job that is still running."""
         return safe(lambda: sound_status(studio, job_id=job_id, wait_seconds=wait_seconds, keep=keep, name=name,
                                          cancel=cancel))
+
+    @server.tool(name="list_voices", structured_output=False)
+    def tool_list_voices():
+        """The voices a line can be said in. Two engines: "kokoro" (clear and quick: plain reading in about a
+        second, English, 28 voices) and "qwen" (with feeling: can be told to shout, whisper, sound sad; nine
+        voices, ten languages). Each voice comes with one line on who it sounds like. Also says which engines
+        are installed, and the directions qwen takes. Voices are presets that come with the models: there is no
+        way to copy a real person's voice, so do not ask the user for a recording."""
+        return safe(lambda: list_voices(studio))
+
+    @server.tool(name="make_voice", structured_output=False)
+    def tool_make_voice(text: str, engine: str = "kokoro", voice: str | None = None, direction: str | None = None,
+                        language: str | None = None, speed: float | None = None, tries: int | None = None,
+                        seed: int | None = None):
+        """Say a line out loud: a guard's shout, a shopkeeper's greeting. Mono 48 kHz WAVs, Apache-2.0 engines.
+        text: what to say. Several sentences become several lines (up to 8, 300 characters each), each made and
+        kept on its own; join_voice_lines saves them as one. engine: "kokoro" or "qwen" (list_voices says what
+        each does and which voices it has). voice: one of that engine's voices (default af_heart / ryan).
+        direction (qwen only): angry, sad, whisper, shout, calm, excited, or your own few words ("like a tired old
+        wizard"). A shout comes out louder than a whisper. language (qwen only): english, chinese, japanese,
+        korean, german, french, spanish, italian, portuguese, russian. speed (kokoro only): 0.7 to 1.4.
+        tries: per line, 1 to 4 for qwen (try n uses seed + n - 1); kokoro always makes 1, since it says a line
+        the same way every time. Anything past a limit is refused, not trimmed. If the engine is missing this
+        says so and downloads nothing: install_backend("voice-kokoro" or "voice-qwen") asks the user first.
+        Then sound_status(job_id) to wait, and keep=<try> to put one line in the Library."""
+        return safe(lambda: make_voice(studio, text=text, engine=engine, voice=voice, direction=direction,
+                                       language=language, speed=speed, tries=tries, seed=seed))
+
+    @server.tool(name="join_voice_lines", structured_output=False)
+    def tool_join_voice_lines(job_id: str, tries: list[int], gap_ms: float | None = None, name: str | None = None):
+        """Save several lines of one make_voice job as one kept sound: the try you chose for each line, said in
+        the order given, with a short gap between them (gap_ms, 0 to 2000, default 250). Nothing is made louder
+        or quieter, so a shouted line stays louder than a whispered one. The record lists every line."""
+        return safe(lambda: join_voice_lines(studio, job_id=job_id, tries=tries, gap_ms=gap_ms, name=name))
 
     @server.tool(name="make_variations", structured_output=False)
     def tool_make_variations(sound_id: str, count: int = 6, how_different: str = "a little",
