@@ -174,7 +174,8 @@ def test_image_and_3d_routes_are_distinguishable():
     kinds = {b["id"]: b["kind"] for b in bc.catalog_status()["backends"]}
     assert kinds["qwen-image"] == "image"
     assert kinds["matte"] == "tool"  # a helper every route uses, not a route itself
-    assert all(k in {"image", "3d", "tool"} for k in kinds.values())
+    assert kinds["sound-effects"] == "sound"  # makes sounds: neither a picture nor a 3D route
+    assert all(k in {"image", "3d", "tool", "sound"} for k in kinds.values())
     assert "3d" in kinds.values()
 
 

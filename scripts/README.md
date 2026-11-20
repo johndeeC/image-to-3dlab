@@ -47,6 +47,8 @@ game-ready LODs), start with [the prop sheet guide](../docs/prop-sheets.md).
 | `bootstrap_matte.py` | Install BiRefNet-lite, the background remover every backend uses once it is present. |
 | `bootstrap_upscaler.py` | Install Real-ESRGAN x4plus, the 4x upscaler Hero face uses on the head crop. |
 | `bootstrap_flux_image.py` | Install FLUX.2 [klein] 4B, the studio's default picture engine, Apache-2.0 throughout. |
+| `bootstrap_sound_effects.py` | Install MOSS-SoundEffect v2.0, the studio's sound-effect engine, Apache-2.0 throughout. |
+| `sound_generate.py` | Make a sound effect from a description with MOSS-SoundEffect v2.0, cleaned up and with its licence record. |
 | `bootstrap_qwen_image.py` | Install the text-to-image route: a stable-diffusion.cpp binary and Qwen-Image weights. |
 | `pixal3d_generate.py` | End-to-end Pixal3D generation: image -> textured GLB, on a Mac, NVIDIA or AMD. |
 | `hero_route.py` | Build a hero character: a full-body model with a high-detail head grafted on, as one GLB. |

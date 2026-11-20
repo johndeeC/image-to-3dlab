@@ -905,6 +905,29 @@ CATALOG: tuple[Backend, ...] = (
         ),
     ),
     Backend(
+        id="sound-effects",
+        label="MOSS-SoundEffect v2.0 (text to sound effect)",
+        kind="sound",
+        best_for=("Makes short sound effects from a description: a footstep, a hit, a door. "
+                  "Words in, a WAV out, up to 30 seconds."),
+        tradeoff=("Apache-2.0: the sounds you make are yours for any use. Each sound takes "
+                  "about as long as a 30 second one, and the model wants about 12 GB of "
+                  "memory while it works. Its training data is not published."),
+        license_name="Apache-2.0",
+        license_url="https://huggingface.co/OpenMOSS-Team/MOSS-SoundEffect-v2.0",
+        install="scripts/bootstrap_sound_effects.py",
+        runs_on=(APPLE,),
+        setup_minutes=15,
+        # its own environment: MLX and the moss-sfx-mlx port stay out of the main one
+        build_probes=(venv_python(REPO / "vendor" / "moss-sfx"),),
+        amd_blocked_reason="It runs on MLX, Apple's own library, so only on an Apple Silicon Mac.",
+        weights=(
+            WeightSet("MOSS-SoundEffect v2.0 (4-bit MLX)", "mlx-community/MOSS-SoundEffect-v2.0-4bit",
+                      6_396_872_010, HF_HUB_DIR / "models--mlx-community--MOSS-SoundEffect-v2.0-4bit",
+                      note="The sound model, its decoder and the text model that reads your words."),
+        ),
+    ),
+    Backend(
         id="matte",
         label="Background remover (BiRefNet-lite)",
         kind="tool",

@@ -121,6 +121,15 @@ FLUX_OUTPUT_RIGHTS = (
 )
 
 
+# The model, its MLX conversion and every part inside it (DiT, VAE, text encoder) are
+# Apache-2.0, checked on both Hugging Face cards 2026-11-20. What the model was trained on
+# is not published: that is said here so the record does not read as more than it is.
+MOSS_OUTPUT_RIGHTS = (
+    "The sounds you generate are yours, for any use including commercial: MOSS-SoundEffect "
+    "v2.0 and its MLX conversion are Apache-2.0. The model's training data is not published."
+)
+
+
 # Whichever remover this machine runs (image_to_3dlab/matte.py picks it); both are MIT.
 MATTE_LICENSES = {
     "birefnet-lite-lean": "MIT (BiRefNet)",
@@ -212,6 +221,15 @@ LICENSES = {
         license_url="https://huggingface.co/black-forest-labs/FLUX.2-klein-4B",
         conditions=(FLUX_OUTPUT_RIGHTS,),
         models=("black-forest-labs/FLUX.2-klein-4B", "Qwen/Qwen3-4B"),
+    ),
+    # Text to sound effect, run through the moss-sfx-mlx port (also Apache-2.0).
+    "moss-soundeffect-v2": LicenseProfile(
+        classification="commercial-clear",
+        folder="commercial",
+        license_name="Apache-2.0",
+        license_url="https://huggingface.co/OpenMOSS-Team/MOSS-SoundEffect-v2.0",
+        conditions=(MOSS_OUTPUT_RIGHTS,),
+        models=("OpenMOSS-Team/MOSS-SoundEffect-v2.0", "mlx-community/MOSS-SoundEffect-v2.0-4bit"),
     ),
 }
 

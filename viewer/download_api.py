@@ -67,6 +67,7 @@ COMMANDS: dict[str, list[str]] = {
     "flux-image": [sys.executable, str(REPO / "scripts" / "bootstrap_flux_image.py"), "--yes"],
     "flux-image-light": [sys.executable, str(REPO / "scripts" / "bootstrap_flux_image.py"),
                          "--light", "--yes"],
+    "sound-effects": [sys.executable, str(REPO / "scripts" / "bootstrap_sound_effects.py"), "--yes"],
     "matte": [sys.executable, str(REPO / "scripts" / "bootstrap_matte.py"), "--yes"],
     "upscaler": [sys.executable, str(REPO / "scripts" / "bootstrap_upscaler.py"), "--yes"],
     "autorig": [sys.executable, str(REPO / "scripts" / "bootstrap_autorig.py"), "--yes"],
@@ -206,6 +207,13 @@ def also_fetches(backend_id: str) -> list[dict[str, str]]:
             extra.append({"what": f"Qwen3-VL vision projector ({filename}), so Qwen-Image can draw backs",
                           "from": f"https://huggingface.co/{repo}", "size": f"{size:.2f} GB",
                           "licence": "Qwen Research License"})
+    elif backend_id == "sound-effects":
+        import bootstrap_sound_effects as sound
+
+        if not sound.ENGINE.python.exists():
+            extra.append({"what": "moss-sfx-mlx, the code that runs the model on a Mac, and the Python "
+                                  "packages it needs (in their own environment)",
+                          "from": sound.PACKAGE_REPO, "size": sound.PACKAGES_SIZE, "licence": "Apache-2.0"})
     return extra
 
 
