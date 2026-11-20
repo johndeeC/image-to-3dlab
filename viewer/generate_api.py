@@ -51,6 +51,7 @@ import sound_layers_api
 import studio_auth
 import tool_jobs
 import usage_api
+import voice_api
 from activity_api import ChainRunner, chain_from_form, read_history
 from assets_api import assets_payload, list_assets
 from assets_api import delete_version as delete_asset_version
@@ -3143,6 +3144,12 @@ class Handler(SimpleHTTPRequestHandler):
         if parts == ["api", "sound"]:
             self._create_sound_job()
             return
+        if parts == ["api", "voice"]:
+            self._create_voice_job()
+            return
+        if parts == ["api", "voice", "join"]:
+            self._voice_join()
+            return
         if parts == ["api", "sound", "layers", "split"]:
             self._sound_layers_post("split")
             return
@@ -3535,6 +3542,58 @@ class Handler(SimpleHTTPRequestHandler):
             "status_url": f"/api/sound/{job.id}/status",
         })
 
+    def _create_voice_job(self) -> None:
+        """Start a voice line: {text | lines, engine?, voice?, direction?, language?, speed?,
+        count?, seed?, name?, using?}. Several sentences are several lines, each made `count`
+        times. It is a sound job: status, keep and cancel are the sound ones. Never downloads:
+        with the engine missing it answers 503 and points at Setup."""
+        try:
+            payload = self._small_json(64 * 1024)
+        except ValueError as exc:
+            self._send_json(400, {"error": f"could not read the request: {exc}"})
+            return
+        try:
+            engine = voice_api.pick_engine(str(payload.get("engine") or "") or None)
+            voice_api.clean_request(payload, engine)     # a bad request is refused before "busy" or "not set up"
+        except ValueError as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        try:
+            voice_api.check_ready(engine)
+        except sound_api.MissingSound as exc:
+            self._send_json(503, {"error": str(exc), "needs_setup": True, "missing": exc.missing,
+                                  "setup_id": engine.setup_id})
+            return
+        waiting = busy_reason("sound")
+        if waiting:
+            self._send_json(409, {"error": waiting})
+            return
+        try:
+            job = voice_api.start(payload, engine)
+        except ValueError as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        except RuntimeError as exc:
+            self._send_json(409, {"error": str(exc)})
+            return
+        self._send_json(202, {
+            "job_id": job.id, "seed": job.request["seed"], "count": job.request["count"],
+            "lines": job.request["lines"], "takes": job.request["takes"], "engine": engine.id,
+            "status_url": f"/api/sound/{job.id}/status",
+        })
+
+    def _voice_join(self) -> None:
+        """"Save as one": {parts: [{job_id, try}], gap_ms?, name?}. No model runs."""
+        try:
+            made = voice_api.join(OUTPUT_ROOT / "sounds", sound_api.MANAGER, self._small_json())
+        except LookupError as exc:
+            self._send_json(404, {"error": str(exc)})
+            return
+        except ValueError as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        self._send_json(200, {**made, "base": "/output/"})
+
     def _sound_job(self, job_id: str):
         return sound_api.MANAGER.jobs.get(job_id) if _safe_id(job_id) else None
 
@@ -3568,7 +3627,7 @@ class Handler(SimpleHTTPRequestHandler):
         if what == "status":
             self._send_json(200, job.describe())
             return
-        match = re.fullmatch(r"try-([1-9])\.wav", what)
+        match = re.fullmatch(r"try-([1-9]\d?)\.wav", what)     # two digits: a voice job is lines times takes
         made = match and next((t for t in job.tries if t["number"] == int(match[1])), None)
         if not made or not job.try_file(made["number"]).is_file():
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -4150,6 +4209,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parts == ["api", "sound", "defaults"]:
             self._send_json(200, {**sound_api.defaults_payload(), "layers": sound_layers_api.options_payload()})
+            return
+        if parts == ["api", "voice", "defaults"]:
+            self._send_json(200, voice_api.defaults_payload())
             return
         if parts == ["api", "sound", "kept"]:
             self._send_json(200, {"base": "/output/", "sounds": sound_api.kept_sounds(OUTPUT_ROOT)})
