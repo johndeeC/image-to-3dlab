@@ -13,7 +13,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sounds show under **Library → Sounds** and play there. Pick a length up to 30 seconds and
   what to leave out (music, voices, room echo). Each sound is trimmed, given click-free ends
   and saved as a one-channel 48 kHz WAV in `output/sounds/`, with its licence record beside it.
-  Effects only for now: background loops, music and voice are marked "later".
+  Background loops and music are marked "later".
+- **Voice** on the Sound sheet: type a line and hear it said. Pick **Clear and quick** (a
+  plain reading in about a second; English, 28 voices) or **With feeling** (shout, whisper,
+  angry, sad, calm, excited, or your own words; nine voices, ten languages), then a voice.
+  Several sentences become several lines, each with its own takes and **Make this line
+  again**; **Save as one** joins the takes you picked, with short gaps. Lines come out level
+  with each other, and a shout stays louder than a whisper. Numbers and signs are read out
+  for English ("$5" is "five dollars"). Kept lines show under **Library → Sounds**.
+- Voices are the ones that come with the engines. There is no way to copy a person's voice:
+  no upload, no recording, and a request that tries is refused. Each line's record names
+  the voice and says it is not a copy.
+- Voice engines: Kokoro 82M (0.34 GB) and Qwen3-TTS 1.7B CustomVoice (3.08 GB), both
+  Apache-2.0, run by mlx-audio (MIT) on Apple Silicon. Two new cards on Setup; neither is
+  downloaded until you say yes there. Nothing GPL is installed: Kokoro's usual helper for
+  unknown words (espeak-ng) is replaced by our own letter rules, so made-up names are
+  sounded out and Kokoro speaks English only. From a terminal:
+  `scripts/bootstrap_voice.py --engine kokoro|qwen`.
+- Agents: `list_voices`, `make_voice` and `join_voice_lines` make voice lines; `sound_status`
+  follows and keeps them. See `docs/sound.md`.
 - Sound engine: MOSS-SoundEffect v2.0 (Apache-2.0, about 6.4 GB, Apple Silicon). It is a
   new card on Setup and is never downloaded until you say yes there; without it the Sound
   sheet says so and points to Setup. From a terminal: `scripts/bootstrap_sound_effects.py`.

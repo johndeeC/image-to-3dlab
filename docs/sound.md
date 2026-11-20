@@ -1,7 +1,8 @@
 # Sound: make a sound effect
 
-Describe a sound, get four tries, keep the one you like. Effects only for now (a footstep,
-a hit, a door). Background loops, music and voice come later.
+Describe a sound, get four tries, keep the one you like: a footstep, a hit, a door. Or type
+a line and have it said out loud: see [Voice](#voice-a-line-said-out-loud). Background loops
+and music come later.
 
 ## Flow
 
@@ -250,6 +251,125 @@ steps fall at the same moments. The sound files work in Roblox either way.
 
 One thing to check in your engine: moves made here start one frame (1/30 s) into the file.
 Times are counted from that first frame. If your engine counts from zero instead, add 1/30 s.
+
+## Voice: a line said out loud
+
+Press **Sound**, then **Voice** under "What kind?".
+
+1. **How should it sound?** Two choices, each its own engine and its own card on Setup:
+   - **Clear and quick** reads a line plainly in about a second. English, 28 voices,
+     American and British. Pick it for narration and plain talk.
+   - **With feeling** can shout, whisper or sound sad. Nine voices, ten languages. Pick it
+     for characters. A few seconds a line.
+2. **Voice.** Each has one line on who it sounds like.
+3. **How it's said** (With feeling only): Angry, Sad, Whisper, Shout, Calm, Excited, or your
+   own few words ("like a tired old wizard"). Empty is a plain reading.
+4. **Language** (With feeling only) or **Speed** (Clear and quick only).
+5. **What to say**, then **Make**. With feeling makes four takes of each line; Clear and
+   quick makes one, because it says a line the same way every time.
+
+Several sentences are several lines. Each line has its own takes, its own **Keep**, and
+**Make this line again**, which adds new takes of just that line and leaves the rest alone.
+Pick a take of each and **Save as one** joins them in order, with a quarter-second gap, as
+one sound in your Library. A very short sentence ("Halt!") stays with its neighbour.
+
+### No copying of people
+
+A voice is always one of the voices that come with the engine. There is no box to upload
+or record a voice, no route on the server that takes one, and a request that tries is
+refused: "AssetFurnace does not copy a person's voice." The record beside every line names
+the voice that said it and says `"cloned": false`.
+
+### How loud a line is
+
+Lines sit level with each other: about -16 dB, measured **while someone is speaking**
+(pauses are left out, or a line with long pauses would come out too loud). How it's said
+moves that mark, so a shout stays louder than a whisper:
+
+| How it's said | Level |
+|---------------|-------|
+| Whisper | -25 dB |
+| Sad, Calm | -19 dB |
+| plain, or your own words | -16 dB |
+| Angry, Excited | -14 dB |
+| Shout | -12 dB |
+
+Speech has sharp peaks, so reaching the mark often means pressing the loudest syllables
+down a little: by 6 dB at most, smoothly, and never by clipping. A line that would need
+more is left a little under its mark, and its record says so (`held_by_peak`). A line too
+short to measure (under 0.4 s of speech) is set by its loudest point instead. This is our
+own simple measure, not the broadcast one (LUFS); the two land close for speech.
+
+### The words, before they are said
+
+- **Numbers and signs** are written out for English: "Dr." is said "Doctor", "3.5" is "three
+  point five", "$5" is "five dollars", "1999" is "nineteen ninety-nine". Other languages are
+  left to the engine. Your text is never changed: the record keeps what you typed and what
+  was said.
+- **Made-up names** (Clear and quick only). A word in no dictionary is said from its
+  letters, and the take says "Guessed how to say: Eldoria". If the guess is wrong, spell it
+  the way it sounds, or use With feeling, which reads names itself.
+- **A longest length.** With feeling can get stuck repeating a line. Every line has a
+  longest reasonable length (3 seconds, plus one a word); a take that reaches it is dropped,
+  so a short line can never run for a minute.
+
+### The two engines
+
+| | Clear and quick | With feeling |
+|---|---|---|
+| Model | [Kokoro 82M](https://huggingface.co/hexgrad/Kokoro-82M), [MLX form](https://huggingface.co/mlx-community/Kokoro-82M-bf16) | [Qwen3-TTS 1.7B CustomVoice](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice), [8-bit MLX form](https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit) |
+| Size | 0.34 GB | 3.08 GB |
+| Licence | Apache-2.0 | Apache-2.0, no region limits |
+| Voices | 28, English | 9 |
+| Languages | English | English, Chinese, Japanese, Korean, German, French, Spanish, Italian, Portuguese, Russian |
+| Told how to say it | no | yes |
+| Speed | 0.7 to 1.4 | no setting (say "speak slowly") |
+| Same line twice | identical | different each take |
+
+Both are run by [mlx-audio](https://github.com/Blaizzy/mlx-audio) 0.6.7 (MIT), from one
+Python environment of their own, `vendor/voice/.venv` (about 0.5 GB, shared). Apple Silicon
+only. The lines are yours, commercial use included. Qwen3-TTS's training data is not
+published; Kokoro's maker says it used only audio that is free to use, which we have not
+checked. Both are said on the record beside each line.
+
+**No GPL.** Kokoro needs words turned into sounds first. That is done by misaki
+(Apache-2.0), with spaCy and its small English model (MIT, 13 MB) and num2words (LGPL-2.1,
+used as it comes). The usual helper for unknown words, espeak-ng, is GPL-3: it is **not**
+installed, and neither is phonemizer. Our own letter rules stand in
+(`image_to_3dlab/voice_text.py`). That is also why Kokoro speaks English only here: its
+Spanish, French, Hindi, Italian and Portuguese need espeak-ng, and its Japanese and Chinese
+need large dictionaries.
+
+Measured on the machine this was built on: With feeling loads in about 5 seconds, then
+about a third of a second for a short line, using about 5 GB of memory. Clear and quick
+makes a short line in under a tenth of a second.
+
+### From a terminal, and for agents
+
+```bash
+python scripts/bootstrap_voice.py --engine qwen       # or kokoro: says what it wants, then asks
+python scripts/bootstrap_voice.py --engine qwen --verify   # the model files are the ones we tested
+vendor/voice/.venv/bin/python scripts/voice_generate.py --engine qwen --voice ryan \
+    --text "Halt! Who goes there?" --direction shout
+```
+
+The last command never downloads: with anything missing it stops and says what.
+
+Agents: `list_voices()` lists the engines and every voice; `make_voice(text, engine, voice,
+direction, language, speed, tries, seed)` starts the lines; `sound_status(job_id)` follows
+them (each try says which line it is) and `keep=<try>` keeps one;
+`join_voice_lines(job_id, tries, gap_ms, name)` saves one try per line as one sound.
+
+Routes (`viewer/voice_api.py`): `GET /api/voice/defaults`; `POST /api/voice` `{text | lines,
+engine, voice, direction, language, speed, count, seed, using}`; `POST /api/voice/join`
+`{parts: [{job_id, try}], gap_ms, name}`. A voice job is a sound job, so status, keep,
+cancel and the try WAVs are the `/api/sound/<job>/…` routes.
+
+The record is the same shape as any sound's, with `"sound_kind": "voice"` and a `voice`
+block: `text`, `spoken_text`, `engine`, `model`, `revision`, `voice`, `direction`,
+`direction_words`, `language`, `speed`, `seed`, `line`, `take`, `cloned: false`, and
+`guessed_words` when there were any. `loudness` says the mark, what was measured, the level
+it ended at and how far the peaks were pressed.
 
 ## The engine
 
