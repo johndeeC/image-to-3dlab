@@ -166,7 +166,7 @@ def test_the_server_registers_every_tool():
                      "usage_counts", "brush_back", "picture_status", "back_versions",
                      "list_kits", "make_kit", "add_to_kit", "box_types", "list_canvases", "get_canvas", "edit_canvas",
                      "save_canvas", "check_canvas", "run_canvas", "canvas_status", "cancel_canvas_run",
-                     "make_sound", "sound_status"}
+                     "make_sound", "sound_status", "make_variations"}
 
 
 # --------------------------------------------------------------------------- create
@@ -1249,3 +1249,74 @@ def test_the_sound_engine_is_listed_as_making_sounds():
                                                {"id": "pixal3d", "kind": "3d", "state": "ready"}]})
     rows = {e["id"]: e["makes"] for e in ms.list_engines(sound_studio(Catalog()))}
     assert rows == {"sound-effects": "sounds", "flux-image": "pictures", "pixal3d": "3D models"}
+
+
+# --------------------------------------------------------------------------- variation sets
+KEPT_SOUND = "door__20261120-101600"
+
+
+class SetHttp:
+    """The studio's answer to saving a set, and a Library that holds one."""
+
+    def __init__(self, error=None):
+        self.calls, self.error = [], error
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append(("GET", url.split("8777/", 1)[1], None))
+        return Response(200, {"sounds": [
+            {"id": "door_set__20261120-111500", "kind": "sound_set", "name": "Door", "sound_kind": "effect", "count": 2,
+             "seconds": 2.1, "prompt": "wooden door creak", "licence": "Apache-2.0", "of": KEPT_SOUND,
+             "file": "sounds/door_set__20261120-111500/door_01.wav", "play_order": [0, 1],
+             "files": ["sounds/door_set__20261120-111500/door_01.wav", "sounds/door_set__20261120-111500/door_02.wav"]},
+            {"id": KEPT_SOUND, "name": "Door", "kind": "sound", "sound_kind": "effect", "seconds": 2.1,
+             "prompt": "wooden door creak", "licence": "Apache-2.0", "file": f"sounds/{KEPT_SOUND}/sound.wav"}]})
+
+    def post(self, url, json=None, files=None, timeout=None):
+        self.calls.append(("POST", url.split("8777/", 1)[1], json))
+        if self.error:
+            return Response(*self.error)
+        folder = "sounds/door_set__20261120-111500"
+        return Response(200, {"id": "door_set__20261120-111500", "name": "door", "folder": folder,
+                              "record": "set.provenance.json", "seed": 31, "licence": "Apache-2.0",
+                              "files": [{"file": f"{folder}/door_01.wav", "seconds": 2.1, "note": "the original"},
+                                        {"file": f"{folder}/door_02.wav", "seconds": 2.0, "note": "a bit higher, softer"}]})
+
+
+def test_make_variations_saves_a_set_and_answers_full_paths():
+    http = SetHttp()
+    out = ms.make_variations(sound_studio(http), sound_id=KEPT_SOUND, count=2, how_different="some", change=["pitch"])
+    assert http.calls == [("POST", f"api/sounds/{KEPT_SOUND}/set",
+                           {"count": 2, "how_different": "some", "change": ["pitch"]})]      # one call, no engine
+    folder = ms.REPO / "output" / "sounds" / "door_set__20261120-111500"
+    assert out["folder"] == str(folder) and out["licence_record"] == str(folder / "set.provenance.json")
+    assert out["licence"] == "Apache-2.0" and out["seed"] == 31
+    assert out["files"] == [{"file": str(folder / "door_01.wav"), "seconds": 2.1, "what": "the original"},
+                            {"file": str(folder / "door_02.wav"), "seconds": 2.0, "what": "a bit higher, softer"}]
+    http = SetHttp()
+    ms.make_variations(sound_studio(http), sound_id=KEPT_SOUND, name="Creak", seed=4)
+    assert http.calls[0][2] == {"count": 6, "how_different": "a little", "change": ["pitch", "volume"],
+                                "name": "Creak", "seed": 4}
+
+
+@pytest.mark.parametrize("bad", ["../../etc", "door", "", "door__20261120-101600/../x", "a b__20261120-101600"])
+def test_make_variations_wants_a_kept_sounds_id_before_it_calls_anything(bad):
+    http = SetHttp()
+    with pytest.raises(ms.StudioError, match="kept sound"):
+        ms.make_variations(sound_studio(http), sound_id=bad)
+    assert http.calls == []
+
+
+def test_a_refused_set_reaches_the_agent_in_the_studios_words():
+    http = SetHttp(error=(422, {"error": "make between 2 and 12 variations"}))
+    with pytest.raises(ms.StudioError, match="between 2 and 12"):
+        ms.make_variations(sound_studio(http), sound_id=KEPT_SOUND, count=40)
+
+
+def test_listing_sounds_includes_sets_with_every_file():
+    out = ms.list_assets(sound_studio(SetHttp()), kind="sound")
+    assert out["total"] == 2
+    made, single = out["assets"]
+    assert made["kind"] == "sound_set" and made["count"] == 2 and made["of"] == KEPT_SOUND
+    assert made["files"] == [str(ms.REPO / "output" / "sounds" / "door_set__20261120-111500" / f"door_0{n}.wav") for n in (1, 2)]
+    assert "play_order" not in made
+    assert single["kind"] == "sound" and "files" not in single

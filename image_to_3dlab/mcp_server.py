@@ -48,6 +48,7 @@ STUDIO_ONLY = {
                             "also flattens real shape (fur tufts, mohawk spikes)",
     "api/fix-spot/keep": "keeping a fix is the person's verdict after comparing before and after",
     "api/fix-spot/discard": "part of the same on-screen editing session",
+    "api/sounds/*/variations": "listening to a set before saving it; make_variations saves one and answers its files",
     "api/assets/*/delete": "deleting is the user's call, made in the studio",
     "api/assets/*/hidden": "Library tidying, a person's choice",
     "api/assets/*/main": "marking the main version is the user's verdict",
@@ -96,7 +97,7 @@ USED = {"api/chains", "api/chains/*/cancel", "api/setup/*/download", "api/reveal
         "api/image/brush", "api/image/versions/use", "api/image/versions/delete",
         "api/kits", "api/kits/*/add",
         "api/graphs", "api/graphs/check", "api/graphs/*/run", "api/graph-runs/*/cancel",
-        "api/sound", "api/sound/*/keep", "api/sound/*/cancel"}
+        "api/sound", "api/sound/*/keep", "api/sound/*/cancel", "api/sounds/*/set"}
 
 
 class StudioError(RuntimeError):
@@ -1125,9 +1126,15 @@ def cancel_run(studio: Studio, *, run_id: str) -> dict[str, Any]:
 
 
 def sound_summary(sound: dict[str, Any]) -> dict[str, Any]:
-    return {"id": sound.get("id"), "name": sound.get("name"), "kind": "sound", "sound_kind": sound.get("sound_kind"),
+    """A kept sound or a saved set for an agent, with full paths. A set also lists its files."""
+    told = {"id": sound.get("id"), "name": sound.get("name"), "kind": sound.get("kind") or "sound",
+            "sound_kind": sound.get("sound_kind"),
             "seconds": sound.get("seconds"), "prompt": sound.get("prompt"), "licence": sound.get("licence"),
             "file": str(REPO / "output" / sound["file"]) if sound.get("file") else None}
+    if sound.get("kind") == "sound_set":
+        told.update(count=sound.get("count"), of=sound.get("of"),
+                    files=[str(REPO / "output" / name) for name in sound.get("files") or []])
+    return told
 
 
 def list_assets(studio: Studio, *, search: str = "", kind: str | None = None, limit: int = 20) -> dict[str, Any]:
@@ -1247,6 +1254,28 @@ def make_sound(studio: Studio, *, description: str, seconds: float | None = None
             "next": "Takes a few minutes: sound_status(job_id, wait_seconds=50) until done. Then ask the user "
                     "which try to keep (they can listen in the studio's Sound page) and call "
                     "sound_status(job_id, keep=<try>)."}
+
+
+def make_variations(studio: Studio, *, sound_id: str, count: int = 6, how_different: str = "a little",
+                    change: list[str] | None = None, name: str | None = None,
+                    seed: int | None = None) -> dict[str, Any]:
+    """Save a variation set made from a kept sound: numbered WAVs in one folder. No model runs."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}__\d{8}-\d{6}(?:-\d+)?", str(sound_id)):
+        raise StudioError('sound_id is a kept sound\'s id, as list_assets(kind="sound") gives it.')
+    body: dict[str, Any] = {"count": count, "how_different": how_different,
+                            "change": list(change) if change is not None else ["pitch", "volume"]}
+    if name:
+        body["name"] = name
+    if seed is not None:
+        body["seed"] = seed
+    saved = studio.post_json(f"api/sounds/{sound_id}/set", body)
+    folder = REPO / "output" / saved["folder"]
+    return {"set_id": saved.get("id"), "folder": str(folder), "licence": saved.get("licence"),
+            "licence_record": str(folder / saved.get("record", "set.provenance.json")),
+            "seed": saved.get("seed"),
+            "files": [{"file": str(REPO / "output" / item["file"]), "seconds": item.get("seconds"),
+                       "what": item.get("note")} for item in saved.get("files") or []],
+            "next": "In a game, play one of these at random each time, never the same one twice running."}
 
 
 def sound_status(studio: Studio, *, job_id: str, wait_seconds: int = 0, keep: int | None = None,
@@ -1609,7 +1638,7 @@ def build_server(studio: Studio | None = None):
     @server.tool(name="list_assets", structured_output=False)
     def tool_list_assets(search: str = "", kind: str | None = None, limit: int = 20):
         """The Library, newest first: ids, names, how far each got, file paths, moves.
-        kind: picture | character | prop | "prop set" | model | sound (kept sounds, each with its WAV path).
+        kind: picture | character | prop | "prop set" | model | sound (kept sounds and variation sets, with WAV paths).
         search: words in the name or prompt."""
         return safe(lambda: list_assets(studio, search=search, kind=kind, limit=limit))
 
@@ -1751,6 +1780,20 @@ def build_server(studio: Studio | None = None):
         cancel=true stops a job that is still running."""
         return safe(lambda: sound_status(studio, job_id=job_id, wait_seconds=wait_seconds, keep=keep, name=name,
                                          cancel=cancel))
+
+    @server.tool(name="make_variations", structured_output=False)
+    def tool_make_variations(sound_id: str, count: int = 6, how_different: str = "a little",
+                             change: list[str] | None = None, name: str | None = None, seed: int | None = None):
+        """Make a variation set from a kept sound, so repeats (footsteps, hits, pickups) don't sound copied.
+        No model runs: it takes a second and needs no engine. sound_id: from list_assets(kind="sound").
+        count: 2 to 12 files (the first is the original); outside that it is refused. how_different: "a little"
+        (up to 1 semitone, 1.5 dB), "some" (2.5, 3 dB) or "a lot" (4, 5 dB). change: any of "pitch", "volume",
+        "start" (a few ms of timing); default pitch and volume. Pitch is changed by resampling, so a higher one
+        is also a little shorter. Answers the set's folder and its numbered WAVs (<name>_01.wav ...), ready for
+        Unity, Godot or Roblox; one set.provenance.json covers them all, with the kept sound's own licence.
+        The same sound_id, numbers and seed make the same set again."""
+        return safe(lambda: make_variations(studio, sound_id=sound_id, count=count, how_different=how_different,
+                                            change=change, name=name, seed=seed))
 
     @server.tool(name="preview", structured_output=False)
     def tool_preview(asset_id: str, stage: str = "latest", look: str = "paint", move: str | None = None,

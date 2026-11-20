@@ -498,3 +498,187 @@ def test_the_library_skips_tries_strays_and_folders_with_no_sound(tmp_path):
     assert listed["id"] == "old-hit__20261119-090000" and listed["name"] == "Old hit"
     assert listed["licence"] is None and listed["prompt"] is None      # no record: nothing is claimed
     assert api.kept_sounds(tmp_path / "nowhere") == []
+
+
+# ----------------------------------------------------------------------------- variation sets
+
+SOURCE = "boots-on-gravel__20261120-091306"
+
+
+def kept_boots(tmp_path, record=True, name=SOURCE):
+    """A kept sound on disk, made the way the runner makes one: a decaying thump at 48 kHz."""
+    root = tmp_path / "sounds"
+    t = np.arange(24_000) / 48_000
+    thump = (0.6 * np.sin(2 * np.pi * 180 * t) * np.exp(-9 * t)).astype(np.float32)
+    wav = sound_post.write_wav(root / name / "sound.wav", sound_post.fade(thump))
+    if record:
+        request = api.clean_request({"prompt": "heavy boots on gravel, one step", "seed": 5, "count": 1})
+        api.write_sidecar(wav, api.sidecar(engine=api.MOSS, request=request, number=1, wav=wav,
+                                           facts=sound_post.inspect_wav(wav),
+                                           post={"trim": True, "fade_ms": 5.0, "peak": 0.98}))
+    return root
+
+
+def test_a_variation_request_comes_back_tidy_with_a_seed():
+    asked = api.clean_variation_request({"count": "4", "how_different": " A  Lot ", "change": "volume, pitch", "seed": 9})
+    assert asked == {"count": 4, "how_different": "a lot", "change": ["pitch", "volume"], "seed": 9, "name": None}
+    plain = api.clean_variation_request({})
+    assert (plain["count"], plain["how_different"], plain["change"]) == (6, "a little", ["pitch", "volume"])
+    assert 0 <= plain["seed"] <= api.MAX_SEED
+    assert api.clean_variation_request({"name": "../Boot steps!"})["name"] == "Boot-steps"
+
+
+@pytest.mark.parametrize("raw,why", [
+    ({"count": 1}, "between 2 and 12"), ({"count": 13}, "between 2 and 12"), ({"count": 2.5}, "whole number"),
+    ({"count": True}, "must be a number"), ({"how_different": "loads"}, "how different is one of: a little, some, a lot"),
+    ({"change": []}, "pick what changes"), ({"change": ["reverb"]}, "pick what changes"),
+    ({"change": 7}, "a list"), ({"seed": -1}, "seed must be between"), ({"seed": "x"}, "must be a number"),
+])
+def test_a_variation_request_past_a_limit_is_refused_not_clipped(raw, why):
+    with pytest.raises(ValueError, match=why):
+        api.clean_variation_request(raw)
+
+
+def test_a_preview_lists_numbered_takes_and_writes_nothing(tmp_path):
+    root = kept_boots(tmp_path)
+    before = sorted(p.name for p in root.rglob("*"))
+    told = api.variations_preview(root, SOURCE, {"count": 4, "how_different": "some", "seed": 3})
+    assert sorted(p.name for p in root.rglob("*")) == before
+    assert told["sound"] == SOURCE and told["title"] == "Boots on gravel" and told["seed"] == 3
+    assert [v["file"] for v in told["variations"]] == [f"boots-on-gravel_0{n}.wav" for n in (1, 2, 3, 4)]
+    first, second = told["variations"][:2]
+    assert first["note"] == "the original" and first["seconds"] == 0.5 and len(first["bars"]) == 60
+    assert second["pitch_semitones"] != 0 and second["note"] != "the original"
+    assert second["url"] == (f"/api/sounds/{SOURCE}/variations/2.wav"
+                             "?count=4&how_different=some&change=pitch,volume&seed=3")
+    order = told["play_order"]
+    assert len(order) == 32 and set(order) == {0, 1, 2, 3}
+    assert all(a != b for a, b in zip(order, [*order[1:], order[0]], strict=True))
+    assert api.variations_preview(root, SOURCE, {"count": 4, "how_different": "some", "seed": 3}) == told
+
+
+def test_a_take_is_served_as_the_very_wav_a_save_would_write(tmp_path):
+    root = kept_boots(tmp_path)
+    ask = {"count": 3, "how_different": "a lot", "seed": 8}
+    heard = [api.variation_wav(root, SOURCE, {k: str(v) for k, v in ask.items()}, n) for n in (1, 2, 3)]
+    saved = api.save_variation_set(root, SOURCE, ask)
+    assert [(tmp_path / f["file"]).read_bytes() for f in saved["files"]] == heard
+    with pytest.raises(LookupError):
+        api.variation_wav(root, SOURCE, ask, 4)
+    with pytest.raises(ValueError, match="seed is missing"):
+        api.variation_wav(root, SOURCE, {"count": 3}, 1)
+
+
+def test_a_saved_set_is_numbered_files_and_one_record(tmp_path):
+    root = kept_boots(tmp_path)
+    saved = api.save_variation_set(root, SOURCE, {"count": 6, "how_different": "some", "seed": 21})
+    folder = tmp_path / saved["folder"]
+    assert api.KEPT_RUN.fullmatch(folder.name) and folder.name.startswith("boots-on-gravel_set__")
+    assert sorted(p.name for p in folder.iterdir()) == [
+        *[f"boots-on-gravel_0{n}.wav" for n in range(1, 7)], "set.provenance.json"]
+    assert not [p for p in root.iterdir() if p.name.startswith(".")]            # nothing half-made is left
+    record = json.loads((folder / "set.provenance.json").read_text())
+    source = json.loads((root / SOURCE / "sound.provenance.json").read_text())
+    assert record["kind"] == "sound_set" and record["schema_version"] == 1 and record["made_with"]
+    assert record["license"] == source["license"]                              # inherited, unchanged
+    assert record["output"] == {"files": 6, "sample_rate": 48_000, "channels": 1, "classification": "commercial-clear"}
+    assert record["source"] == {"id": SOURCE, "path": f"sounds/{SOURCE}/sound.wav",
+                                "sha256": sound_post.sha256_file(root / SOURCE / "sound.wav")}
+    assert record["variation"] == {
+        "of": SOURCE, "count": 6, "seed": 21, "how_different": "some", "change": ["pitch", "volume"],
+        "most": {"pitch_semitones": 2.5, "volume_db": 3.0}, "turned_down_db": record["variation"]["turned_down_db"],
+        "pitch_by": "resampling, so a higher take is shorter and a lower one longer"}
+    assert record["layers"][0]["source"]["prompt"] == "heavy boots on gravel, one step"
+    for n, item in enumerate(record["files"], start=1):
+        wav = folder / item["file"]
+        facts = sound_post.inspect_wav(wav)                                     # 48 kHz, mono, not silent
+        assert item["sha256"] == facts["sha256"] and item["seconds"] == facts["seconds"]
+        assert facts["peak"] <= 0.98 + 1e-3
+        assert item["variation"]["of"] == SOURCE and item["variation"]["index"] == n
+        assert item["variation"]["seed"] == 21
+        assert set(item["variation"]) == {"of", "seed", "index", "pitch_semitones", "volume_db", "gain_db",
+                                          "start_ms", "note"}
+    lengths = {item["seconds"] for item in record["files"]}
+    assert len(lengths) > 1                                                     # pitch moved, so lengths did too
+    assert saved["licence"] == "Apache-2.0" and saved["seed"] == 21
+    assert [f["file"] for f in saved["files"]][0] == f"{saved['folder']}/boots-on-gravel_01.wav"
+
+
+def test_the_record_rebuilds_the_set(tmp_path):
+    root = kept_boots(tmp_path)
+    first = api.save_variation_set(root, SOURCE, {"count": 5, "how_different": "a lot", "change": ["pitch"]})
+    made = json.loads((tmp_path / first["folder"] / "set.provenance.json").read_text())["variation"]
+    again = api.save_variation_set(root, SOURCE, {k: made[k] for k in ("count", "seed", "how_different", "change")})
+    assert again["folder"] != first["folder"]                                   # same second: a folder of its own
+    read = lambda saved: [(tmp_path / f["file"]).read_bytes() for f in saved["files"]]
+    assert read(first) == read(again)
+
+
+def test_a_set_can_be_given_its_own_name(tmp_path):
+    saved = api.save_variation_set(kept_boots(tmp_path), SOURCE, {"count": 2, "name": "Boot steps", "seed": 1})
+    assert saved["name"] == "Boot-steps" and saved["folder"].startswith("sounds/Boot-steps_set__")
+    assert [Path(f["file"]).name for f in saved["files"]] == ["Boot-steps_01.wav", "Boot-steps_02.wav"]
+
+
+def test_a_source_with_no_record_makes_an_unverified_set(tmp_path):
+    saved = api.save_variation_set(kept_boots(tmp_path, record=False), SOURCE, {"count": 2, "seed": 1})
+    record = json.loads((tmp_path / saved["folder"] / "set.provenance.json").read_text())
+    assert record["license"]["verified"] is False and record["output"]["classification"] == "unverified"
+    assert record["layers"] == [] and record["source_record"] is None
+
+
+@pytest.mark.parametrize("bad", ["../../etc", "..", "boots", ".tries", "a/b__20261120-091306", "", None, 7,
+                                 SOURCE + "\n", "nobody-home__20261120-091306",
+                                 "boots-on-gravel_set__20261120-091306"])
+def test_only_a_kept_sound_under_output_sounds_can_be_varied(tmp_path, bad):
+    root = kept_boots(tmp_path)
+    sound_post.write_wav(root / "boots-on-gravel_set__20261120-091306" / "boots-on-gravel_01.wav",
+                         np.full(480, 0.5, np.float32))                         # a set is not a source
+    for work in (api.variations_preview, api.save_variation_set):
+        with pytest.raises(LookupError):
+            work(root, bad, {"count": 2})
+    assert sorted(p.name for p in root.iterdir()) == [SOURCE, "boots-on-gravel_set__20261120-091306"]
+
+
+def test_a_link_out_of_the_folder_is_not_a_kept_sound(tmp_path):
+    root = kept_boots(tmp_path)
+    outside = kept_boots(tmp_path / "elsewhere", name="secret__20261120-091306") / "secret__20261120-091306"
+    (root / "secret__20261120-091306").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(LookupError):
+        api.kept_folder(root, "secret__20261120-091306")
+
+
+def test_a_bad_request_saves_nothing(tmp_path):
+    root = kept_boots(tmp_path)
+    with pytest.raises(ValueError, match="between 2 and 12"):
+        api.save_variation_set(root, SOURCE, {"count": 40})
+    assert [p.name for p in root.iterdir()] == [SOURCE]
+
+
+def test_the_library_lists_a_set_as_a_set(tmp_path):
+    root = kept_boots(tmp_path)
+    saved = api.save_variation_set(root, SOURCE, {"count": 3, "seed": 4})
+    (tmp_path / saved["folder"] / "notes.txt").write_text("mine")              # a stray is not a sound
+    (root / "empty_set__20261120-101500").mkdir()                              # nor is an empty folder a set
+    listed = {item["kind"]: item for item in api.kept_sounds(tmp_path)}
+    assert set(listed) == {"sound", "sound_set"} and len(api.kept_sounds(tmp_path)) == 2
+    made = listed["sound_set"]
+    assert made["id"] == saved["id"] and made["name"] == "Boots on gravel" and made["count"] == 3
+    assert made["files"] == [f["file"] for f in saved["files"]] and made["file"] == made["files"][0]
+    assert made["licence"] == "Apache-2.0" and made["of"] == SOURCE and made["seconds"] == 0.5
+    assert made["prompt"] == "heavy boots on gravel, one step"
+    assert len(made["play_order"]) == 24 and set(made["play_order"]) == {0, 1, 2}
+    (tmp_path / saved["folder"] / "set.provenance.json").write_text("{not json")
+    bare = next(item for item in api.kept_sounds(tmp_path) if item["kind"] == "sound_set")
+    assert bare["count"] == 3 and bare["licence"] is None                      # still listed; nothing claimed
+
+
+def test_the_sheet_is_told_what_variations_it_may_ask_for():
+    told = api.defaults_payload()["variations"]
+    assert (told["min"], told["max"], told["default"], told["default_how_different"]) == (2, 12, 6, "a little")
+    assert [(h["id"], h["label"]) for h in told["how_different"]] == [
+        ("a little", "A little"), ("some", "Some"), ("a lot", "A lot")]
+    assert {h["id"] for h in told["how_different"]} == set(sound_post.HOW_DIFFERENT)
+    assert [c["label"] for c in told["change"]] == ["Pitch", "Volume"]
+    assert "shorter" in told["change"][0]["hint"]                              # pitch changes the length: say so
+    assert all(len(item["hint"]) < 90 for item in told["how_different"] + told["change"])

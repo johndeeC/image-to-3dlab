@@ -24,6 +24,12 @@ so on. So any try can be made again from its own number, and the record of each 
 it, shaped for what comes next: a sound is a list of layers (today always one), so layered
 sounds and variation sets can use the same record later.
 
+**Variation sets need no model.** From a kept sound, `variations_preview` makes numbered
+takes (small seeded changes of pitch and volume, `sound_post.make_variations`) in well under
+a second, and `save_variation_set` writes them as `output/sounds/<name>_set__<stamp>/
+<name>_01.wav ...` with one `set.provenance.json` for the lot. The same numbers and seed
+always give the same takes, so nothing is stored between hearing a set and saving it.
+
 A try lives in `output/sounds/.tries/` until you keep it. Keeping copies it to
 `output/sounds/<name>__<stamp>/`, which is what the Library lists.
 """
@@ -31,6 +37,7 @@ A try lives in `output/sounds/.tries/` until you keep it. Keeping copies it to
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 import shutil
@@ -49,7 +56,7 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from image_to_3dlab import processes, weight_gate
+from image_to_3dlab import processes, sound_post, weight_gate
 from image_to_3dlab.host import venv_python
 from image_to_3dlab.provenance import LICENSES, write_provenance
 
@@ -65,6 +72,10 @@ MAX_LEAVE_OUT = 8
 MAX_LEAVE_OUT_WORDS = 40
 # mlx seeds are 32-bit; the top of the range is left free for seed + try.
 MAX_SEED = 2**31 - 1 - MAX_TRIES
+SET_SIDECAR = "set.provenance.json"
+SET_SUFFIX = "_set"              # a set's folder is `<name>_set__<stamp>`
+SET_FILE = re.compile(r"[A-Za-z0-9_-]{1,80}_\d{2}\.wav")
+PLAY_ROUNDS = 8                  # how many times round "Play like a game" is planned ahead
 KEPT_RUN = re.compile(r"^[A-Za-z0-9_-]{1,80}__\d{8}-\d{6}(?:-\d+)?$")
 
 # What the studio offers under "What kind?". Only Effect is built; the rest are shown so
@@ -74,6 +85,17 @@ KINDS = (
     {"id": "loop", "label": "Background loop", "hint": "Wind, rain, a crowd: plays round and round.", "ready": False},
     {"id": "music", "label": "Music", "hint": "A tune for a menu or a level.", "ready": False},
     {"id": "voice", "label": "Voice", "hint": "A line read out loud.", "ready": False},
+)
+# "Make variations": the same words in the studio, for agents and in the set's record.
+HOW_DIFFERENT = (
+    {"id": "a little", "label": "A little", "hint": "The same thing, done again. Good for footsteps."},
+    {"id": "some", "label": "Some", "hint": "Clearly different takes of the same thing."},
+    {"id": "a lot", "label": "A lot", "hint": "Nearly a different thing: a bigger boot, a smaller coin."},
+)
+DEFAULT_HOW_DIFFERENT = "a little"
+WHAT_CHANGES = (
+    {"id": "pitch", "label": "Pitch", "hint": "Higher or lower. Higher ones come out a little shorter, lower ones longer."},
+    {"id": "volume", "label": "Volume", "hint": "Louder or softer."},
 )
 # Things people most often want gone from an effect. Sent as the engine's negative prompt.
 LEAVE_OUT = ("music", "voices", "room echo")
@@ -610,37 +632,269 @@ def defaults_payload(engine: SoundEngine = MOSS) -> dict[str, Any]:
                    "default_seconds": engine.default_seconds, "max_prompt": MAX_PROMPT,
                    "tries": MAX_TRIES},
         "license": {"name": engine.licence.license_name, "url": engine.licence.license_url},
+        # no engine needed for these: they are made from a sound you already kept
+        "variations": {"min": sound_post.MIN_VARIATIONS, "max": sound_post.MAX_VARIATIONS,
+                       "default": sound_post.DEFAULT_VARIATIONS,
+                       "how_different": [dict(item) for item in HOW_DIFFERENT],
+                       "default_how_different": DEFAULT_HOW_DIFFERENT,
+                       "change": [dict(item) for item in WHAT_CHANGES]},
     }
 
 
+def display_name(stem: str) -> str:
+    return stem.replace("-", " ").replace("_", " ").strip().capitalize() or "Sound"
+
+
+def _record(path: Path) -> dict[str, Any]:
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
+def _prompt(record: dict[str, Any]) -> str | None:
+    layers = record.get("layers") if isinstance(record.get("layers"), list) else []
+    source = (layers[0].get("source") or {}) if layers and isinstance(layers[0], dict) else {}
+    return source.get("prompt") if isinstance(source, dict) else None
+
+
+def _licence_name(record: dict[str, Any]) -> str | None:
+    licence = record.get("license") if isinstance(record.get("license"), dict) else {}
+    return licence.get("name")
+
+
 def kept_sounds(output: Path) -> list[dict[str, Any]]:
-    """Every kept sound under `output`/sounds, newest first, from its own record. A folder
-    with no readable record is still listed (the file is there), with its licence unknown."""
+    """Every kept sound and saved set under `output`/sounds, newest first, each from its own
+    record. A folder with no readable record is still listed (the file is there), with its
+    licence unknown. A set has `kind: "sound_set"`, its numbered `files`, and `file` (its
+    first), so anything that plays a sound can play a set."""
     sounds = []
     root = output / "sounds"
     if not root.is_dir():
         return sounds
     for run in root.iterdir():
-        wav = run / SOUND_FILE
-        if run.name.startswith(".") or not KEPT_RUN.match(run.name) or not wav.is_file():
+        if run.name.startswith(".") or not KEPT_RUN.fullmatch(run.name) or not run.is_dir():
             continue
-        try:
-            record = json.loads((run / SIDECAR_FILE).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            record = {}
-        record = record if isinstance(record, dict) else {}
-        made = record.get("output") if isinstance(record.get("output"), dict) else {}
-        layers = record.get("layers") if isinstance(record.get("layers"), list) else []
-        source = (layers[0].get("source") or {}) if layers and isinstance(layers[0], dict) else {}
-        licence = record.get("license") if isinstance(record.get("license"), dict) else {}
+        wav = run / SOUND_FILE
         stem = run.name.rsplit("__", 1)[0]
+        if not wav.is_file():
+            if stem.endswith(SET_SUFFIX):
+                listed = _kept_set(run, stem)
+                if listed:
+                    sounds.append(listed)
+            continue
+        record = _record(run / SIDECAR_FILE)
+        made = record.get("output") if isinstance(record.get("output"), dict) else {}
         sounds.append({
             "id": run.name, "kind": "sound", "sound_kind": record.get("sound_kind") or "effect",
-            "name": stem.replace("-", " ").replace("_", " ").strip().capitalize() or "Sound",
+            "name": display_name(stem),
             "file": f"sounds/{run.name}/{SOUND_FILE}",
             "seconds": made.get("seconds"),
-            "prompt": source.get("prompt"),
-            "licence": licence.get("name"),
+            "prompt": _prompt(record),
+            "licence": _licence_name(record),
             "updated": wav.stat().st_mtime,
         })
     return sorted(sounds, key=lambda sound: sound["updated"], reverse=True)
+
+
+def _kept_set(run: Path, stem: str) -> dict[str, Any] | None:
+    """One saved set for the Library, or None if the folder holds no numbered sounds. The
+    file names are read from the folder, never trusted from the record."""
+    files = sorted(item.name for item in run.iterdir() if item.is_file() and SET_FILE.fullmatch(item.name))
+    if not files:
+        return None
+    record = _record(run / SET_SIDECAR)
+    variation = record.get("variation") if isinstance(record.get("variation"), dict) else {}
+    listed = record.get("files") if isinstance(record.get("files"), list) else []
+    seconds = {item.get("file"): item.get("seconds") for item in listed if isinstance(item, dict)}
+    seed = variation.get("seed") if isinstance(variation.get("seed"), int) else 0
+    return {
+        "id": run.name, "kind": "sound_set", "sound_kind": record.get("sound_kind") or "effect",
+        "name": display_name(stem[: -len(SET_SUFFIX)]),
+        "file": f"sounds/{run.name}/{files[0]}",
+        "files": [f"sounds/{run.name}/{name}" for name in files],
+        "count": len(files),
+        "seconds": seconds.get(files[0]),
+        "prompt": _prompt(record),
+        "licence": _licence_name(record),
+        "of": variation.get("of"),
+        "play_order": sound_post.play_order(len(files), PLAY_ROUNDS, seed),
+        "updated": (run / files[0]).stat().st_mtime,
+    }
+
+
+# ----------------------------------------------------------------------------- variation sets
+
+def kept_folder(root: Path, sound_id: Any) -> Path:
+    """The folder of the kept sound `sound_id` under `root` (output/sounds), or LookupError.
+    An id is a folder name and nothing else: no slashes, no dots, so it cannot point outside."""
+    if not isinstance(sound_id, str) or not KEPT_RUN.fullmatch(sound_id):
+        raise LookupError("there is no such kept sound")
+    folder = root / sound_id
+    if folder.is_symlink() or not (folder / SOUND_FILE).is_file() or folder.resolve().parent != root.resolve():
+        raise LookupError("there is no such kept sound")
+    return folder
+
+
+def clean_variation_request(raw: dict[str, Any], *, need_seed: bool = False) -> dict[str, Any]:
+    """What variations to make, checked. Outside the limits is refused (ValueError), never
+    quietly pulled inside. A seed is picked when none is given, unless `need_seed`."""
+    if not isinstance(raw, dict):
+        raise ValueError("expected how many variations and how different")
+    low, high = sound_post.MIN_VARIATIONS, sound_post.MAX_VARIATIONS
+    count = _number(raw, "count", sound_post.DEFAULT_VARIATIONS, int, "how many")
+    if not low <= count <= high:
+        raise ValueError(f"make between {low} and {high} variations")
+    how = " ".join(str(raw.get("how_different") or DEFAULT_HOW_DIFFERENT).lower().split())
+    if how not in sound_post.HOW_DIFFERENT:
+        raise ValueError("how different is one of: " + ", ".join(sound_post.HOW_DIFFERENT))
+    change = raw.get("change")
+    if change is None or change == "":
+        change = [item["id"] for item in WHAT_CHANGES]
+    if isinstance(change, str):
+        change = change.split(",")
+    if not isinstance(change, list | tuple):
+        raise ValueError("what changes is a list, like pitch and volume")
+    asked = {str(item).strip().lower() for item in change} - {""}
+    if not asked or asked - set(sound_post.CHANGES):
+        raise ValueError("pick what changes: " + ", ".join(sound_post.CHANGES))
+    seed = raw.get("seed")
+    if seed is None or seed == "":
+        if need_seed:
+            raise ValueError("the seed is missing")
+        seed = secrets.randbelow(MAX_SEED + 1)
+    else:
+        seed = _number(raw, "seed", 0, int, "the seed")
+        if not 0 <= seed <= MAX_SEED:
+            raise ValueError(f"the seed must be between 0 and {MAX_SEED}")
+    name = raw.get("name")
+    return {"count": count, "how_different": how, "seed": seed,
+            "change": [item for item in sound_post.CHANGES if item in asked],
+            "name": safe_name(name) if name else None}
+
+
+_LAST_TAKES: tuple[Any, list[dict[str, Any]]] | None = None     # the set just heard: played, then saved
+_TAKES_LOCK = threading.Lock()
+
+
+def variations_of(root: Path, sound_id: Any, request: dict[str, Any]) -> tuple[Path, list[dict[str, Any]]]:
+    """The kept sound's folder and its takes for `request`. Nothing is written. The last set
+    is remembered, so playing its takes one by one does not make them all again each time."""
+    global _LAST_TAKES
+    folder = kept_folder(root, sound_id)
+    wav = folder / SOUND_FILE
+    stat = wav.stat()
+    key = (str(wav), stat.st_mtime_ns, stat.st_size, request["count"], request["how_different"],
+           tuple(request["change"]), request["seed"])
+    with _TAKES_LOCK:
+        if _LAST_TAKES is None or _LAST_TAKES[0] != key:
+            audio, rate = sound_post.read_wav(wav)
+            _LAST_TAKES = (key, sound_post.make_variations(
+                audio, rate, request["count"], request["how_different"], request["seed"], request["change"]))
+        return folder, _LAST_TAKES[1]
+
+
+def set_name(folder: Path, request: dict[str, Any]) -> str:
+    """What the numbered files are called: the name asked for, else the kept sound's own."""
+    return request.get("name") or safe_name(folder.name.rsplit("__", 1)[0])
+
+
+def take_file(name: str, index: int) -> str:
+    return f"{name}_{index:02d}.wav"
+
+
+def _take_facts(take: dict[str, Any]) -> dict[str, Any]:
+    return {key: take[key] for key in ("index", "pitch_semitones", "volume_db", "gain_db", "start_ms", "note")}
+
+
+def variations_preview(root: Path, sound_id: Any, raw: dict[str, Any]) -> dict[str, Any]:
+    """Make the takes and say where each can be heard. `POST /api/sounds/<id>/variations`.
+    The answer carries the seed: send the same numbers back to hear or save the very same set."""
+    request = clean_variation_request(raw)
+    folder, takes = variations_of(root, sound_id, request)
+    name = set_name(folder, request)
+    query = "count={count}&how_different={how}&change={change}&seed={seed}".format(
+        count=request["count"], how=request["how_different"].replace(" ", "+"),
+        change=",".join(request["change"]), seed=request["seed"])
+    return {
+        "sound": folder.name, "title": display_name(name), "name": name,
+        "count": request["count"], "how_different": request["how_different"],
+        "change": request["change"], "seed": request["seed"],
+        "turned_down_db": takes[0]["gain_db"],
+        "variations": [{**_take_facts(take), "file": take_file(name, take["index"]),
+                        "seconds": round(take["samples"].size / sound_post.RATE, 3),
+                        "bars": sound_post.wave_bars(take["samples"]),
+                        "url": f"/api/sounds/{folder.name}/variations/{take['index']}.wav?{query}"}
+                       for take in takes],
+        "play_order": sound_post.play_order(len(takes), PLAY_ROUNDS, request["seed"]),
+    }
+
+
+def variation_wav(root: Path, sound_id: Any, raw: dict[str, Any], index: int) -> bytes:
+    """One take of a set, as a WAV, made from the same numbers the preview answered."""
+    request = clean_variation_request(raw, need_seed=True)
+    _, takes = variations_of(root, sound_id, request)
+    take = next((t for t in takes if t["index"] == index), None)
+    if take is None:
+        raise LookupError("that set has no such variation")
+    return sound_post.wav_bytes(take["samples"])
+
+
+def save_variation_set(root: Path, sound_id: Any, raw: dict[str, Any]) -> dict[str, Any]:
+    """Write a set to the Library: numbered WAVs in one folder, and one record for them all.
+
+    The licence is the kept sound's own, unchanged: a variation is the same sound, moved a
+    little. With no readable record beside the source, the set is unverified, by the rule the
+    repo uses for anything derived (`combined_licence`).
+    """
+    request = clean_variation_request(raw)
+    folder, takes = variations_of(root, sound_id, request)
+    name = set_name(folder, request)
+    source = _record(folder / SIDECAR_FILE)
+    licence = combined_licence([{"license": source.get("license")}])
+    making = root / f".set-{uuid.uuid4().hex}"        # hidden until whole: never half a set in the Library
+    making.mkdir(parents=True)
+    try:
+        files = []
+        for take in takes:
+            wav = sound_post.write_wav(making / take_file(name, take["index"]), take["samples"])
+            facts = sound_post.inspect_wav(wav)
+            files.append({"file": wav.name, "sha256": facts["sha256"], "seconds": facts["seconds"],
+                          "peak": facts["peak"],
+                          "variation": {"of": folder.name, "seed": request["seed"], **_take_facts(take)}})
+        record = {
+            "schema_version": 1,
+            "kind": "sound_set",
+            "sound_kind": source.get("sound_kind") or "effect",
+            "created": datetime.now(UTC).isoformat(timespec="seconds"),
+            "name": name,
+            "source": {"id": folder.name, "path": f"sounds/{folder.name}/{SOUND_FILE}",
+                       "sha256": sound_post.sha256_file(folder / SOUND_FILE)},
+            "output": {"files": len(files), "sample_rate": sound_post.RATE, "channels": sound_post.CHANNELS,
+                       "classification": licence["classification"]},
+            "license": licence,
+            # how the set was made: the same source, these numbers and this seed rebuild it
+            "variation": {"of": folder.name, "count": request["count"], "seed": request["seed"],
+                          "how_different": request["how_different"], "change": request["change"],
+                          "most": dict(sound_post.HOW_DIFFERENT[request["how_different"]]),
+                          "pitch_by": "resampling, so a higher take is shorter and a lower one longer",
+                          "turned_down_db": takes[0]["gain_db"]},
+            "files": files,
+            "layers": source.get("layers") if isinstance(source.get("layers"), list) else [],
+            "source_record": source or None,
+        }
+        write_provenance(making / SET_SIDECAR, record, atomic=True)
+        stamp, n = time.strftime("%Y%m%d-%H%M%S"), 0
+        target = root / f"{name}{SET_SUFFIX}__{stamp}"
+        while target.exists():
+            n += 1
+            target = root / f"{name}{SET_SUFFIX}__{stamp}-{n}"
+        os.rename(making, target)
+    except BaseException:
+        shutil.rmtree(making, ignore_errors=True)
+        raise
+    return {"id": target.name, "name": name, "folder": f"sounds/{target.name}", "record": SET_SIDECAR,
+            "seed": request["seed"], "licence": licence.get("name"),
+            "files": [{"file": f"sounds/{target.name}/{item['file']}", "seconds": item["seconds"],
+                       "note": item["variation"]["note"]} for item in files]}

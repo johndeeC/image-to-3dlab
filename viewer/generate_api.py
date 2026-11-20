@@ -3144,6 +3144,9 @@ class Handler(SimpleHTTPRequestHandler):
         if len(parts) == 4 and parts[:2] == ["api", "sound"] and parts[3] in {"cancel", "keep"}:
             self._sound_job_post(parts[2], parts[3])
             return
+        if len(parts) == 4 and parts[:2] == ["api", "sounds"] and parts[3] in {"variations", "set"}:
+            self._sound_variations_post(parts[2], save=parts[3] == "set")
+            return
         if parts == ["api", "image", "back"]:
             self._create_back_job()
             return
@@ -3548,6 +3551,41 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         data = job.try_file(made["number"]).read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _sound_variations_post(self, sound_id: str, *, save: bool) -> None:
+        """Variations of a kept sound: {count?, how_different?, change?, seed?, name?}. No model
+        runs, so this never waits for another job. `variations` answers the takes to hear;
+        `set` writes them to the Library as numbered files with one licence record."""
+        try:
+            body = self._small_json()
+            root = OUTPUT_ROOT / "sounds"
+            made = (sound_api.save_variation_set(root, sound_id, body) if save
+                    else sound_api.variations_preview(root, sound_id, body))
+        except LookupError as exc:
+            self._send_json(404, {"error": str(exc)})
+            return
+        except ValueError as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        self._send_json(200, {**made, "base": "/output/"})
+
+    def _sound_variation_get(self, sound_id: str, what: str) -> None:
+        """One take of a set that is being listened to, made from the numbers in the address."""
+        match = re.fullmatch(r"([1-9]\d?)\.wav", what)
+        asked = {key: values[0] for key, values in parse_qs(urlparse(self.path).query).items()}
+        try:
+            if not match:
+                raise LookupError("no such variation")
+            data = sound_api.variation_wav(OUTPUT_ROOT / "sounds", sound_id, asked, int(match[1]))
+        except (LookupError, ValueError):
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "audio/wav")
         self.send_header("Content-Length", str(len(data)))
@@ -4002,6 +4040,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if len(parts) == 4 and parts[:2] == ["api", "sound"]:
             self._sound_job_get(parts[2], parts[3])
+            return
+        if len(parts) == 5 and parts[:2] == ["api", "sounds"] and parts[3] == "variations":
+            self._sound_variation_get(parts[2], parts[4])
             return
         if parts == ["api", "image", "versions"]:
             try:

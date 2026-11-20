@@ -190,3 +190,103 @@ def test_the_library_payload_lists_kept_sounds_beside_the_assets(tmp_path):
     payload = assets_api.assets_payload(tmp_path)
     assert payload["assets"] == []                    # a sound is not a 3D run or a picture
     assert [s["file"] for s in payload["sounds"]] == ["sounds/coin__20261120-101500/sound.wav"]
+
+
+# --------------------------------------------------------------------------- variation sets
+
+KEPT = "boots-on-gravel__20261120-091306"
+
+
+@pytest.fixture
+def kept(studio, tmp_path):
+    """A kept sound with its record, as Keep leaves one."""
+    t = np.arange(24_000) / 48_000
+    thump = (0.6 * np.sin(2 * np.pi * 180 * t) * np.exp(-9 * t)).astype(np.float32)
+    wav = sound_post.write_wav(tmp_path / "output" / "sounds" / KEPT / "sound.wav", sound_post.fade(thump))
+    request = sound_api.clean_request({"prompt": "heavy boots on gravel", "seed": 5, "count": 1})
+    sound_api.write_sidecar(wav, sound_api.sidecar(
+        engine=sound_api.MOSS, request=request, number=1, wav=wav, facts=sound_post.inspect_wav(wav),
+        post={"trim": True, "fade_ms": 5.0, "peak": 0.98}))
+    return studio
+
+
+def test_variations_are_heard_then_saved_as_a_set(kept, tmp_path, monkeypatch):
+    monkeypatch.setattr(sound_api, "missing", lambda engine=sound_api.MOSS, hub=None: ["its model files (6.4 GB)"])
+    monkeypatch.setattr(generate_api.subprocess, "Popen", lambda *a, **k: pytest.fail("started something"))
+    ask = {"count": 4, "how_different": "some", "change": ["pitch", "volume"]}
+    status, heard, _ = call(kept, "POST", f"/api/sounds/{KEPT}/variations", ask)       # no engine needed
+    assert status == 200 and heard["count"] == 4 and heard["base"] == "/output/"
+    assert [v["file"] for v in heard["variations"]] == [f"boots-on-gravel_0{n}.wav" for n in (1, 2, 3, 4)]
+    assert not (tmp_path / "output" / "sounds" / ".tries").exists()
+    played = []
+    for take in heard["variations"]:
+        status, wav, kind = call(kept, "GET", take["url"])
+        assert status == 200 and kind == "audio/wav" and wav[:4] == b"RIFF"
+        played.append(wav)
+    assert len(set(played)) == 4
+
+    status, saved, _ = call(kept, "POST", f"/api/sounds/{KEPT}/set", {**ask, "seed": heard["seed"]})
+    assert status == 200 and saved["folder"].startswith("sounds/boots-on-gravel_set__")
+    folder = tmp_path / "output" / saved["folder"]
+    assert [(tmp_path / "output" / f["file"]).read_bytes() for f in saved["files"]] == played   # what was heard
+    record = json.loads((folder / "set.provenance.json").read_text())
+    assert record["kind"] == "sound_set" and record["license"]["name"] == "Apache-2.0"
+    assert record["variation"]["seed"] == heard["seed"] and record["variation"]["of"] == KEPT
+    assert [f["variation"]["index"] for f in record["files"]] == [1, 2, 3, 4]
+    assert all(len(f["sha256"]) == 64 for f in record["files"])
+    # the Library lists it as a set, and its files are served like any kept sound
+    kinds = {s["kind"]: s for s in call(kept, "GET", "/api/sound/kept")[1]["sounds"]}
+    assert kinds["sound_set"]["count"] == 4 and kinds["sound"]["id"] == KEPT
+    status, body, _ = call(kept, "GET", "/output/" + kinds["sound_set"]["files"][3])
+    assert status == 200 and body == played[3]
+
+
+@pytest.mark.parametrize("body,why", [
+    ({"count": 1}, "between 2 and 12"), ({"count": 13}, "between 2 and 12"), ({"count": 99}, "between 2 and 12"),
+    ({"how_different": "extreme"}, "how different"), ({"change": []}, "pick what changes"),
+    ({"change": ["echo"]}, "pick what changes"),
+])
+def test_variations_past_a_limit_are_refused_and_nothing_is_saved(kept, tmp_path, body, why):
+    for action in ("variations", "set"):
+        status, told, _ = call(kept, "POST", f"/api/sounds/{KEPT}/{action}", body)
+        assert status == 422 and why in told["error"]
+    assert [p.name for p in (tmp_path / "output" / "sounds").iterdir()] == [KEPT]
+
+
+@pytest.mark.parametrize("sound_id", ["..%2F..%2Fetc", "%2E%2E", "nobody__20261120-091306", "boots", ".tries",
+                                      f"..%2Fsounds%2F{KEPT}", f"{KEPT}%0A", "a%2Fb__20261120-091306"])
+def test_an_id_that_is_not_a_kept_sound_is_not_found(kept, tmp_path, sound_id):
+    for action in ("variations", "set"):
+        assert call(kept, "POST", f"/api/sounds/{sound_id}/{action}", {"count": 2})[0] == 404
+    assert call(kept, "GET", f"/api/sounds/{sound_id}/variations/1.wav?count=2&seed=1")[0] == 404
+    assert [p.name for p in (tmp_path / "output" / "sounds").iterdir()] == [KEPT]
+    assert [p.name for p in tmp_path.iterdir()] == ["output"]
+
+
+@pytest.mark.parametrize("tail", ["3.wav?count=2&seed=1", "0.wav?count=2&seed=1", "1.wav?count=2", "1.wav?count=99&seed=1",
+                                  "1.mp3?count=2&seed=1", "..%2Fsound.wav?count=2&seed=1"])
+def test_a_take_that_does_not_exist_is_not_found(kept, tail):
+    assert call(kept, "GET", f"/api/sounds/{KEPT}/variations/1.wav?count=2&seed=1")[0] == 200
+    assert call(kept, "GET", f"/api/sounds/{KEPT}/variations/{tail}")[0] == 404
+
+
+def test_variations_sit_behind_the_same_door_as_the_rest(kept, tmp_path, monkeypatch):
+    for action in ("variations", "set"):
+        status, _, _ = call(kept, "POST", f"/api/sounds/{KEPT}/{action}", {"count": 2}, {"Origin": "https://evil.example"})
+        assert status == 403
+    monkeypatch.setattr(generate_api.Handler, "studio_token", "s3cret-key-for-tests")
+    assert call(kept, "POST", f"/api/sounds/{KEPT}/set", {"count": 2})[0] == 401
+    assert call(kept, "GET", f"/api/sounds/{KEPT}/variations/1.wav?count=2&seed=1")[0] == 401
+    assert [p.name for p in (tmp_path / "output" / "sounds").iterdir()] == [KEPT]
+    assert call(kept, "POST", f"/api/sounds/{KEPT}/set", {"count": 2},
+                {"Authorization": "Bearer s3cret-key-for-tests"})[0] == 200
+
+
+def test_the_library_payload_lists_sets_too(tmp_path):
+    import assets_api
+    folder = tmp_path / "sounds" / "coin_set__20261120-101500"
+    for n in (1, 2):
+        sound_post.write_wav(folder / f"coin_0{n}.wav", np.full(480, 0.5, np.float32))
+    (made,) = assets_api.assets_payload(tmp_path)["sounds"]
+    assert made["kind"] == "sound_set" and made["name"] == "Coin" and made["count"] == 2
+    assert made["files"] == ["sounds/coin_set__20261120-101500/coin_01.wav", "sounds/coin_set__20261120-101500/coin_02.wav"]
