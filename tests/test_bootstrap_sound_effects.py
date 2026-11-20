@@ -123,6 +123,15 @@ def test_the_environment_is_its_own_and_the_package_is_pinned_to_a_commit(monkey
     assert install[:4] == ["/bin/uv", "pip", "install", "--python"]
     assert str(tmp_path / "moss-sfx") in install[4]                 # never the main environment
     assert install[5] == boot.PACKAGE and len(boot.PACKAGE_COMMIT) == 40 and boot.PACKAGE.endswith(boot.PACKAGE_COMMIT)
+    assert install[6:] == boot.EXTRA_PACKAGES
+
+
+def test_the_packages_the_port_imports_but_does_not_declare_are_installed_and_pinned():
+    # moss-sfx-mlx at this commit imports mlx_lm (its text encoder), ftfy, regex and tqdm without
+    # listing them; the first real run died on `No module named 'mlx_lm'`.
+    names = {spec.split("==")[0] for spec in boot.EXTRA_PACKAGES}
+    assert {"mlx-lm", "ftfy", "regex", "tqdm"} <= names
+    assert all("==" in spec for spec in boot.EXTRA_PACKAGES)
 
 
 def test_weights_come_from_the_pinned_revision_and_are_checked(tmp_path):

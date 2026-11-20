@@ -42,6 +42,11 @@ PYTHON_VERSION = "3.11"
 PACKAGE_REPO = "https://github.com/xocialize/moss-soundeffect-mlx"
 PACKAGE_COMMIT = "4e8e3e36d4d9c991d16a3e65a4b7099d406b9ed8"
 PACKAGE = f"moss-sfx-mlx @ git+{PACKAGE_REPO}@{PACKAGE_COMMIT}"
+# The port imports these without declaring them (mlx_lm for its text encoder, ftfy, regex and
+# tqdm for prompts and progress): without them it fails on import. Pinned at the versions a
+# real sound was made with on 2026-11-20, alongside the two big ones it does declare.
+EXTRA_PACKAGES = ["mlx==0.32.4", "mlx-lm==0.32.2", "transformers==5.23.0",
+                  "ftfy==6.3.1", "regex==2026.11.19", "tqdm==4.70.1"]
 # Not measured: MLX, transformers and what they bring. Stated so the yes covers it.
 PACKAGES_SIZE = "about 0.5 GB"
 
@@ -114,7 +119,7 @@ def install_environment(runner: Callable[..., object] = subprocess.check_call,
     python = host.venv_python(root)
     if not python.exists():
         runner([uv, "venv", str(root / ".venv"), "--python", PYTHON_VERSION])
-    runner([uv, "pip", "install", "--python", str(python), PACKAGE])
+    runner([uv, "pip", "install", "--python", str(python), PACKAGE, *EXTRA_PACKAGES])
 
 
 def fetch_weights(download: Callable[..., str]) -> None:
