@@ -13,6 +13,11 @@ Pure numpy and the standard library's `wave`, on purpose: the main environment p
 numpy below 2 and the sound engine's own environment may not, so nothing here leans on
 either version, and no audio package is needed to read or write a file.
 
+Variation sets live here too (`make_variations`): small, seeded changes of pitch and volume
+to one sound, so a footstep heard twenty times does not sound copied. Pitch is changed by
+resampling, the way a game engine does it, so **a higher take is also shorter and a lower one
+longer**. And `play_order` is the shuffle a game uses: never the same take twice running.
+
 Ported from the `postprocess_wav` / `inspect_wav` pair in our older ai-sfx project (trim at
 0.3% of the peak, 5 ms fades, peak 0.98, 16-bit, refuse empty or broken audio).
 """
@@ -20,6 +25,9 @@ Ported from the `postprocess_wav` / `inspect_wav` pair in our older ai-sfx proje
 from __future__ import annotations
 
 import hashlib
+import io
+import math
+import random
 import wave
 from itertools import pairwise
 from pathlib import Path
@@ -35,6 +43,19 @@ TRIM_FRACTION = 0.003    # quieter than 0.3% of the loudest sample counts as sil
 SILENCE_FLOOR = 1e-5     # ...and so does anything this small, however quiet the sound
 # Below this peak a "sound" is the model returning nothing: about -80 dB.
 SILENT_PEAK = 1e-4
+
+# "How different" for a variation set: the most a take may move, up or down. A little keeps
+# it the same thing ("same boot, different steps"); a lot makes it a different one. These
+# sit around what game audio tools use for random pitch and volume on repeats.
+HOW_DIFFERENT = {
+    "a little": {"pitch_semitones": 1.0, "volume_db": 1.5},
+    "some": {"pitch_semitones": 2.5, "volume_db": 3.0},
+    "a lot": {"pitch_semitones": 4.0, "volume_db": 5.0},
+}
+CHANGES = ("pitch", "volume", "start")   # what may change; "start" is a few ms of timing
+MIN_VARIATIONS, MAX_VARIATIONS, DEFAULT_VARIATIONS = 2, 12, 6
+START_JITTER_MS = 8.0      # the most a take's start moves, earlier or later
+NEAR_ZERO = 0.15           # a changed take moves at least this share of the range
 
 
 class SoundProblem(ValueError):
@@ -67,12 +88,145 @@ def resample(samples: np.ndarray, rate: int, to: int = RATE) -> np.ndarray:
         raise SoundProblem("a sample rate must be above zero")
     if rate == to or not data.size:
         return data.copy()
-    length = max(1, int(round(data.size * to / rate)))
+    return stretch_to(data, max(1, int(round(data.size * to / rate))))
+
+
+def stretch_to(samples: np.ndarray, length: int) -> np.ndarray:
+    """The same wave squeezed or stretched to `length` samples, by cutting or padding its
+    spectrum. Squeezing drops what the shorter sound cannot hold, so nothing folds back."""
+    data = np.asarray(samples, dtype=np.float32)
+    if length < 1:
+        raise SoundProblem("a sound needs at least one sample")
+    if length == data.size or not data.size:
+        return data.copy()
     spectrum = np.fft.rfft(data.astype(np.float64))
     resized = np.zeros(length // 2 + 1, dtype=np.complex128)
     kept = min(spectrum.size, resized.size)
     resized[:kept] = spectrum[:kept]
     return (np.fft.irfft(resized, n=length) * (length / data.size)).astype(np.float32)
+
+
+def shift_pitch(samples: np.ndarray, semitones: float) -> np.ndarray:
+    """Higher or lower by `semitones`, by resampling: played back at the same rate, a
+    squeezed sound is higher. **Its length changes too**: up 12 is twice the pitch and half
+    as long. That is what a game engine's pitch knob does, and why it sounds natural."""
+    data = np.asarray(samples, dtype=np.float32)
+    if not semitones or not data.size:
+        return data.copy()
+    return stretch_to(data, max(1, int(round(data.size / 2.0 ** (float(semitones) / 12.0)))))
+
+
+def change_volume(samples: np.ndarray, db: float) -> np.ndarray:
+    """Louder (above 0) or softer (below 0) by `db` decibels. 6 dB is about double."""
+    return (np.asarray(samples, dtype=np.float32) * np.float32(10.0 ** (float(db) / 20.0))).astype(np.float32)
+
+
+def shift_start(samples: np.ndarray, ms: float, rate: int = RATE) -> np.ndarray:
+    """Start a touch later (above 0: that much silence first) or earlier (below 0: that much
+    cut off the front). Never cuts more than half the sound."""
+    data = np.asarray(samples, dtype=np.float32)
+    frames = int(round(abs(float(ms)) * rate / 1000.0))
+    if not frames or not data.size:
+        return data.copy()
+    if ms > 0:
+        return np.concatenate([np.zeros(frames, np.float32), data])
+    return data[min(frames, data.size // 2):].copy()
+
+
+def variation_note(pitch_semitones: float = 0.0, volume_db: float = 0.0) -> str:
+    """A take in plain words: "a bit higher, softer". What the studio shows beside it."""
+    def word(value: float, small: float, big: float, up: str, down: str) -> str | None:
+        size = abs(value)
+        if size < small / 4:
+            return None
+        return ("a bit " if size < small else "much " if size >= big else "") + (up if value > 0 else down)
+
+    said = [w for w in (word(pitch_semitones, 1.5, 3.0, "higher", "lower"),
+                        word(volume_db, 2.0, 4.0, "louder", "softer")) if w]
+    return ", ".join(said) or "nearly the same"
+
+
+def _spread_out(rng: random.Random, count: int, most: float, digits: int) -> list[float]:
+    """`count` numbers between -most and +most, one from each equal slice of that range, so
+    they never bunch up; none closer to zero than NEAR_ZERO of the range; in shuffled order."""
+    values = []
+    for i in range(count):
+        share = -1.0 + (i + rng.random()) * 2.0 / count           # -1 to 1, one per slice
+        size = NEAR_ZERO + (1.0 - NEAR_ZERO) * abs(share)         # ...squeezed clear of zero
+        values.append(round(math.copysign(size * most, share), digits))
+    rng.shuffle(values)
+    return values
+
+
+def make_variations(audio: Any, rate: int, count: int = DEFAULT_VARIATIONS, spread: str = "some",
+                    seed: int = 0, change: Any = ("pitch", "volume")) -> list[dict[str, Any]]:
+    """`count` takes of one sound. Take 1 is the original; the rest move in pitch, volume
+    or start time by up to what `spread` ("a little", "some", "a lot") allows.
+
+    The same sound, numbers and `seed` always give the same takes, so a set can be rebuilt
+    from its record. Each take is `{index, samples, pitch_semitones, volume_db, start_ms,
+    gain_db, note}`. `volume_db` is how loud it is beside the original; `gain_db` is what was
+    really applied, because if any take would pass the peak the **whole set** is turned down
+    by the same amount. That keeps the differences, and nothing is ever turned up to fill.
+    Counts outside 2 to 12 are refused, not pulled inside.
+    """
+    if isinstance(count, bool) or not isinstance(count, int) or not MIN_VARIATIONS <= count <= MAX_VARIATIONS:
+        raise SoundProblem(f"make between {MIN_VARIATIONS} and {MAX_VARIATIONS} variations")
+    if spread not in HOW_DIFFERENT:
+        raise SoundProblem("how different is one of: " + ", ".join(HOW_DIFFERENT))
+    change = {change} if isinstance(change, str) else set(change or ())
+    if not change or change - set(CHANGES):
+        raise SoundProblem("pick what changes: " + ", ".join(CHANGES))
+    original = resample(to_mono(audio), rate, RATE)
+    if not original.size or not np.isfinite(original).all() or peak_of(original) < SILENT_PEAK:
+        raise SoundProblem("there is no sound to make variations of")
+    limits, rng, extra = HOW_DIFFERENT[spread], random.Random(int(seed)), count - 1
+    # every list is drawn whether or not it is used, so ticking Volume never moves the pitches
+    pitches = _spread_out(rng, extra, limits["pitch_semitones"], 2)
+    volumes = _spread_out(rng, extra, limits["volume_db"], 1)
+    starts = [round(rng.uniform(-START_JITTER_MS, START_JITTER_MS), 1) for _ in range(extra)]
+    takes = [{"index": 1, "samples": original, "pitch_semitones": 0.0, "volume_db": 0.0, "start_ms": 0.0}]
+    for i in range(extra):
+        pitch = pitches[i] if "pitch" in change else 0.0
+        volume = volumes[i] if "volume" in change else 0.0
+        start = starts[i] if "start" in change else 0.0
+        samples = shift_start(shift_pitch(original, pitch), start)
+        if pitch or start:
+            samples = fade(samples)       # new ends: keep them click-free
+        takes.append({"index": i + 2, "samples": change_volume(samples, volume),
+                      "pitch_semitones": pitch, "volume_db": volume, "start_ms": start})
+    loudest = max(peak_of(take["samples"]) for take in takes)
+    down = PEAK / loudest if loudest > PEAK else 1.0
+    for take in takes:
+        if down != 1.0:
+            take["samples"] = (take["samples"] * np.float32(down)).astype(np.float32)
+        take["gain_db"] = round(take["volume_db"] + 20.0 * math.log10(down), 2)
+        take["note"] = ("the original" if take["index"] == 1
+                        else variation_note(take["pitch_semitones"], take["volume_db"]))
+    return takes
+
+
+def play_order(count: int, rounds: int = 8, seed: int | None = None) -> list[int]:
+    """The order a game plays a set in: every take once in random order, then shuffled again,
+    and **never the same take twice running**, not even where one shuffle meets the next or
+    where the list ends and starts over. Takes are numbered from 0. Same seed, same order.
+    """
+    if count < 1 or rounds < 1:
+        raise ValueError("a play order needs at least one sound and one round")
+    if count == 1:
+        return [0] * rounds
+    rng, order = random.Random(seed), []
+    for turn in range(rounds):
+        bag = list(range(count))
+        rng.shuffle(bag)
+        if order and bag[0] == order[-1]:
+            other = rng.randrange(1, count)
+            bag[0], bag[other] = bag[other], bag[0]
+        if turn == rounds - 1 and count > 2 and bag[-1] == (order or bag)[0]:
+            other = rng.randrange(1, count - 1)       # not the first: that one is already safe
+            bag[-1], bag[other] = bag[other], bag[-1]
+        order += bag
+    return order
 
 
 def trim_silence(samples: np.ndarray, fraction: float = TRIM_FRACTION,
@@ -163,18 +317,25 @@ def inspect(samples: Any, rate: int, *, want_rate: int = RATE, want_channels: in
             "seconds": round(frames / rate, 3), "peak": round(peak, 4)}
 
 
-def write_wav(path: Path, samples: Any, rate: int = RATE) -> Path:
-    """A 16-bit PCM WAV: what every game engine reads. Mono, or (frames, channels)."""
+def wav_bytes(samples: Any, rate: int = RATE) -> bytes:
+    """A sound as the bytes of a 16-bit PCM WAV: what every game engine reads."""
     data = np.asarray(samples, dtype=np.float32)
     channels = 1 if data.ndim == 1 else int(data.shape[1])
     pcm = np.round(np.clip(data, -1.0, 1.0) * 32767.0).astype("<i2")
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(path), "wb") as out:
+    held = io.BytesIO()
+    with wave.open(held, "wb") as out:
         out.setnchannels(channels)
         out.setsampwidth(2)
         out.setframerate(int(rate))
         out.writeframes(pcm.tobytes())
+    return held.getvalue()
+
+
+def write_wav(path: Path, samples: Any, rate: int = RATE) -> Path:
+    """`wav_bytes` on disk. Mono, or (frames, channels)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(wav_bytes(samples, rate))
     return path
 
 
