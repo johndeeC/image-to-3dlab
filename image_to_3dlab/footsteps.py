@@ -358,8 +358,8 @@ def cue_record(found: dict[str, Any], *, move: str, model: str, speed: float | N
         "sound": sound,
         "found": {**(found.get("found") or {"how": HOW}),
                   "planted": {foot["foot"]: foot["planted"] for foot in found["feet"]}},
-        "note": "Times are seconds from the start of the move as saved. Play it faster and the steps "
-                "come sooner: divide each time by the speed-up. No audio is stored here.",
+        "note": "Times are seconds from the move's first frame, at the speed it was saved. Play it faster "
+                "and the steps come sooner: divide each time by the speed-up. No audio is stored here.",
     }
 
 

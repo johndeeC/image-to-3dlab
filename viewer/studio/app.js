@@ -24,6 +24,7 @@ import { openCanvasPane } from './canvas-pane.js';
 import { openSoundPane, createPlayer, SPEAKER } from './sound-pane.js';
 import { filterSounds, keptMeta, soundsFoot, isSet, nextInOrder } from './sound.js';
 import { openVariationsPane } from './variations-pane.js';
+import { mountFootsteps } from './footsteps-pane.js';
 
 const $ = (id) => document.getElementById(id);
 const LOGO = './studio/mark.svg';
@@ -104,7 +105,7 @@ let kitPane = null, openKitId = null;
 const kitQueue = [];       // Redo / ×2-×4 tries waiting their turn: the studio runs one thing at a time
 let kitReturn = null;      // the kit to reopen once its tries are done
 
-const viewer = createStudioViewer({ stage: $('stage'), logoUrl: LOGO, onClipChange: (clip) => setDownload(clip.file), fixSession: {
+const viewer = createStudioViewer({ stage: $('stage'), logoUrl: LOGO, onClipChange: (clip) => { if (clip) setDownload(clip.file); showFootsteps(); }, fixSession: {
   // only a finished model on screen (not a rigged one, a move or the raw model)
   canFix: () => canFixShown(current, { step: viewingStep, pictures: viewingPictures }),
   blockedNote: () => fixBlockedNote(current),
@@ -297,6 +298,23 @@ function renderSteps(asset) {
   }
   renderModelSwitch(asset);
   mountSkins($('steps'), asset, skinCtx);
+  showFootsteps();   // the list was just redrawn, so the card goes back under it
+}
+
+// The Footsteps card (viewer/studio/footsteps-pane.js) follows the move on show. A move worn with
+// a skin is a dressed copy; the marks belong to the character's own move file, found by name.
+const stepsCtx = {
+  url: (relative) => url(relative),
+  clip: () => {
+    const shown = viewer.currentClip();
+    return (shown && current?.clips?.find((c) => c.name.replace(/_/g, ' ') === shown.name)) || null;
+  },
+  viewer: { onFrame: (listener) => viewer.onFrame(listener), replay: () => viewer.replay() },
+  newSound: () => $('soundBtn').click(),
+};
+function showFootsteps() {
+  // `viewer` is still being made the first time this can run
+  queueMicrotask(() => mountFootsteps($('steps'), stepsCtx));
 }
 
 // what the Skins card needs from the page (viewer/studio/skins.js)

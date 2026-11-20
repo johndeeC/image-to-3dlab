@@ -461,7 +461,7 @@ export function createStudioViewer({ stage, logoUrl, onClipChange, fixSession = 
         }
         if (loaded.rig.animations.length) {
           player = new AnimationPlayer(new THREE.AnimationMixer(loaded.modelRoot), {
-            onFrame: (time, duration) => { requestRender(); syncScrub(time, duration); },
+            onFrame: (time, duration) => { requestRender(); syncScrub(time, duration); frameListener?.(time, duration, !!player?.playing); },
             onStateChange: (playing) => syncPlayButton(playing),
           });
           player.select(loaded.rig.animations[0]);
@@ -542,10 +542,25 @@ export function createStudioViewer({ stage, logoUrl, onClipChange, fixSession = 
   let facing = null;
   function setFacing(forward) { facing = forward || null; }
 
+  // someone following the move as it plays (the Footsteps card): told the time on every frame
+  let frameListener = null;
+  function onFrame(listener) { frameListener = listener || null; }
+  /** Play the move on show from its start. False when there is none. */
+  function replay() {
+    if (!player) return false;
+    player.pause();
+    player.seek(0);
+    return player.play();
+  }
+  /** The move on show ({name, url, file}), or null: a rest pose, a prop, a picture. */
+  function currentClip() { return movesOnShow && clipIndex >= 0 ? clips[clipIndex] ?? null : null; }
+  let movesOnShow = false;
+
   function setClips(items, { restUrl = null, index = 0, still = false } = {}) {
     clips = items;
+    movesOnShow = !still && items.length > 0;
     clipBar.hidden = !items.length && !restUrl;
-    if (clipBar.hidden) { clipBar.innerHTML = ''; return; }
+    if (clipBar.hidden) { clipBar.innerHTML = ''; clipIndex = -1; onClipChange?.(null); return; }
     clipIndex = items.length ? index : -1;
     clipBar.innerHTML = (still ? '' : `
       <button class="tool" data-clip-act="play" data-tip="Play or pause" aria-label="Play or pause">${ICON.pause}</button>
@@ -553,7 +568,7 @@ export function createStudioViewer({ stage, logoUrl, onClipChange, fixSession = 
       <span class="sep"></span>`) + `
       ${items.map((clip, i) => `<button class="chip" data-clip="${i}" aria-pressed="${i === clipIndex}">${clip.name}</button>`).join('')}`
       + (still ? '' : `<span class="scrubber"><input type="range" class="scrub" data-scrub min="0" max="1000" value="0" aria-label="Scrub through the move"><span class="meta frame" data-frame>frame 0</span></span>`);
-    if (clipIndex >= 0) onClipChange?.(items[clipIndex]);
+    onClipChange?.(clipIndex >= 0 ? items[clipIndex] : null);
     clipBar.dataset.rest = restUrl || '';
     if (clipIndex >= 0) load(items[clipIndex].url, { label: items[clipIndex].name, autoplay: true });
     else if (restUrl) load(restUrl, { label: 'rest pose' });
@@ -603,5 +618,5 @@ export function createStudioViewer({ stage, logoUrl, onClipChange, fixSession = 
   });
 
   drawGizmo();
-  return { load, showImage, showEmpty, setClips, setFacing, snap, dispose };
+  return { load, showImage, showEmpty, setClips, setFacing, snap, dispose, onFrame, replay, currentClip };
 }

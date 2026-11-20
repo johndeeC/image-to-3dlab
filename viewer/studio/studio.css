@@ -635,6 +635,27 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .canvas-side .downloads a { text-decoration: none; }
 .peek-ask input { flex: 1; min-width: 0; }
 
+/* Footsteps on a move (footsteps-pane.js): a card under the steps with a small timeline */
+.step.footsteps .dot { background: rgb(255 140 60 / .14); color: var(--flame); }
+.step.footsteps .body { padding-left: 12px; }
+.steps-on { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--bone); }
+.steps-on input { accent-color: var(--ember); width: 18px; height: 18px; }
+.step.footsteps select { width: 100%; }
+.steps-title { font-size: 13px; font-weight: 500; color: var(--ash); }
+.steps-found { margin: 2px 0 0; font-size: 14px; color: var(--bone); }
+.steps-line { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.steps-axis { display: flex; justify-content: space-between; margin-left: 78px; font: 400 11px/1 var(--f-num); color: var(--ash); }
+.steps-row { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 8px; align-items: center; }
+.steps-foot { font-size: 12px; color: var(--ash); }
+.steps-track { position: relative; height: 30px; border-radius: 6px; background: var(--coal); }
+.steps-track i { position: absolute; top: 10px; height: 10px; border-radius: 5px; background: #3a2416; }
+.steps-track b { position: absolute; top: 4px; width: 22px; height: 22px; margin-left: -11px; border-radius: 50%; display: grid; place-items: center; background: var(--ember); color: #1b0b02; font: 600 11px/1 var(--f-num); transition: transform .12s; }
+.steps-track b.hit { transform: scale(1.35); background: var(--flame); }
+.steps-line .hint { margin: 0; }
+.step.footsteps .ghost { width: 100%; min-height: 40px; }
+.step.footsteps button:disabled { opacity: .45; cursor: default; }
+.steps-note:empty { display: none; }
+.steps-note { color: var(--flame); }
 /* Sound sheet (sound-pane.js): describe it on the left, the tries on the right */
 .sound-sheet { place-items: start stretch; container-type: inline-size; }
 .sound-card { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 28px; align-items: start; }

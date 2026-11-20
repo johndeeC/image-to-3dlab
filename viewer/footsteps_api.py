@@ -114,7 +114,8 @@ def find(output: Path, file: Any) -> dict[str, Any]:
     except ValueError as exc:
         raise LookupError(str(exc)) from exc
     speed = motion.get("speed") if isinstance(motion.get("speed"), int | float) else None
-    return {**found, "file": file, "move": move_name(glb, motion), "speed": speed,
+    label = motion.get("label") if isinstance(motion.get("label"), str) else None
+    return {**found, "file": file, "move": move_name(glb, motion), "label": label, "speed": speed,
             "words": footsteps.in_words(found), "saved": _saved(glb, output)}
 
 

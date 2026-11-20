@@ -38,7 +38,7 @@ def output(tmp_path):
     (run / "knight_rigged.glb").write_bytes(walking_glb())
     (run / "knight_walk.glb").write_bytes(walking_glb(seconds=1.2))
     (run / "knight_walk.provenance.json").write_text(json.dumps(
-        {"motion": {"preset": "walk", "speed": 1.25, "loop": True, "in_place": True}}))
+        {"motion": {"preset": "walk", "label": "Walk", "speed": 1.25, "loop": True, "in_place": True}}))
     tone = (0.4 * np.sin(np.arange(4800) * 0.2)).astype(np.float32)
     kept = out / "sounds" / SOUND
     kept.mkdir(parents=True)
@@ -55,7 +55,7 @@ def output(tmp_path):
 
 def test_the_steps_are_found_and_nothing_is_written(output):
     found = footsteps_api.find(output, MOVE)
-    assert found["move"] == "walk" and found["speed"] == 1.25 and found["loop"] is True
+    assert (found["move"], found["label"]) == ("walk", "Walk") and found["speed"] == 1.25 and found["loop"] is True
     assert found["seconds"] == pytest.approx(1.2)
     assert [(cue["foot"], cue["time_s"]) for cue in found["cues"]] == [
         ("left", pytest.approx(0.3, abs=0.04)), ("right", pytest.approx(0.9, abs=0.04))]
