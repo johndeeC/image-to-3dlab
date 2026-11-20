@@ -151,7 +151,8 @@ export function openSoundPane({ stage, on = {} }) {
       ${defaults.leave_out?.length ? `<div class="field"><span>Leave out</span>
         <div class="quick" role="group" aria-label="Leave out">${defaults.leave_out.map((word) => `<button type="button" class="qs${form.leaveOut.has(word) ? ' on' : ''}" data-leave="${esc(word)}" aria-pressed="${form.leaveOut.has(word)}">${esc(word)}</button>`).join('')}</div></div>` : ''}
       <label class="field"><span>Length <output data-length>${esc(lengthText(form.seconds))}</output></span>
-        <input type="range" data-seconds min="${limits.min_seconds}" max="${limits.max_seconds}" step="0.5" value="${form.seconds}"></label>
+        <input type="range" data-seconds min="${limits.min_seconds}" max="${limits.max_seconds}" step="0.5" value="${form.seconds}">
+        <small class="hint">A sound still ringing at the end runs a little longer, so it is not cut off.</small></label>
       <div class="sound-go">
         <button type="button" class="primary" data-make ${blocked ? 'disabled' : ''}>Make ${limits.tries}</button>
         <small class="hint">${limits.tries} tries, a few minutes. Keep the one you like.</small>

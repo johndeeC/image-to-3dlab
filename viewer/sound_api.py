@@ -365,7 +365,10 @@ def sidecar(*, engine: SoundEngine, request: dict[str, Any], number: int, wav: P
         "license": licence,
         "layers": [layer],
         "variation": None,
-        "post": {"trim": post["trim"], "fade_ms": post["fade_ms"], "peak": post["peak"]},
+        # gain_db: how far the volume moved. tail_s: kept past the length asked, for a ring.
+        "post": {"trim": post["trim"], "fade_ms": post["fade_ms"], "peak": post["peak"],
+                 "gain_db": post.get("gain_db", 0.0), "tail_s": post.get("tail_s", 0.0),
+                 "fade_out_ms": post.get("fade_out_ms", post["fade_ms"])},
         # target and measured wait for "Even volume"; the peak is what the file really has
         "loudness": {"target": None, "measured": None, "peak": facts["peak"]},
         "loop": None,

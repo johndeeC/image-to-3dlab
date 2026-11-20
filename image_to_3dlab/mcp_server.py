@@ -1798,7 +1798,8 @@ def build_server(studio: Studio | None = None):
                         tries: int = 4, seed: int | None = None):
         """Make sound effects from a description: a footstep, a hit, a door. Mono 48 kHz WAVs, Apache-2.0 engine.
         description: one thing happening, close up; say what hits what ("sword striking a wooden shield, one hit, dry").
-        seconds: 0.5 to 30 (default 1.5); past that it is refused, not shortened. leave_out: things it must not
+        seconds: 0.5 to 30 (default 1.5); past that it is refused, not shortened. A sound still ringing at the end
+        runs a little longer, so it is not cut off. leave_out: things it must not
         have, e.g. ["music", "voices", "room echo"]. tries: 1 to 4 made from one seed (try n uses seed + n - 1).
         Needs the "sound-effects" engine (list_engines); if it is missing this says so and downloads nothing:
         install_backend asks the user first. Effects only for now: no loops, music or voice."""

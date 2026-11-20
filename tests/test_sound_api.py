@@ -33,22 +33,26 @@ class FakePipe:
 
     sample_rate = 48_000
 
-    def __init__(self, silent_seeds=()):
+    def __init__(self, silent_seeds=(), shape=None):
         self.calls = []
+        self.shape = shape                      # the sound to answer with, as a function of time
         self.silent_seeds = set(silent_seeds)
 
     def __call__(self, prompt, seconds, num_inference_steps, cfg_scale, seed, negative_prompt,
-                 progress_bar_cmd):
+                 progress_bar_cmd, append_duration_suffix=True):
         self.calls.append({"prompt": prompt, "seconds": seconds, "steps": num_inference_steps,
-                           "cfg": cfg_scale, "seed": seed, "negative": negative_prompt})
+                           "cfg": cfg_scale, "seed": seed, "negative": negative_prompt,
+                           "suffix": append_duration_suffix})
         for _ in progress_bar_cmd(range(num_inference_steps)):
             pass
         frames = int(self.sample_rate * seconds)
         t = np.arange(frames) / self.sample_rate
         tone = 1.6 * np.sin(2 * np.pi * (200 + 50 * seed) * t) * np.exp(-4 * t)     # too loud, on purpose
-        tone[: frames // 10] = 0.0                                                # dead air at the start
+        tone[: int(0.15 * self.sample_rate)] = 0.0                                # dead air at the start
         if seed in self.silent_seeds:
             tone[:] = 0.0
+        if self.shape is not None:
+            tone = self.shape(t)
         return tone.astype(np.float32).reshape(1, 1, -1)
 
 
@@ -217,8 +221,9 @@ def test_one_sound_is_cleaned_checked_and_written_with_its_record(tmp_path):
     pipe, said = FakePipe(), []
     facts = runner.make_one(pipe, api.MOSS, request, 1, tmp_path / "s", lambda event, **f: said.append((event, f)))
 
-    assert pipe.calls == [{"prompt": request["prompt"], "seconds": 1.5, "steps": 100, "cfg": 4.0,
-                           "seed": 7, "negative": "music, voices"}]
+    # the words carry the length asked for; the engine is asked for more, to leave room for a tail
+    assert pipe.calls == [{"prompt": request["prompt"] + " duration: 1.5s", "seconds": 2.2, "steps": 100,
+                           "cfg": 4.0, "seed": 7, "negative": "music, voices", "suffix": False}]
     assert [f["step"] for e, f in said if e == "step"] == list(range(1, 101))
     wav = tmp_path / "s" / "sound.wav"
     on_disk = sound_post.inspect_wav(wav)                       # ai-sfx's assert_wavs, for one file
@@ -245,7 +250,9 @@ def test_the_record_has_the_shape_later_slices_build_on(tmp_path):
     assert set(out) == {"path", "sha256", "sample_rate", "channels", "seconds", "classification"}
     assert (out["path"], out["sample_rate"], out["channels"], out["classification"]) == (
         "sound.wav", 48_000, 1, "commercial-clear")
-    assert record["post"] == {"trim": True, "fade_ms": 5.0, "peak": 0.98}
+    assert record["post"] == {"trim": True, "fade_ms": 5.0, "peak": 0.98, "gain_db": record["post"]["gain_db"],
+                              "tail_s": 0.0, "fade_out_ms": 5.0}
+    assert isinstance(record["post"]["gain_db"], float)
     loudness = record["loudness"]                               # the peak is the file's own, after the fades
     assert set(loudness) == {"target", "measured", "peak"} and loudness["target"] is None
     assert loudness["measured"] is None and 0.5 < loudness["peak"] <= 0.98 + 1e-3
@@ -262,6 +269,37 @@ def test_the_record_has_the_shape_later_slices_build_on(tmp_path):
     assert (source["batch_seed"], source["try"], source["of"], source["seed"]) == (7, 3, 4, 9)
     assert source["leave_out"] == ["music", "voices"] and source["revision"] == api.MOSS.revision
     assert record["made_with"]["name"] == "AssetFurnace"
+
+
+def test_a_quiet_try_comes_out_as_loud_as_the_others(tmp_path):
+    request = api.clean_request({**ASK, "count": 1})
+    quiet = FakePipe(shape=lambda t: 0.25 * np.sin(2 * np.pi * 300 * t) * np.exp(-8 * t))
+    facts = runner.make_one(quiet, api.MOSS, request, 1, tmp_path, lambda *a, **k: None)
+    record = json.loads((tmp_path / "sound.provenance.json").read_text())
+    assert facts["peak"] == pytest.approx(0.98, abs=2e-3)
+    assert record["post"]["gain_db"] == pytest.approx(12.0, abs=0.5)
+    assert record["loudness"]["peak"] == facts["peak"]
+
+
+def test_a_ringing_try_runs_past_the_length_asked_and_the_record_says_so(tmp_path):
+    request = api.clean_request({**ASK, "seconds": 1.0, "count": 1})
+    bell = FakePipe(shape=lambda t: 0.6 * np.sin(2 * np.pi * 900 * t) * 0.5 ** (t / 0.15))
+    facts = runner.make_one(bell, api.MOSS, request, 1, tmp_path, lambda *a, **k: None)
+    record = json.loads((tmp_path / "sound.provenance.json").read_text())
+    (call,) = bell.calls
+    assert call["seconds"] == 1.5 and call["suffix"] is False and call["prompt"].endswith(" duration: 1.0s")
+    assert 1.0 < facts["seconds"] <= 1.5                          # the real length, not the one asked
+    assert record["output"]["seconds"] == facts["seconds"]
+    assert record["layers"][0]["source"]["seconds_asked"] == 1.0
+    assert record["post"]["tail_s"] == pytest.approx(facts["seconds"] - 1.0, abs=0.01)
+    assert record["post"]["fade_out_ms"] == sound_post.TAIL_FADE_MS
+
+
+def test_the_engine_is_never_asked_for_more_than_its_most(tmp_path):
+    request = api.clean_request({**ASK, "seconds": 28.0, "count": 1, "steps": 10})
+    pipe = FakePipe()
+    runner.generate(pipe, request, 7, 1, lambda *a, **k: None, most=api.MOSS.max_seconds)
+    assert pipe.calls[0]["seconds"] == 30.0 and pipe.calls[0]["prompt"].endswith(" duration: 28.0s")
 
 
 def test_mixed_licences_follow_the_rule_derived_files_already_use():

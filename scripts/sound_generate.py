@@ -11,8 +11,9 @@ starts it for "Make a sound"; it also works by hand:
 It never downloads anything. The weights must already be on disk (Setup, or the bootstrap);
 if they are not, it stops and says what is missing and how big it is.
 
-Each sound is trimmed, faded, held under full scale and checked before it is written
-(`image_to_3dlab/sound_post.py`), then gets `sound.provenance.json` beside it. With
+Each sound is trimmed, brought to the standard volume, faded and checked before it is written
+(`image_to_3dlab/sound_post.py`); one that is still ringing at the length asked runs a little
+longer so it is not cut off. Then it gets `sound.provenance.json` beside it. With
 `--count` above 1 the tries land in `try-1/`, `try-2/`... under `--out`, and try n uses
 seed + n - 1.
 
@@ -74,13 +75,20 @@ def step_reporter(number: int, tell: Callable[..., None]) -> Callable[..., Any]:
 
 
 def generate(pipe, request: dict[str, Any], seed: int, number: int,
-             tell: Callable[..., None] = say) -> tuple[Any, int]:
-    """One raw sound from the engine: ((channels, frames) samples, sample rate)."""
+             tell: Callable[..., None] = say, most: float = 30.0) -> tuple[Any, int]:
+    """One raw sound from the engine: ((channels, frames) samples, sample rate).
+
+    It comes back longer than asked, up to `most` seconds, so a ringing sound has room to
+    die away (`sound_post.keep_tail` picks the end). That costs nothing: the engine works on
+    its full length every time and only cuts at the end. The words still carry the length
+    asked for, written the way the engine writes it, so the sound itself is the same.
+    """
     import numpy as np
 
     audio = pipe(
-        prompt=request["prompt"],
-        seconds=request["seconds"],
+        prompt=f"{request['prompt'].strip()} duration: {request['seconds']:.1f}s",
+        append_duration_suffix=False,
+        seconds=sound_post.seconds_with_tail(request["seconds"], most),
         num_inference_steps=request["steps"],
         cfg_scale=request["guidance"],
         seed=seed,
@@ -96,8 +104,8 @@ def make_one(pipe, engine: sound_api.SoundEngine, request: dict[str, Any], numbe
     """Generate, clean, check and write try `number`, with its record. Returns its facts."""
     started = time.monotonic()
     seed = sound_api.try_seed(request["seed"], number)
-    raw, rate = generate(pipe, request, seed, number, tell)
-    sound, post = sound_post.clean(raw, rate, channels_first=True)
+    raw, rate = generate(pipe, request, seed, number, tell, most=engine.max_seconds)
+    sound, post = sound_post.clean(raw, rate, channels_first=True, asked_seconds=request["seconds"])
     sound_post.inspect(sound, sound_post.RATE, want_channels=engine.channels)   # before it touches the disk
     wav = sound_post.write_wav(folder / sound_api.SOUND_FILE, sound)
     facts = sound_post.inspect_wav(wav, want_channels=engine.channels)
@@ -128,7 +136,8 @@ def make_batch(pipe, engine: sound_api.SoundEngine, request: dict[str, Any], out
 def main(argv: list[str] | None = None, load: Callable[[Path], Any] = load_pipeline) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--prompt", required=True, help="What the sound is. One thing happening, close up.")
-    parser.add_argument("--seconds", type=float, help="How long, in seconds (0.5 to 30).")
+    parser.add_argument("--seconds", type=float, help="How long, in seconds (0.5 to 30). A sound still ringing at the end runs a little "
+                                                    "longer, so it is not cut off.")
     parser.add_argument("--leave-out", action="append", default=[], metavar="THING",
                         help="Something the sound must not have, like music. Repeat for more.")
     parser.add_argument("--count", type=int, default=1, help="How many tries to make (1 to 4).")
