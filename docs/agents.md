@@ -99,6 +99,7 @@ The studio does not need to be open: the first tool call starts it in the backgr
 | `approve_skin_picture` / `redo_skin_picture` | Your verdict on a picture: approve it, or ask again with a correction. Front first, then back |
 | `build_skin` / `cancel_skin` | Paint the model from the approved pictures and finish it (a few minutes), or stop that |
 | `make_variations` | A variation set from a kept sound: 2 to 12 numbered WAVs in one folder, a little different in pitch and volume, so repeats don't sound copied. No model runs ([sound.md](sound.md)) |
+| `split_sound` / `make_layered_sound` | A sound built from layers: split a description into parts (a whoosh, then a thud), make each on its own, stack them with a start, volume and pitch each, and save them as one kept sound. Kept sounds can be layers too ([sound.md](sound.md)) |
 | `footsteps` | Footstep marks on a character's move: finds when each foot lands and saves the times beside the move, pointing at the kept sound or set to play. No audio is baked in ([sound.md](sound.md)) |
 | `make_sound` / `sound_status` | Sound effects from a description (a footstep, a hit, a door): up to four tries, then keep the one you like. Lists and keeps them too ([sound.md](sound.md)) |
 | `report_bug` | Drafts a bug report (your words, plus version, machine and the last error) and gives you the links to send it. It never sends anything itself |

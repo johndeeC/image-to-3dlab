@@ -94,6 +94,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Canvas: a line above the board shows any run that is going, here or on another canvas
   (an agent's, another tab's): what it is doing, for how long, with **Open it** and **Stop**.
   Asking for a second run names the canvas that is busy.
+- **Layers**: build a sound from a few parts made one at a time, for sounds that are two
+  or three things at once (a whoosh, then a thud). On the Sound sheet, **Build it from
+  layers** splits your description into parts to edit; **Make** each one, or **+ Add a
+  layer** from your own WAV or a sound you kept. Set **Starts at**, **Volume** and **Pitch**
+  for each, **Play together**, then **Save as one sound**. It is a normal kept sound, with
+  each layer's file beside it, so **Edit layers** opens it again. For your own file you say
+  its **Licence** and **Where it's from**; anything not stated is "Not checked", and one
+  not-checked layer makes the finished sound not checked.
+- Agents: `split_sound` and `make_layered_sound` do the same. See `docs/sound.md`.
 
 ### Fixed
 - Sound: a try that came out quiet is now turned up to the same level as the others (never by

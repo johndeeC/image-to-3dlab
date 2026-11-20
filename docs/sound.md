@@ -89,6 +89,91 @@ different take.
 Agents and the server can also ask for `"start"` under what changes: each take starts up to
 8 milliseconds earlier or later. It is not on the sheet, to keep the sheet short.
 
+## Layers
+
+Some sounds are two or three things at once: an arrow *whooshes past* and then *thuds* into
+a target. Asked for in one go, the engine tends to blur them, or play the hit several times.
+In our listen test the one-description arrow had 14 separate hits in it; made as two layers
+it has the whoosh and one thud. So: make each part on its own, then stack them.
+
+1. On the Sound sheet, describe the whole sound and press **Build it from layers**. A small
+   rule table splits it into two or three descriptions (a lead-in, the hit, a tail), each to
+   edit. With no rule for what you typed, you get one layer as typed and add the rest yourself.
+2. Press **Make** on each layer (1 to 4 tries, about a minute a try), play the tries and press
+   **Use this one**.
+3. **+ Add a layer** for more, up to 8: **Describe it**, **Use my own file**, or **From my
+   Library** (a sound you kept).
+4. Set each layer's **Starts at** (0 to 10 seconds, in ms), **Volume** (0 is as made; each 6
+   down is about half as loud) and **Pitch** (steps up or down, 12 each way). Its block moves
+   on the timeline as you type. Blocks are not dragged.
+5. **Play together** to hear the mix. **Save as one sound** keeps it. It is then a normal
+   kept sound: it plays in the Library, and Make variations and Footsteps take it.
+
+**Edit layers** on a kept sound that was built this way opens its layers again, each where
+it was. Saving makes a new sound; the old one stays.
+
+### Your own file
+
+A WAV, 16-bit or 24-bit, one or two channels, any sample rate, up to 20 MB and 30 seconds.
+It is brought to one channel at 48 kHz. Anything else (MP3, 8-bit, 32-bit float, silence) is
+refused with the reason. The record keeps the file's name, the hash of the file as you gave
+it, what it was, and what you said about it:
+
+| Licence | Means | In the record |
+|---|---|---|
+| **Not checked** (default) | You are not sure | unverified |
+| **Mine** | You made it | "Your own work", commercial-clear |
+| **CC0** | Given away freely | commercial-clear, **if** you say where it's from |
+| **CC-BY (credit needed)** | Free with credit | commercial-conditional, **if** you say where it's from |
+
+**Where it's from** is a link to the page you got it from. A Creative Commons choice with
+no link cannot be checked by anyone, so it is recorded as not checked. We record what you
+state; we do not check it for you.
+
+### The licence of the finished sound
+
+The same rule as anything else here built from several sources: the layers' licence names
+are joined with " + " (the same licence twice is named once), and the result is unverified
+unless every layer is in the same class. So:
+
+- engine + engine: `Apache-2.0`
+- engine + CC0 (with a link) or Mine: `Apache-2.0 + CC0`, commercial-clear
+- engine + CC-BY: `Apache-2.0 + CC-BY`, **unverified** (two classes: read both)
+- anything + Not checked: **unverified**. The screen says "Not checked".
+
+### The mix
+
+Every layer is one channel at 48 kHz. Each is shifted in pitch (by resampling, so **higher is
+also shorter**), given 5 ms fades so its ends never click, and set to its volume. Then they
+are **summed**, and the sum is turned down **once** if it passes a peak of 0.98. It is never
+turned up, and no layer is levelled on its own, so the balance you set is the balance you
+get. Loudness is measured on the mix (average power, in dB below full scale) and written to
+the record. Out-of-range numbers are refused, not pulled inside. Play together and Save run
+the same code (`sound_post.mix_layers`); the browser only plays what the server mixed.
+
+### What is saved
+
+```
+output/sounds/<name>__<date-time>/sound.wav
+output/sounds/<name>__<date-time>/sound.provenance.json
+output/sounds/<name>__<date-time>/layers/layer-1.wav ...   each layer on its own, to mix again
+output/sounds/.layers/                                      layers being worked on; cleared after a week
+```
+
+The record is the one every kept sound has, with one entry per layer:
+`{id, label, source, file, sha256, license, start_ms, volume_db, pitch_semitones, seconds}`.
+`source.type` is `generated` (with the description, seed and settings), `file` (name, hash,
+link, what it was) or `kept` (the kept sound's id and its own layers). `post` says how the
+mix was made and how far it was turned down.
+
+### The split rules
+
+`image_to_3dlab/sound_split.py`, first match wins: a thrown thing hitting (arrow, spear,
+knife), a door slamming, a footstep with an echo, a blade striking, an explosion, glass
+breaking, a gunshot, a punch or kick, a spell, a splash, "... with an echo", and "A, then
+B". They are starting points written by hand, not tuned by ear: only the arrow has been
+made and measured. Edit what they give you.
+
 ## Footsteps on a move
 
 A walk needs a step sound each time a foot lands. Games do not want that baked into one long
@@ -239,8 +324,8 @@ output/sounds/<name>__<date-time>/sound.provenance.json
 output/sounds/.tries/        tries not kept yet
 ```
 
-The record is shaped for what comes next: a sound is a list of layers (today always one),
-with room for loops and "made for this move". Variation sets have a record of their own
+A sound is a list of layers: one for a sound kept from a try, several for one built
+from layers (see Layers). There is room for loops and "made for this move". Variation sets have a record of their own
 (see Variations).
 
 ```json
@@ -259,7 +344,7 @@ with room for loops and "made for this move". Variation sets have a record of th
  "loop": null, "made_for": null}
 ```
 
-When a sound is one day made from several sources, its licence follows the rule the rest of
+When a sound is made from several sources (Layers), its licence follows the rule the rest of
 the repo already uses for anything built from more than one thing: the names are joined
 with " + ", and if the sources are not all in the same class, or one is unknown, the result
 is marked unverified.
@@ -282,6 +367,19 @@ and answers its file path; `list_assets(kind="sound")` lists the kept ones and t
 sets. `make_variations(sound_id, count, how_different, change)` saves a set from a kept sound
 and answers its folder and files. `footsteps(asset_id, move, sound_id)` finds the steps in a
 character's move, saves the cue file and answers the times; `save=False` only looks.
+
+`split_sound(description)` answers layers to make, and
+`make_layered_sound(layers, name)` builds and saves a stack. Each layer is `{describe}`,
+`{sound_id}` or `{job_id, try}`, plus `start_ms`, `volume_db`, `pitch_semitones`. Described
+layers are made one per call: it answers `status: "making"` and the layers to send back
+until all exist, then `status: "saved"`. Agents cannot bring a file: stating a file's
+licence is for the person, in the studio.
+
+Layer routes (`viewer/sound_layers_api.py`), all behind the same door as the rest:
+`POST /api/sound/layers/split` `{description}`; `/add` `{job_id, try}` or `{sound_id}`;
+`/upload` (a form: `file`, `licence`, `link`); `/mix` and `/save` `{layers: [{layer,
+start_ms, volume_db, pitch_semitones}], name}`; `POST /api/sounds/<id>/layers` opens a kept
+stack; `GET /api/sound/layers/<id>.wav` and `/api/sound/layers/mix/<key>.wav` play.
 
 The server routes are `/api/sound…` for making sounds, and for variations
 `POST /api/sounds/<id>/variations` (takes to listen to; writes nothing) and
