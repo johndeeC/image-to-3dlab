@@ -76,6 +76,8 @@ SET_SIDECAR = "set.provenance.json"
 SET_SUFFIX = "_set"              # a set's folder is `<name>_set__<stamp>`
 SET_FILE = re.compile(r"[A-Za-z0-9_-]{1,80}_\d{2}\.wav")
 PLAY_ROUNDS = 8                  # how many times round "Play like a game" is planned ahead
+KEPT_LAYERS = "layers"             # beside a sound built from layers: each layer's own WAV
+KEPT_LAYER_FILE = re.compile(r"^layer-[1-9]\.wav$")
 KEPT_RUN = re.compile(r"^[A-Za-z0-9_-]{1,80}__\d{8}-\d{6}(?:-\d+)?$")
 
 # What the studio offers under "What kind?". Only Effect is built; the rest are shown so
@@ -667,10 +669,26 @@ def _licence_name(record: dict[str, Any]) -> str | None:
     return licence.get("name")
 
 
+def kept_layer_files(folder: Path, record: dict[str, Any]) -> list[tuple[dict[str, Any], Path]]:
+    """A kept sound's layers that can be mixed again: each entry of its record with its own
+    WAV in `layers/` (viewer/sound_layers_api.py writes them). A sound kept from a single try
+    has none: its one layer *is* sound.wav. One missing or odd file and the answer is none."""
+    found = []
+    for layer in record.get("layers") if isinstance(record.get("layers"), list) else []:
+        file = layer.get("file") if isinstance(layer, dict) else None
+        name = file[len(KEPT_LAYERS) + 1:] if isinstance(file, str) and file.startswith(f"{KEPT_LAYERS}/") else ""
+        path = folder / KEPT_LAYERS / name
+        if not KEPT_LAYER_FILE.fullmatch(name) or path.is_symlink() or not path.is_file():
+            return []
+        found.append((layer, path))
+    return found
+
+
 def kept_sounds(output: Path) -> list[dict[str, Any]]:
     """Every kept sound and saved set under `output`/sounds, newest first, each from its own
     record. A folder with no readable record is still listed (the file is there), with its
-    licence unknown. A set has `kind: "sound_set"`, its numbered `files`, and `file` (its
+    licence unknown. A sound built from layers says how many (`layers`), so the Library can
+    offer "Edit layers". A set has `kind: "sound_set"`, its numbered `files`, and `file` (its
     first), so anything that plays a sound can play a set."""
     sounds = []
     root = output / "sounds"
@@ -696,6 +714,7 @@ def kept_sounds(output: Path) -> list[dict[str, Any]]:
             "seconds": made.get("seconds"),
             "prompt": _prompt(record),
             "licence": _licence_name(record),
+            "layers": len(kept_layer_files(run, record)),
             "updated": wav.stat().st_mtime,
         })
     return sorted(sounds, key=lambda sound: sound["updated"], reverse=True)

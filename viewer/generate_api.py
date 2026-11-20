@@ -47,6 +47,7 @@ import preview_api
 import request_utils
 import skins_api
 import sound_api
+import sound_layers_api
 import studio_auth
 import tool_jobs
 import usage_api
@@ -3142,6 +3143,24 @@ class Handler(SimpleHTTPRequestHandler):
         if parts == ["api", "sound"]:
             self._create_sound_job()
             return
+        if parts == ["api", "sound", "layers", "split"]:
+            self._sound_layers_post("split")
+            return
+        if parts == ["api", "sound", "layers", "add"]:
+            self._sound_layers_post("add")
+            return
+        if parts == ["api", "sound", "layers", "upload"]:
+            self._sound_layers_upload()
+            return
+        if parts == ["api", "sound", "layers", "mix"]:
+            self._sound_layers_post("mix")
+            return
+        if parts == ["api", "sound", "layers", "save"]:
+            self._sound_layers_post("save")
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "sounds"] and parts[3] == "layers":
+            self._sound_layers_post("open", parts[2])
+            return
         if len(parts) == 4 and parts[:2] == ["api", "sound"] and parts[3] in {"cancel", "keep"}:
             self._sound_job_post(parts[2], parts[3])
             return
@@ -3588,6 +3607,78 @@ class Handler(SimpleHTTPRequestHandler):
                 raise LookupError("no such variation")
             data = sound_api.variation_wav(OUTPUT_ROOT / "sounds", sound_id, asked, int(match[1]))
         except (LookupError, ValueError):
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _sound_layers_post(self, action: str, sound_id: str | None = None) -> None:
+        """Layers (viewer/sound_layers_api.py). No model runs in any of these, so none waits
+        for another job. `split` {description}: layers to make. `add` {job_id, try} or
+        {sound_id}: a try or a kept sound as a layer. `mix` {layers}: the stack to hear.
+        `save` {layers, name?}: the stack as one kept sound. `open`: a kept stack to edit."""
+        root = OUTPUT_ROOT / "sounds"
+        try:
+            body = self._small_json(64 * 1024)
+            if action == "split":
+                made = sound_layers_api.split(body)
+            elif action == "add" and body.get("sound_id"):
+                made = sound_layers_api.add_from_kept(root, body.get("sound_id"))
+            elif action == "add":
+                number = body.get("try")
+                if isinstance(number, bool) or not isinstance(number, int):
+                    raise ValueError("say which try to use, or which kept sound")
+                job_id = body.get("job_id")
+                made = sound_layers_api.add_from_try(root, sound_api.MANAGER,
+                                                     job_id if isinstance(job_id, str) and _safe_id(job_id) else None, number)
+            elif action == "mix":
+                made = sound_layers_api.mix(root, body)
+            elif action == "save":
+                made = sound_layers_api.save(root, body)
+            else:
+                made = sound_layers_api.open_kept(root, sound_id)
+        except LookupError as exc:
+            self._send_json(404, {"error": str(exc)})
+            return
+        except ValueError as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        self._send_json(200, {**made, "base": "/output/"})
+
+    def _sound_layers_upload(self) -> None:
+        """"Use my own file": a WAV in field `file`, with `licence` (what you say it is) and
+        `link` (where it's from). Up to 20 MB; refused before it is read if larger."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if not upload_length_ok(length, sound_layers_api.UPLOAD_LIMIT + 64 * 1024):
+            self._refuse(413, f"That file is empty or larger than {sound_layers_api.UPLOAD_LIMIT // (1024 * 1024)} MB.")
+            return
+        try:
+            form = parse_multipart(self.headers.get("Content-Type", ""), self.rfile.read(length))
+            upload = form.get("file") or {}
+            made = sound_layers_api.add_from_file(
+                OUTPUT_ROOT / "sounds", upload.get("filename") or "", upload.get("data") or b"",
+                (form.get("licence") or {}).get("value"), (form.get("link") or {}).get("value"))
+        except ValueError as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        self._send_json(200, made)
+
+    def _sound_layers_get(self, what: str, key: str | None = None) -> None:
+        """A staged layer (`<id>.wav`) or the last mix heard (`mix/<key>.wav`), to play."""
+        try:
+            name = key if key is not None else what
+            if not name.endswith(".wav"):
+                raise LookupError("no such sound")
+            data = (sound_layers_api.mix_wav(name[:-4]) if key is not None
+                    else sound_layers_api.layer_wav(OUTPUT_ROOT / "sounds", name[:-4]))
+        except LookupError:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         self.send_response(HTTPStatus.OK)
@@ -4058,10 +4149,16 @@ class Handler(SimpleHTTPRequestHandler):
             self._footsteps(save=False)
             return
         if parts == ["api", "sound", "defaults"]:
-            self._send_json(200, sound_api.defaults_payload())
+            self._send_json(200, {**sound_api.defaults_payload(), "layers": sound_layers_api.options_payload()})
             return
         if parts == ["api", "sound", "kept"]:
             self._send_json(200, {"base": "/output/", "sounds": sound_api.kept_sounds(OUTPUT_ROOT)})
+            return
+        if len(parts) == 4 and parts[:3] == ["api", "sound", "layers"]:
+            self._sound_layers_get(parts[3])
+            return
+        if len(parts) == 5 and parts[:4] == ["api", "sound", "layers", "mix"]:
+            self._sound_layers_get("mix", parts[4])
             return
         if len(parts) == 4 and parts[:2] == ["api", "sound"]:
             self._sound_job_get(parts[2], parts[3])
