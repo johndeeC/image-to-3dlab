@@ -29,7 +29,7 @@ import request_utils
 from image_to_3dlab import mcp_server
 
 NODE = shutil.which("node")
-PATHS = ["/api/setup/qwen-image/remove", "/api/hf/sign-in", "/api/image", "/api/chains"]
+PATHS = ["/api/setup/qwen-image/remove", "/api/hf/sign-in", "/api/image", "/api/chains", "/api/sound"]
 
 
 @pytest.fixture

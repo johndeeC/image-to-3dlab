@@ -21,6 +21,8 @@ import { createThumbnailRenderer } from './model-thumb-renderer.js';
 import { gearPrompt, kitsWith, tryPlans } from './kit.js';
 import { openKitPane } from './kit-pane.js';
 import { openCanvasPane } from './canvas-pane.js';
+import { openSoundPane, createPlayer, SPEAKER } from './sound-pane.js';
+import { filterSounds, keptMeta, soundsFoot } from './sound.js';
 
 const $ = (id) => document.getElementById(id);
 const LOGO = './studio/mark.svg';
@@ -94,6 +96,8 @@ let viewingStep = null;       // a step id when the viewer shows that step's own
 let viewingSkin = null;       // a skin id when the viewer shows one of the model's skins
 const openFamilies = new Set();  // families whose versions are listed under their row
 let kits = [];             // kits: a character and its gear (viewer/kits_api.py)
+let sounds = [];           // kept sounds (viewer/sound_api.py): a list of their own, played in place
+const soundPlayer = createPlayer(() => { if (filter === 'sounds') renderLibrary(); });
 let kitPane = null, openKitId = null;
 const kitQueue = [];       // Redo / ×2-×4 tries waiting their turn: the studio runs one thing at a time
 let kitReturn = null;      // the kit to reopen once its tries are done
@@ -162,9 +166,33 @@ function kitRows() {
   }).join('');
 }
 
+function soundRows() {
+  const list = filterSounds(sounds, query);
+  if (!list.length) return `<li class="empty-lib">${sounds.length ? 'Nothing matches.' : 'No sounds yet. Press Sound to make your first.'}</li>`;
+  return list.map((sound) => {
+    const source = url(sound.file);
+    return `<li><button class="asset sound" data-sound="${escape(source)}" title="${escape(sound.prompt || '')}" aria-pressed="${soundPlayer.playing === source}">
+      <span class="thumb">${SPEAKER}</span>
+      <span style="min-width:0"><span class="nm">${escape(sound.name)}</span><span class="st">${escape(keptMeta(sound))}${soundPlayer.playing === source ? ' · playing' : ''}</span></span></button></li>`;
+  }).join('');
+}
+
+async function refreshSounds() {
+  try {
+    const response = await fetch('/api/sound/kept');
+    if (response.ok) sounds = (await response.json()).sounds || [];
+  } catch { /* the Library still shows everything else */ }
+  if (filter === 'sounds') renderLibrary();
+}
+
 function renderLibrary() {
   if (!libraryReady) return;
   renderEngineChoices();
+  if (filter === 'sounds') {
+    $('assetList').innerHTML = makingRow() + soundRows();
+    $('libFoot').textContent = soundsFoot(sounds);
+    return;
+  }
   if (filter === 'kits') {
     $('assetList').innerHTML = makingRow() + kitRows();
     $('libFoot').textContent = `${kits.length} kit${kits.length === 1 ? '' : 's'} · saved in output/ on this machine`;
@@ -500,6 +528,8 @@ function show(asset) {
 $('assetList').addEventListener('click', (event) => {
   const kitRow = event.target.closest('[data-kit]');
   if (kitRow) { openKit(kitRow.dataset.kit); return; }
+  const soundRow = event.target.closest('[data-sound]');
+  if (soundRow) { soundPlayer.toggle(soundRow.dataset.sound).catch(() => {}); return; }
   const toggle = event.target.closest('[data-family]');
   if (toggle) {
     const key = toggle.dataset.family;
@@ -584,6 +614,7 @@ function renderHideButton() {
 document.querySelectorAll('.seg [data-filter]').forEach((button) => {
   button.onclick = () => {
     filter = button.dataset.filter;
+    if (filter === 'sounds') refreshSounds(); else soundPlayer.stop();
     document.querySelectorAll('.seg [data-filter]').forEach((b) => b.setAttribute('aria-pressed', String(b === button)));
     renderLibrary();
   };
@@ -754,6 +785,12 @@ async function useLibraryPicture(asset) {
 $('createBtn').addEventListener('click', () => {
   if (making && !making.failed && !making.finished) { showMaking(); return; }
   openCreateSheet();
+});
+
+// ------------------------------------------------------------------ Sound (docs/sound.md)
+$('soundBtn').addEventListener('click', () => {
+  soundPlayer.stop();
+  openSoundPane({ stage: $('stage'), on: { kept: refreshSounds } });
 });
 
 // ------------------------------------------------------------------ Canvas (docs/canvas.md)

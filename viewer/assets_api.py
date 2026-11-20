@@ -36,7 +36,7 @@ FINISH_RUN = re.compile(r"^[A-Za-z0-9_-]{1,80}__finish__\d{8}-\d{6}(?:-\d+)?$")
 RIG_RUN = re.compile(r"^[A-Za-z0-9_-]{1,80}__rig__\d{8}-\d{6}(?:-\d+)?$")
 PROPS_RUN = re.compile(r"^[A-Za-z0-9_-]{1,80}__props__\d{8}-\d{6}(?:-\d+)?$")
 # Folders under output/ that hold other steps' runs, not 3D generations.
-NOT_GENERATED = {"finish", "props", "images", "rig-rebind", "animate", "skins"}
+NOT_GENERATED = {"finish", "props", "images", "rig-rebind", "animate", "skins", "sounds"}
 # A second take of a preset (`_b`) is a choice between versions, not another move -- unless that
 # take became the move itself (wave_b, fight_stance_b, ...): the shipped move list says which.
 TAKE_SUFFIX = re.compile(r"_[b-z]$")
@@ -662,7 +662,11 @@ def set_name(output: Path, asset_id: str, name: str) -> str:
 
 def assets_payload(output: Path) -> dict[str, Any]:
     """What `GET /api/assets` sends: the list, plus where its relative paths are served."""
-    return {"base": "/output/", "stages": list(STAGES), "assets": list_assets(output)}
+    # imported here, so this module still loads on its own, without the viewer folder on the path
+    import sound_api
+
+    return {"base": "/output/", "stages": list(STAGES), "assets": list_assets(output),
+            "sounds": sound_api.kept_sounds(output)}
 
 
 THUMBS_DIR = ".thumbs"

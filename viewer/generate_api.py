@@ -45,6 +45,7 @@ import notices_api
 import preview_api
 import request_utils
 import skins_api
+import sound_api
 import studio_auth
 import tool_jobs
 import usage_api
@@ -1549,6 +1550,9 @@ def _terminate_active_job() -> None:
     skin_job = skins_api.BUILDS.jobs.get(skins_api.BUILDS.active) if skins_api.BUILDS.active else None
     if skin_job is not None and skin_job.process is not None and skin_job.process.poll() is None:
         _killpg_if_alive(skin_job.process.pid)
+    sound = sound_api.MANAGER.jobs.get(sound_api.MANAGER.active) if sound_api.MANAGER.active else None
+    if sound is not None and sound.process is not None and sound.process.poll() is None:
+        _killpg_if_alive(sound.process.pid)
     for download in DOWNLOADS.values():
         if download.process is not None and download.process.poll() is None:
             _killpg_if_alive(download.process.pid)
@@ -1583,13 +1587,14 @@ HEAVY_JOBS: dict[str, Callable[[], bool]] = {
     "rebind": lambda: _running(RIG_JOBS),
     "animate": lambda: _animate_running(),
     "skin": lambda: skins_api.BUILDS.running(),
+    "sound": lambda: _running(sound_api.MANAGER),
 }
 BUSY_WORDS = {
     "setup": "setup is running", "generate": "a generation is running",
     "image": "a picture is being made", "finish": "a model is being finished",
     "props": "a prop sheet is baking", "rebind": "a rig rebind is running",
     "animate": "an auto-rig or animation is running",
-    "skin": "a skin is being made",
+    "skin": "a skin is being made", "sound": "a sound is being made",
 }
 
 
@@ -3133,6 +3138,12 @@ class Handler(SimpleHTTPRequestHandler):
         if parts == ["api", "image"]:
             self._create_image_job()
             return
+        if parts == ["api", "sound"]:
+            self._create_sound_job()
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "sound"] and parts[3] in {"cancel", "keep"}:
+            self._sound_job_post(parts[2], parts[3])
+            return
         if parts == ["api", "image", "back"]:
             self._create_back_job()
             return
@@ -3458,6 +3469,91 @@ class Handler(SimpleHTTPRequestHandler):
             "events_url": f"/api/image/{job.id}/events",
             "status_url": f"/api/image/{job.id}/status",
         })
+
+    # ------------------------------------------------------------------ sound
+    def _create_sound_job(self) -> None:
+        """Start "Make a sound": {prompt, seconds?, leave_out?, count?, seed?, name?}. Never
+        downloads: with the engine missing it answers 503 and points at Setup."""
+        try:
+            payload = self._small_json(64 * 1024)
+        except ValueError as exc:
+            self._send_json(400, {"error": f"could not read the request: {exc}"})
+            return
+        try:
+            engine = sound_api.pick_engine(str(payload.get("engine") or "") or None)
+            sound_api.clean_request(payload, engine)     # a bad request is refused before "busy" or "not set up"
+        except ValueError as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        try:
+            sound_api.check_ready(engine)
+        except sound_api.MissingSound as exc:
+            self._send_json(503, {"error": str(exc), "needs_setup": True, "missing": exc.missing,
+                                  "setup_id": engine.setup_id})
+            return
+        waiting = busy_reason("sound")
+        if waiting:
+            self._send_json(409, {"error": waiting})
+            return
+        try:
+            job = sound_api.start(payload, engine)
+        except ValueError as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        except RuntimeError as exc:
+            self._send_json(409, {"error": str(exc)})
+            return
+        self._send_json(202, {
+            "job_id": job.id, "seed": job.request["seed"], "count": job.request["count"],
+            "events_url": f"/api/sound/{job.id}/events",
+            "status_url": f"/api/sound/{job.id}/status",
+        })
+
+    def _sound_job(self, job_id: str):
+        return sound_api.MANAGER.jobs.get(job_id) if _safe_id(job_id) else None
+
+    def _sound_job_post(self, job_id: str, action: str) -> None:
+        job = self._sound_job(job_id)
+        if job is None:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        if action == "cancel":
+            if not sound_api.MANAGER.cancel(job_id):
+                self._send_json(409, {"error": "that sound is not being made"})
+                return
+            self._send_json(202, {"job_id": job_id, "status": "cancelling"})
+            return
+        try:
+            body = self._small_json()
+            kept = sound_api.MANAGER.keep(job_id, int(body.get("try", 0)), str(body.get("name") or "") or None)
+        except (ValueError, TypeError) as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        self._send_json(200, {**kept, "base": "/output/"})
+
+    def _sound_job_get(self, job_id: str, what: str) -> None:
+        job = self._sound_job(job_id)
+        if job is None:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        if what == "events":
+            self._stream_events(job)
+            return
+        if what == "status":
+            self._send_json(200, job.describe())
+            return
+        match = re.fullmatch(r"try-([1-9])\.wav", what)
+        made = match and next((t for t in job.tries if t["number"] == int(match[1])), None)
+        if not made or not job.try_file(made["number"]).is_file():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        data = job.try_file(made["number"]).read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
 
     # ------------------------------------------------------------------ skins
     def _small_json(self, limit: int = 8192) -> dict[str, Any]:
@@ -3897,6 +3993,15 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(data)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        if parts == ["api", "sound", "defaults"]:
+            self._send_json(200, sound_api.defaults_payload())
+            return
+        if parts == ["api", "sound", "kept"]:
+            self._send_json(200, {"base": "/output/", "sounds": sound_api.kept_sounds(OUTPUT_ROOT)})
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "sound"]:
+            self._sound_job_get(parts[2], parts[3])
             return
         if parts == ["api", "image", "versions"]:
             try:
