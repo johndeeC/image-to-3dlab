@@ -575,3 +575,69 @@ def test_a_24_bit_stereo_wav_at_another_rate_becomes_one_channel_at_48k():
 def test_a_file_that_cannot_be_read_is_refused_in_plain_words(data, said):
     with pytest.raises(sp.SoundProblem, match=said):
         sp.import_wav(data)
+
+
+# ----------------------------------------------------------------------------- voice lines
+
+def speech(seconds=2.0, level=0.1, pause=0.5):
+    """Something shaped like talking: bursts of tone with silence between them."""
+    word, gap = sine(0.3, 180.0, level=level), np.zeros(int(pause * sp.RATE), np.float32)
+    count = max(1, int(seconds / 0.3))
+    return np.concatenate([part for _ in range(count) for part in (word, gap)])
+
+
+def test_a_voice_line_is_measured_while_speaking_not_through_its_pauses():
+    talking, spaced = speech(pause=0.0), speech(pause=0.5)
+    assert sp.speech_level_db(talking) == pytest.approx(sp.speech_level_db(spaced), abs=0.3)
+    # the plain average is dragged down by the pauses; that is why it is not used for speech
+    assert sp.loudness_db(spaced) < sp.speech_level_db(spaced) - 3
+    assert sp.speech_level_db(sine(0.2)) is None                       # too short to measure
+    assert sp.speech_level_db(np.zeros(sp.RATE, np.float32)) is None
+
+
+@pytest.mark.parametrize("level", [0.02, 0.1, 0.4])
+def test_lines_come_out_at_the_same_level_however_loud_the_engine_made_them(level):
+    line, facts = sp.level_voice(speech(level=level))
+    assert sp.speech_level_db(line) == pytest.approx(sp.VOICE_LEVEL_DB, abs=0.2)
+    assert facts["target"] == -16.0 and facts["set_by"] == "level" and not facts["held_by_peak"]
+    assert facts["level"] == pytest.approx(-16.0, abs=0.2) and sp.peak_of(line) <= sp.PEAK
+
+
+def test_a_shout_stays_louder_than_a_plain_line_and_a_whisper_quieter():
+    raw = speech()
+    levels = {how: sp.speech_level_db(sp.level_voice(raw, how)[0])
+              for how in ("whisper", "sad", "calm", None, "angry", "excited", "shout")}
+    assert levels["whisper"] < levels["calm"] < levels[None] < levels["angry"] < levels["shout"]
+    assert levels["shout"] - levels["whisper"] == pytest.approx(13.0, abs=0.3)
+    assert sp.voice_target_db("Shout") == -12.0 and sp.voice_target_db("like a tired old wizard") == -16.0
+
+
+def test_a_line_that_would_clip_is_held_at_the_peak_instead():
+    spiky = speech(level=0.05)
+    spiky[100] = 0.9                                     # one sharp sample, far over the rest
+    line, facts = sp.level_voice(spiky, "shout")
+    assert facts["held_by_peak"] is True and sp.peak_of(line) == pytest.approx(sp.PEAK, abs=1e-3)
+    assert sp.speech_level_db(line) < sp.voice_target_db("shout")
+
+
+def test_a_very_short_line_is_set_by_its_peak_and_silence_is_left_alone():
+    line, facts = sp.level_voice(sine(0.2, level=0.05))
+    assert facts["set_by"] == "peak" and facts["measured"] is None and facts["level"] is None
+    assert sp.peak_of(line) == pytest.approx(10 ** ((-16.0 + 12.0) / 20), rel=0.01)
+    quiet, _ = sp.level_voice(sine(0.2, level=0.05), "whisper")
+    assert sp.peak_of(quiet) < sp.peak_of(line)
+    silent, facts = sp.level_voice(np.zeros(4800, np.float32))
+    assert not silent.any() and facts["gain_db"] == 0.0
+
+
+def test_a_fresh_voice_line_is_cleaned_in_one_go():
+    raw = np.concatenate([np.zeros(2400, np.float32), speech(level=0.05)[: 24_000 * 2 // 2 * 2], np.zeros(2400, np.float32)])
+    line, post = sp.clean_voice(raw, 24_000, "whisper")
+    assert line.dtype == np.float32 and post["trimmed"] is True and post["loudness"]["target"] == -25.0
+    assert sp.speech_level_db(line) == pytest.approx(-25.0, abs=0.3)
+    assert post["gain_db"] == post["loudness"]["gain_db"] and {"trim", "fade_ms", "peak", "tail_s"} <= set(post)
+    assert sp.inspect(line, sp.RATE)["seconds"] > 0.5
+    with pytest.raises(sp.SoundProblem, match="empty"):
+        sp.clean_voice(np.zeros(0, np.float32), 24_000)
+    with pytest.raises(sp.SoundProblem, match="broken"):
+        sp.clean_voice(np.array([0.1, np.nan], np.float32), 24_000)

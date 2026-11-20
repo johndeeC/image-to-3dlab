@@ -28,6 +28,12 @@ and pitch, they are summed, and the sum passes through `limit_peak` once. A laye
 brought back up to full volume after its volume was chosen. `import_wav` reads a file someone
 brings (16- or 24-bit WAV) into the same one channel at 48 kHz.
 
+Voice lines have their own volume rule (`level_voice`, `clean_voice`): a line is set by how
+loud it is **while someone is speaking**, about -16 dB, so lines said one after another sit
+level. How a line is said moves that mark (`VOICE_DIRECTION_DB`): a whisper sits 9 dB under a
+plain line and a shout 4 dB over, so a shout stays louder than a whisper. Nothing is ever
+clipped: a line that would pass the peak is held there instead.
+
 Ported from the `postprocess_wav` / `inspect_wav` pair in our older ai-sfx project (trim at
 0.3% of the peak, 5 ms fades, peak 0.98, 16-bit, refuse empty or broken audio).
 """
@@ -95,6 +101,18 @@ LAYER_WORDS = {"start_ms": "Starts at", "volume_db": "Volume", "pitch_semitones"
 LAYER_UNITS = {"start_ms": "ms", "volume_db": "dB", "pitch_semitones": "semitones"}
 MAX_IMPORT_SECONDS = 30.0      # a file brought in as a layer: an effect, not a song
 IMPORT_BITS = (16, 24)
+
+
+# Voice lines. Level is the average power of the parts where someone is speaking, in dB
+# below full scale: pauses between words would otherwise drag the number down.
+VOICE_LEVEL_DB = -16.0         # where a plainly said line sits
+VOICE_DIRECTION_DB = {         # how far "How it's said" moves that, so a shout beats a whisper
+    "whisper": -9.0, "calm": -3.0, "sad": -3.0, "angry": 2.0, "excited": 2.0, "shout": 4.0,
+}
+VOICE_BLOCK_MS = 50.0          # the line is measured in pieces this long...
+VOICE_GATE_DB = 30.0           # ...and pieces this far under the loudest one are pauses
+VOICE_SHORT_S = 0.4            # less speech than this is too little to measure: set by peak
+VOICE_CREST_DB = 12.0          # speech's loudest sample sits about this far over its level
 
 
 class SoundProblem(ValueError):
@@ -519,6 +537,80 @@ def loudness_db(samples: np.ndarray) -> float | None:
     data = np.asarray(samples, dtype=np.float64)
     rms = float(np.sqrt(np.mean(data * data))) if data.size else 0.0
     return round(20.0 * math.log10(rms), 2) if rms > 0 else None
+
+
+def speech_level_db(samples: Any, rate: int = RATE) -> float | None:
+    """How loud a voice line is while someone is speaking, in dB below full scale: the average
+    power of its 50 ms pieces, leaving out the pauses (pieces 30 dB under the loudest one).
+    None when there is under 0.4 s of speech, or none at all: too little to measure."""
+    data = np.asarray(samples, dtype=np.float64).reshape(-1)
+    size = max(1, int(rate * VOICE_BLOCK_MS / 1000.0))
+    count = data.size // size
+    if not count:
+        return None
+    power = (data[: count * size].reshape(count, size) ** 2).mean(axis=1)
+    loudest = float(power.max())
+    if loudest <= SILENT_PEAK ** 2:
+        return None
+    spoken = power[power >= loudest * 10.0 ** (-VOICE_GATE_DB / 10.0)]
+    if spoken.size * size < VOICE_SHORT_S * rate:
+        return None
+    return round(10.0 * math.log10(float(spoken.mean())), 2)
+
+
+def voice_target_db(direction: str | None = None) -> float:
+    """Where a line said this way sits. Words that are not one of ours (free text) sit with a
+    plainly said line."""
+    return VOICE_LEVEL_DB + VOICE_DIRECTION_DB.get(str(direction or "").strip().lower(), 0.0)
+
+
+def level_voice(samples: Any, direction: str | None = None, *, rate: int = RATE,
+                peak: float = PEAK) -> tuple[np.ndarray, dict[str, Any]]:
+    """A voice line at its standard volume, up or down. Returns (the line, what was done).
+
+    The mark is `voice_target_db(direction)`. A line too short to measure is set by its
+    loudest sample instead, 12 dB over that mark (about where speech peaks). Either way it is
+    never turned up by more than `MAX_BOOST_DB`, and never past `peak`: a line that would clip
+    is held at the peak instead (`held_by_peak`), so a shout is as loud as the file allows.
+    """
+    data = np.asarray(samples, dtype=np.float32)
+    target = voice_target_db(direction)
+    measured, loudest = speech_level_db(data, rate), peak_of(data)
+    facts: dict[str, Any] = {"target": target, "measured": measured, "peak": round(loudest, 4), "gain_db": 0.0,
+                             "measure": "average power while speaking, dB below full scale",
+                             "set_by": "level", "held_by_peak": False}
+    if loudest < SILENT_PEAK:
+        return data.copy(), facts
+    if measured is None:
+        facts["set_by"] = "peak"
+        gain_db = target + VOICE_CREST_DB - 20.0 * math.log10(loudest)
+    else:
+        gain_db = target - measured
+    gain_db = min(gain_db, MAX_BOOST_DB)
+    room_db = 20.0 * math.log10(peak / loudest)
+    if gain_db > room_db:
+        gain_db, facts["held_by_peak"] = room_db, True
+    out = change_volume(data, gain_db)
+    facts.update(gain_db=round(gain_db, 2), peak=round(peak_of(out), 4),
+                 level=None if measured is None else round(measured + gain_db, 2))
+    return out, facts
+
+
+def clean_voice(samples: Any, rate: int, direction: str | None = None, *,
+                channels_first: bool = False, fade_ms: float = FADE_MS) -> tuple[np.ndarray, dict[str, Any]]:
+    """Everything a fresh voice line needs, in order: one channel, 48 kHz, the silence cut
+    from both ends, short fades, then its volume (`level_voice`). Returns (mono float32 at
+    48 kHz, the record's `post` block, with the volume facts under `loudness`)."""
+    data = to_mono(samples, channels_first=channels_first)
+    if not data.size:
+        raise SoundProblem("the engine made an empty line")
+    if not np.isfinite(data).all():
+        raise SoundProblem("the engine made a broken line (it has values that are not numbers)")
+    data, trimmed = trim_silence(resample(data, rate, RATE))
+    data, loudness = level_voice(fade(data, RATE, fade_ms), direction)
+    return data, {"trim": True, "trimmed": trimmed, "fade_ms": float(fade_ms), "peak": float(PEAK),
+                  "gain_db": loudness["gain_db"], "tail_s": 0.0, "fade_out_ms": float(fade_ms),
+                  "loudness": loudness}
 
 
 def check_layer_numbers(layer: dict[str, Any]) -> dict[str, float]:
