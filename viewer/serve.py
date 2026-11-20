@@ -52,6 +52,9 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
     daemon_threads = True
     allow_reuse_address = True
+    # A proxy (tailscale serve, cloudflared) opens one connection per module at once; the
+    # default backlog of 5 refused the rest and the page never finished loading.
+    request_queue_size = 128
 
     def handle_error(self, request, client_address) -> None:
         # A browser that closes a tab or cancels a download mid-response is normal, not an

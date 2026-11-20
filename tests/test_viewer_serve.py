@@ -111,3 +111,10 @@ def test_the_browser_opens_before_the_server_joins_its_job(monkeypatch, tmp_path
     monkeypatch.setattr(serve.processes, "kill_children_with_this_process", lambda: calls.append("job"))
     assert serve.main() == 0
     assert calls == ["browser", "job"]
+
+
+def test_the_server_queues_a_burst_of_connections_from_a_proxy():
+    # Behind tailscale serve (or any HTTP/2 proxy) a page's twenty-odd modules arrive at once,
+    # one backend connection each. socketserver's default backlog of 5 refused the rest, and
+    # the proxy answered them 502/503: the studio hung on "Loading your assets".
+    assert serve.ThreadingHTTPServer.request_queue_size >= 128

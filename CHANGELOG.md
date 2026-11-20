@@ -68,6 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Asking for a second run names the canvas that is busy.
 
 ### Fixed
+- The studio loads through a tunnel (tailscale serve, cloudflared): it hung on "Loading your
+  assets" because the lab turned away all but five of the page's files when they arrived at once.
 - Canvas engine menus say which engine each choice is: "Best detail · Pixal3D", "Fastest, rough ·
   Stable Fast 3D", with a line under the menu on what the chosen one is good for.
 - Model thumbnails (the Library, the canvas) show shiny metal as metal: they were drawn
