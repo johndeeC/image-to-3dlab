@@ -153,10 +153,10 @@ def test_near_silence_is_not_boosted_so_the_silence_check_still_refuses_it():
         sp.inspect(sound, sp.RATE)
 
 
-@pytest.mark.parametrize("asked,most,want", [(1.0, 30.0, 1.5), (0.5, 30.0, 1.0), (4.0, 30.0, 6.0),
-                                             (25.0, 30.0, 30.0), (30.0, 30.0, 30.0), (1.5, 30.0, 2.25)])
+@pytest.mark.parametrize("asked,most,want", [(1.0, 30.0, 2.0), (0.5, 30.0, 1.5), (4.0, 30.0, 8.0),
+                                             (25.0, 30.0, 30.0), (30.0, 30.0, 30.0), (1.5, 30.0, 3.0)])
 def test_the_engine_is_asked_for_room_for_a_tail(asked, most, want):
-    """Half as long again, at least half a second more, never past the engine's most."""
+    """Twice as long, at least a second more, never past the engine's most."""
     assert sp.seconds_with_tail(asked, most) == pytest.approx(want, abs=0.051)
     assert asked <= sp.seconds_with_tail(asked, most) <= most
 
@@ -175,13 +175,28 @@ def test_a_sound_still_ringing_at_the_cut_keeps_its_tail_until_it_has_died_away(
 def test_a_long_ring_runs_to_the_end_of_the_room_it_was_given_and_fades():
     raw = ring(1.5, half_life=0.25)                     # 24 dB down at 1.0 s, 36 dB down at 1.5 s
     kept, tail_s, fade_out = sp.keep_tail(raw, 1.0)
-    assert kept.size == raw.size and tail_s == pytest.approx(0.5) and fade_out == sp.TAIL_FADE_MS
+    assert kept.size == raw.size and tail_s == pytest.approx(0.5)
+    assert fade_out == pytest.approx(200.0)              # still going: a long fade, 40% of the tail
     sound, post = sp.clean(raw, sp.RATE, asked_seconds=1.0)
-    assert post["tail_s"] == pytest.approx(0.5) and post["fade_out_ms"] == sp.TAIL_FADE_MS
+    assert post["tail_s"] == pytest.approx(0.5) and post["fade_out_ms"] == pytest.approx(200.0)
     assert abs(sound.size - raw.size) <= 2 and sound[-1] == 0.0
-    frames = int(sp.TAIL_FADE_MS * sp.RATE / 1000)
+    frames = int(200 * sp.RATE / 1000)
     half_way = np.abs(sound[-frames:-frames // 2]).max() / np.abs(sound[-2 * frames:-frames]).max()
     assert 0.3 < half_way < 1.0                          # a slope, not a cliff
+
+
+def test_the_long_fade_is_never_more_than_300_ms():
+    _, tail_s, fade_out = sp.keep_tail(ring(3.0, half_life=0.5), 1.0)       # 2 s of tail, never quiet
+    assert tail_s == pytest.approx(2.0) and fade_out == sp.LONG_FADE_MS == 300.0
+
+
+def test_a_long_fade_out_is_a_smooth_curve():
+    faded = sp.fade(np.ones(sp.RATE, np.float32), out_ms=300.0)
+    frames = int(0.3 * sp.RATE)
+    assert faded[-1] == 0.0 and faded[-frames - 1] == 1.0
+    assert faded[-frames // 2] == pytest.approx(0.5, abs=0.01)
+    assert 1.0 - faded[-frames + 20] < 1e-4                      # it leaves full volume gently
+    assert faded[240] == 1.0 and 0.4 < faded[120] < 0.6          # the fade-in is still the short straight one
 
 
 def test_a_sound_already_quiet_at_the_cut_ends_as_before():
@@ -197,12 +212,14 @@ def test_a_sound_already_quiet_at_the_cut_ends_as_before():
 def test_a_steady_sound_is_not_made_longer_only_faded_out():
     """Rain does not die away, so more of it is not a tail: it ends where asked, on a slope."""
     kept, tail_s, fade_out = sp.keep_tail(sine(seconds=1.5), 1.0)
-    assert kept.size == sp.RATE and tail_s == 0.0 and fade_out == sp.TAIL_FADE_MS
+    assert kept.size == sp.RATE and tail_s == 0.0 and fade_out == sp.LONG_FADE_MS
+    short, _, short_fade = sp.keep_tail(sine(seconds=1.0), 0.5)
+    assert short.size == sp.RATE // 2 and short_fade == pytest.approx(200.0)     # 40% of a short sound
 
 
-def test_with_no_room_a_ringing_sound_still_gets_the_longer_fade():
+def test_with_no_room_a_ringing_sound_still_gets_the_long_fade():
     kept, tail_s, fade_out = sp.keep_tail(ring(1.0), 1.0)
-    assert kept.size == sp.RATE and tail_s == 0.0 and fade_out == sp.TAIL_FADE_MS
+    assert kept.size == sp.RATE and tail_s == 0.0 and fade_out == sp.LONG_FADE_MS
 
 
 def test_the_fade_out_can_be_longer_than_the_fade_in():

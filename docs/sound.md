@@ -215,7 +215,7 @@ still drops it. Never clipped. This is for fresh sounds only. Once volumes mean 
 (a variation set, a mix of layers) a sound is only ever turned down.
 
 **Tails.** A coin ding asked for at 1 second is still ringing at 1 second. The engine makes
-30 seconds every time anyway, so we ask it for extra: half as long again, at least half a
+30 seconds every time anyway, so we ask it for extra at no cost: as much again, at least a
 second more, never past 30 in all. The words it is given still say the length you asked
 for, so the sound itself does not change. Then:
 
@@ -224,7 +224,9 @@ for, so the sound itself does not change. Then:
 - Not that quiet by the end of the extra, but at least 6 dB down: all the extra is kept.
 - Not dying away at all (rain, an engine): it ends at the length asked. More is not a tail.
 
-Whatever was still going where it ends gets a 30 millisecond fade-out, not a hard cut. So
+A tail that died away ends on a 30 millisecond fade-out. A sound cut while it is still
+going (the last two) gets a long, smooth one so it does not sound chopped: up to 300
+milliseconds, and no more than 40% of the tail kept or, for a steady sound, of the sound. So
 a sound can be a little longer than asked; the sheet and the Library show its real length.
 The record says what happened: `gain_db` (how far the volume moved), `tail_s` (seconds kept
 past the length asked) and `fade_out_ms`; the length asked is `seconds_asked` on the layer.

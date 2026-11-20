@@ -222,7 +222,7 @@ def test_one_sound_is_cleaned_checked_and_written_with_its_record(tmp_path):
     facts = runner.make_one(pipe, api.MOSS, request, 1, tmp_path / "s", lambda event, **f: said.append((event, f)))
 
     # the words carry the length asked for; the engine is asked for more, to leave room for a tail
-    assert pipe.calls == [{"prompt": request["prompt"] + " duration: 1.5s", "seconds": 2.2, "steps": 100,
+    assert pipe.calls == [{"prompt": request["prompt"] + " duration: 1.5s", "seconds": 3.0, "steps": 100,
                            "cfg": 4.0, "seed": 7, "negative": "music, voices", "suffix": False}]
     assert [f["step"] for e, f in said if e == "step"] == list(range(1, 101))
     wav = tmp_path / "s" / "sound.wav"
@@ -287,8 +287,8 @@ def test_a_ringing_try_runs_past_the_length_asked_and_the_record_says_so(tmp_pat
     facts = runner.make_one(bell, api.MOSS, request, 1, tmp_path, lambda *a, **k: None)
     record = json.loads((tmp_path / "sound.provenance.json").read_text())
     (call,) = bell.calls
-    assert call["seconds"] == 1.5 and call["suffix"] is False and call["prompt"].endswith(" duration: 1.0s")
-    assert 1.0 < facts["seconds"] <= 1.5                          # the real length, not the one asked
+    assert call["seconds"] == 2.0 and call["suffix"] is False and call["prompt"].endswith(" duration: 1.0s")
+    assert 1.0 < facts["seconds"] <= 2.0                          # the real length, not the one asked
     assert record["output"]["seconds"] == facts["seconds"]
     assert record["layers"][0]["source"]["seconds_asked"] == 1.0
     assert record["post"]["tail_s"] == pytest.approx(facts["seconds"] - 1.0, abs=0.01)
