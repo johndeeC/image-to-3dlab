@@ -36,6 +36,7 @@ import activity_api
 import backend_catalog
 import bug_report_api
 import fixspot_api
+import footsteps_api
 import graph_api
 import hf_api
 import image_api
@@ -3147,6 +3148,9 @@ class Handler(SimpleHTTPRequestHandler):
         if len(parts) == 4 and parts[:2] == ["api", "sounds"] and parts[3] in {"variations", "set"}:
             self._sound_variations_post(parts[2], save=parts[3] == "set")
             return
+        if parts == ["api", "footsteps"]:
+            self._footsteps(save=True)
+            return
         if parts == ["api", "image", "back"]:
             self._create_back_job()
             return
@@ -3593,6 +3597,24 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _footsteps(self, *, save: bool) -> None:
+        """Footsteps on a move. GET ?file=<a move under output/> finds the steps and writes
+        nothing. POST {file, sound_id?, on?} finds them and saves `<move>.cues.json` beside the
+        move. No model runs, so neither waits for another job."""
+        try:
+            if save:
+                found = footsteps_api.save(OUTPUT_ROOT, self._small_json())
+            else:
+                asked = parse_qs(urlparse(self.path).query).get("file", [""])[0]
+                found = footsteps_api.find(OUTPUT_ROOT, asked)
+        except LookupError as exc:
+            self._send_json(404, {"error": str(exc)})
+            return
+        except ValueError as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        self._send_json(200, {**found, "base": "/output/"})
+
     # ------------------------------------------------------------------ skins
     def _small_json(self, limit: int = 8192) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0") or 0)
@@ -4031,6 +4053,9 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(data)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        if parts == ["api", "footsteps"]:
+            self._footsteps(save=False)
             return
         if parts == ["api", "sound", "defaults"]:
             self._send_json(200, sound_api.defaults_payload())
