@@ -95,7 +95,8 @@ USED = {"api/chains", "api/chains/*/cancel", "api/setup/*/download", "api/reveal
         "api/skins", "api/skins/*/try", "api/skins/*/approve", "api/skins/*/build", "api/skins/build/*/cancel",
         "api/image/brush", "api/image/versions/use", "api/image/versions/delete",
         "api/kits", "api/kits/*/add",
-        "api/graphs", "api/graphs/check", "api/graphs/*/run", "api/graph-runs/*/cancel"}
+        "api/graphs", "api/graphs/check", "api/graphs/*/run", "api/graph-runs/*/cancel",
+        "api/sound", "api/sound/*/keep", "api/sound/*/cancel"}
 
 
 class StudioError(RuntimeError):
@@ -900,7 +901,7 @@ def list_engines(studio: Studio) -> list[dict[str, Any]]:
     out = []
     for b in sorted(catalog.get("backends", []), key=lambda b: (b.get("kind") != "3d", b.get("rank", 99))):
         out.append({k: v for k, v in {
-            "id": b["id"], "label": b.get("label"), "makes": "3D models" if b.get("kind") == "3d" else "pictures",
+            "id": b["id"], "label": b.get("label"), "makes": {"3d": "3D models", "sound": "sounds"}.get(b.get("kind"), "pictures"),
             "state": b.get("state"), "recommended": b.get("recommended") or None, "best_for": b.get("best_for"),
             "licence": (b.get("license") or {}).get("name"), "caveat": b.get("caveat"),
             "download_size": b.get("human_expected"), "runs_here": b.get("supported_here"),
@@ -1123,7 +1124,18 @@ def cancel_run(studio: Studio, *, run_id: str) -> dict[str, Any]:
             "note": None if result.get("cancelled") else "It was not running (already finished, failed or cancelled)."}
 
 
+def sound_summary(sound: dict[str, Any]) -> dict[str, Any]:
+    return {"id": sound.get("id"), "name": sound.get("name"), "kind": "sound", "sound_kind": sound.get("sound_kind"),
+            "seconds": sound.get("seconds"), "prompt": sound.get("prompt"), "licence": sound.get("licence"),
+            "file": str(REPO / "output" / sound["file"]) if sound.get("file") else None}
+
+
 def list_assets(studio: Studio, *, search: str = "", kind: str | None = None, limit: int = 20) -> dict[str, Any]:
+    if kind == "sound":   # kept sounds: a list of their own, beside the pictures and models
+        sounds = studio.get("api/sound/kept")["sounds"]
+        words = search.lower().split()
+        sounds = [s for s in sounds if all(w in f"{s.get('name', '')} {s.get('prompt') or ''}".lower() for w in words)]
+        return {"total": len(sounds), "assets": [sound_summary(s) for s in sounds[: max(1, min(limit, 100))]]}
     assets = [a for a in studio.get("api/assets")["assets"] if not a.get("hidden")]
     if kind:
         assets = [a for a in assets if a.get("kind") == kind]
@@ -1209,6 +1221,53 @@ def picture_status(studio: Studio, *, job_id: str, wait_seconds: int = 0,
         if job.get("status") in {"done", "error", "cancelled"} or time.monotonic() >= deadline:
             return {k: job.get(k) for k in ("status", "error", "picture", "elapsed_seconds")}
         sleep(5)
+
+
+def sound_job_summary(job: dict[str, Any]) -> dict[str, Any]:
+    """A sound job for an agent: where it is, and each try with the full path once it is kept."""
+    tries = [{"try": t.get("number"), "seed": t.get("seed"), "seconds": t.get("seconds"),
+              "kept": str(REPO / "output" / t["kept"]) if t.get("kept") else None}
+             for t in job.get("tries") or []]
+    return {k: v for k, v in {"job_id": job.get("job_id"), "status": job.get("status"), "error": job.get("error"),
+                              "description": job.get("prompt"), "seconds": job.get("seconds"),
+                              "seed": job.get("seed"), "tries": tries,
+                              "elapsed_seconds": job.get("elapsed_seconds")}.items() if v is not None}
+
+
+def make_sound(studio: Studio, *, description: str, seconds: float | None = None,
+               leave_out: list[str] | None = None, tries: int = 4, seed: int | None = None) -> dict[str, Any]:
+    """Start a batch of sound effects from a description. Never downloads the engine."""
+    body = {"prompt": description, "count": tries, "leave_out": list(leave_out or [])}
+    if seconds is not None:
+        body["seconds"] = seconds
+    if seed is not None:
+        body["seed"] = seed
+    started = studio.post_json("api/sound", body)
+    return {"job_id": started["job_id"], "seed": started.get("seed"), "tries": started.get("count"),
+            "next": "Takes a few minutes: sound_status(job_id, wait_seconds=50) until done. Then ask the user "
+                    "which try to keep (they can listen in the studio's Sound page) and call "
+                    "sound_status(job_id, keep=<try>)."}
+
+
+def sound_status(studio: Studio, *, job_id: str, wait_seconds: int = 0, keep: int | None = None,
+                 name: str | None = None, cancel: bool = False,
+                 sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+    """A sound job: its status and tries, waiting up to `wait_seconds` for it to end.
+    `keep` puts one finished try in the Library, under `name` if given; `cancel` stops it."""
+    if not re.fullmatch(r"[0-9a-f]{32}", str(job_id)):
+        raise StudioError("job_id is the 32-character id make_sound gave you.")
+    if cancel:
+        studio.post_json(f"api/sound/{job_id}/cancel", {})
+    deadline = time.monotonic() + max(0, min(int(wait_seconds), 50))
+    while True:
+        job = studio.get(f"api/sound/{job_id}/status")
+        if job.get("status") in {"done", "error", "cancelled"} or time.monotonic() >= deadline:
+            break
+        sleep(5)
+    if keep is not None:
+        studio.post_json(f"api/sound/{job_id}/keep", {"try": int(keep), **({"name": name} if name else {})})
+        job = studio.get(f"api/sound/{job_id}/status")
+    return sound_job_summary(job)
 
 
 def preview(studio: Studio, *, asset_id: str, stage: str = "latest", look: str = "paint",
@@ -1550,7 +1609,8 @@ def build_server(studio: Studio | None = None):
     @server.tool(name="list_assets", structured_output=False)
     def tool_list_assets(search: str = "", kind: str | None = None, limit: int = 20):
         """The Library, newest first: ids, names, how far each got, file paths, moves.
-        kind: picture | character | prop | "prop set" | model. search: words in the name or prompt."""
+        kind: picture | character | prop | "prop set" | model | sound (kept sounds, each with its WAV path).
+        search: words in the name or prompt."""
         return safe(lambda: list_assets(studio, search=search, kind=kind, limit=limit))
 
     @server.tool(name="list_versions", structured_output=False)
@@ -1669,6 +1729,28 @@ def build_server(studio: Studio | None = None):
     def tool_picture_status(job_id: str, wait_seconds: int = 30):
         """Status of a picture job started by brush_back; waits up to wait_seconds (max 50) for it to end."""
         return safe(lambda: picture_status(studio, job_id=job_id, wait_seconds=wait_seconds))
+
+    @server.tool(name="make_sound", structured_output=False)
+    def tool_make_sound(description: str, seconds: float | None = None, leave_out: list[str] | None = None,
+                        tries: int = 4, seed: int | None = None):
+        """Make sound effects from a description: a footstep, a hit, a door. Mono 48 kHz WAVs, Apache-2.0 engine.
+        description: one thing happening, close up; say what hits what ("sword striking a wooden shield, one hit, dry").
+        seconds: 0.5 to 30 (default 1.5); past that it is refused, not shortened. leave_out: things it must not
+        have, e.g. ["music", "voices", "room echo"]. tries: 1 to 4 made from one seed (try n uses seed + n - 1).
+        Needs the "sound-effects" engine (list_engines); if it is missing this says so and downloads nothing:
+        install_backend asks the user first. Effects only for now: no loops, music or voice."""
+        return safe(lambda: make_sound(studio, description=description, seconds=seconds, leave_out=leave_out,
+                                       tries=tries, seed=seed))
+
+    @server.tool(name="sound_status", structured_output=False)
+    def tool_sound_status(job_id: str, wait_seconds: int = 30, keep: int | None = None, name: str | None = None,
+                          cancel: bool = False):
+        """Status of a make_sound job and its tries; waits up to wait_seconds (max 50) for it to end.
+        keep=<try number> puts that try in the Library (name: optional) and answers its WAV path; its
+        licence record sits beside it as sound.provenance.json. Tries nobody keeps are cleared by the next batch.
+        cancel=true stops a job that is still running."""
+        return safe(lambda: sound_status(studio, job_id=job_id, wait_seconds=wait_seconds, keep=keep, name=name,
+                                         cancel=cancel))
 
     @server.tool(name="preview", structured_output=False)
     def tool_preview(asset_id: str, stage: str = "latest", look: str = "paint", move: str | None = None,

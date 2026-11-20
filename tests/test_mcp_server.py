@@ -165,7 +165,8 @@ def test_the_server_registers_every_tool():
                      "approve_skin_picture", "redo_skin_picture", "build_skin", "cancel_skin", "export_skins",
                      "usage_counts", "brush_back", "picture_status", "back_versions",
                      "list_kits", "make_kit", "add_to_kit", "box_types", "list_canvases", "get_canvas", "edit_canvas",
-                     "save_canvas", "check_canvas", "run_canvas", "canvas_status", "cancel_canvas_run"}
+                     "save_canvas", "check_canvas", "run_canvas", "canvas_status", "cancel_canvas_run",
+                     "make_sound", "sound_status"}
 
 
 # --------------------------------------------------------------------------- create
@@ -1126,3 +1127,125 @@ def test_making_a_kit_for_an_unknown_asset_sends_nothing(studio):
     with pytest.raises(ms.StudioError, match="No asset"):
         ms.make_kit(studio, character_id="ffffffffffff")
     assert not studio.http.posts
+
+
+# --------------------------------------------------------------------------- sounds
+SOUND_JOB = "5" * 32
+
+
+class SoundHttp:
+    """The studio's sound endpoints, as far as an agent sees them."""
+
+    def __init__(self, statuses=("running", "done"), error=None):
+        self.calls, self.statuses, self.error, self.kept = [], list(statuses), error, None
+
+    def get(self, url, params=None, timeout=None):
+        path = url.split("8777/", 1)[1]
+        self.calls.append(("GET", path, None))
+        if path == "api/sound/kept":
+            return Response(200, {"sounds": [
+                {"id": "coin__20261120-101500", "name": "Coin", "kind": "sound", "sound_kind": "effect", "seconds": 0.4,
+                 "prompt": "coin pickup, bright", "licence": "Apache-2.0", "file": "sounds/coin__20261120-101500/sound.wav"},
+                {"id": "door__20261120-101600", "name": "Door", "kind": "sound", "sound_kind": "effect", "seconds": 2.1,
+                 "prompt": "wooden door creak", "licence": "Apache-2.0", "file": "sounds/door__20261120-101600/sound.wav"}]})
+        status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+        return Response(200, {"job_id": SOUND_JOB, "status": status, "prompt": "a door", "seconds": 2.0, "seed": 7,
+                              "error": None, "elapsed_seconds": 61.0, "log_tail": "noise",
+                              "tries": [{"number": 1, "seed": 7, "seconds": 1.9, "bars": [1.0] * 60, "kept": None},
+                                        {"number": 2, "seed": 8, "seconds": 1.8, "bars": [1.0] * 60, "kept": self.kept}]})
+
+    def post(self, url, json=None, files=None, timeout=None):
+        path = url.split("8777/", 1)[1]
+        self.calls.append(("POST", path, json))
+        if self.error:
+            return Response(*self.error)
+        if path.endswith("/keep"):
+            self.kept = "sounds/door__20261120-101600/sound.wav"
+            return Response(200, {"file": self.kept, "name": "door"})
+        if path.endswith("/cancel"):
+            return Response(202, {"status": "cancelling"})
+        return Response(202, {"job_id": SOUND_JOB, "seed": 7, "count": json["count"]})
+
+
+def sound_studio(http):
+    made = ms.Studio("http://127.0.0.1:8777", http=http, start=lambda: None)
+    made._checked = True
+    return made
+
+
+def test_make_sound_sends_what_was_asked_and_says_what_to_do_next():
+    http = SoundHttp()
+    out = ms.make_sound(sound_studio(http), description="a door", seconds=2, leave_out=["music"], tries=2, seed=7)
+    assert http.calls == [("POST", "api/sound", {"prompt": "a door", "count": 2, "leave_out": ["music"],
+                                                 "seconds": 2, "seed": 7})]
+    assert out["job_id"] == SOUND_JOB and out["seed"] == 7 and out["tries"] == 2
+    assert "sound_status" in out["next"] and "keep" in out["next"]
+    # left out, the length and the seed are the studio's to choose
+    http = SoundHttp()
+    ms.make_sound(sound_studio(http), description="a door")
+    assert http.calls[0][2] == {"prompt": "a door", "count": 4, "leave_out": []}
+
+
+def test_a_missing_sound_engine_reaches_the_agent_in_words_and_nothing_else_is_called():
+    http = SoundHttp(error=(503, {"error": "MOSS-SoundEffect v2.0 is not set up yet. Missing: its model files "
+                                           "(6.4 GB). Open Setup to download it.", "needs_setup": True}))
+    with pytest.raises(ms.StudioError, match="not set up yet"):
+        ms.make_sound(sound_studio(http), description="a door")
+    assert [c[1] for c in http.calls] == ["api/sound"]          # no install was started on the agent's behalf
+
+
+def test_a_length_past_the_limit_reaches_the_agent_as_the_studios_refusal():
+    http = SoundHttp(error=(422, {"error": "MOSS-SoundEffect v2.0 makes sounds from 0.5 to 30 seconds long"}))
+    with pytest.raises(ms.StudioError, match="0.5 to 30 seconds"):
+        ms.make_sound(sound_studio(http), description="a door", seconds=45)
+
+
+def test_sound_status_waits_then_lists_the_tries_without_the_wave_data():
+    http, naps = SoundHttp(), []
+    out = ms.sound_status(sound_studio(http), job_id=SOUND_JOB, wait_seconds=30, sleep=naps.append)
+    assert naps == [5] and out["status"] == "done" and out["description"] == "a door"
+    assert out["tries"] == [{"try": 1, "seed": 7, "seconds": 1.9, "kept": None},
+                            {"try": 2, "seed": 8, "seconds": 1.8, "kept": None}]
+    assert "error" not in out and "log_tail" not in out
+
+
+def test_keeping_a_try_answers_its_full_path():
+    http = SoundHttp(statuses=("done",))
+    out = ms.sound_status(sound_studio(http), job_id=SOUND_JOB, keep=2, name="Door")
+    assert ("POST", f"api/sound/{SOUND_JOB}/keep", {"try": 2, "name": "Door"}) in http.calls
+    assert out["tries"][1]["kept"] == str(ms.REPO / "output" / "sounds/door__20261120-101600/sound.wav")
+
+
+def test_a_running_sound_job_can_be_stopped():
+    http = SoundHttp(statuses=("cancelling",))
+    ms.sound_status(sound_studio(http), job_id=SOUND_JOB, cancel=True)
+    assert http.calls[0] == ("POST", f"api/sound/{SOUND_JOB}/cancel", {})
+
+
+@pytest.mark.parametrize("job_id", ["../../skins", "abc", "A" * 32])
+def test_sound_status_takes_only_a_real_job_id(job_id):
+    """It goes into a URL path; '../..' would read any other studio page."""
+    http = SoundHttp()
+    with pytest.raises(ms.StudioError, match="32-character id"):
+        ms.sound_status(sound_studio(http), job_id=job_id, keep=1)
+    assert http.calls == []
+
+
+def test_kept_sounds_are_listed_as_sounds_with_their_files():
+    http = SoundHttp()
+    out = ms.list_assets(sound_studio(http), kind="sound", search="door")
+    assert out == {"total": 1, "assets": [{
+        "id": "door__20261120-101600", "name": "Door", "kind": "sound", "sound_kind": "effect", "seconds": 2.1,
+        "prompt": "wooden door creak", "licence": "Apache-2.0",
+        "file": str(ms.REPO / "output" / "sounds/door__20261120-101600/sound.wav")}]}
+    assert ms.list_assets(sound_studio(SoundHttp()), kind="sound")["total"] == 2
+
+
+def test_the_sound_engine_is_listed_as_making_sounds():
+    class Catalog(SoundHttp):
+        def get(self, url, params=None, timeout=None):
+            return Response(200, {"backends": [{"id": "sound-effects", "kind": "sound", "state": "missing"},
+                                               {"id": "flux-image", "kind": "image", "state": "ready"},
+                                               {"id": "pixal3d", "kind": "3d", "state": "ready"}]})
+    rows = {e["id"]: e["makes"] for e in ms.list_engines(sound_studio(Catalog()))}
+    assert rows == {"sound-effects": "sounds", "flux-image": "pictures", "pixal3d": "3D models"}
