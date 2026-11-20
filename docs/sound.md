@@ -88,6 +88,83 @@ different take.
 Agents and the server can also ask for `"start"` under what changes: each take starts up to
 8 milliseconds earlier or later. It is not on the sheet, to keep the sheet short.
 
+## Footsteps on a move
+
+A walk needs a step sound each time a foot lands. Games do not want that baked into one long
+sound file: they want to know *when* each foot lands, and play the sound themselves. So the
+studio marks the landings and saves them as a small list of times.
+
+1. Open a character and pick a move (walk, run). Under the steps there is a card:
+   **Footsteps on this move**.
+2. **Step sound**: a kept sound or a set. A set sounds best: no two steps in a row the same.
+3. **Found in the walk** says what it found, such as "2 steps in each 1 s loop: left, right."
+   The timeline has a row a foot. Shaded is foot on the ground; a dot is where a sound plays.
+4. **Play with sound** plays the move with the steps, in the order a game would.
+5. **Save step marks** writes the list beside the move. **On** unticked saves it switched off.
+
+A move where the feet never leave the floor (idle, wave) has no steps, and the card says so.
+
+### How the steps are found
+
+The finished move is played back as numbers and each foot's height is watched. A foot is *down*
+near the lowest it ever gets, and *up* once it is well clear; a landing is a step. Because it
+reads the file that ships, it works on any skeleton and any move, and a faster move simply has
+closer steps. Feet are found by the skeleton's shape, not by bone names. A foot that never
+rises 2% of the body's height is treated as standing. Two feet landing within 40 thousandths
+of a second make one mark ("left + right"), as in a jump. Marks cannot be dragged yet.
+
+The code is `image_to_3dlab/footsteps.py` (the finding) and `image_to_3dlab/glb_motion.py`
+(reading a move out of a GLB). For the four-legged gaits built by `scripts/quadruped_gait.py`
+the same answer comes straight from the gait's own timing (`footsteps.gait_steps`); tests hold
+the two to each other.
+
+### The file
+
+```
+output/animate/<run>/<name>_walk.glb
+output/animate/<run>/<name>_walk.cues.json
+```
+
+```json
+{"schema_version": 1, "kind": "move_cues", "on": true, "move": "walk",
+ "model": "knight_walk.glb", "loop": true, "loop_seconds": 1.0, "seconds": 1.0, "speed": 1.0,
+ "cues": [{"time_s": 0.45, "foot": "left", "event": "footstep",
+           "sound": {"id": "boots_set__20261120-093300", "files": ["../../sounds/boots_set__20261120-093300/boots_01.wav"]}}],
+ "sound": {"id": "boots_set__20261120-093300", "kind": "sound_set", "name": "Boots",
+           "files": ["../../sounds/boots_set__20261120-093300/boots_01.wav"],
+           "play": "Pick one at random for each step, never the same one twice running.",
+           "license": {"name": "Apache-2.0", "classification": "commercial-clear"},
+           "record": "../../sounds/boots_set__20261120-093300/set.provenance.json"},
+ "found": {"how": "Played the move back and watched each foot's height.",
+           "feet": {"left": ["bone_40", "bone_41"]}, "planted": {"left": [[0.45, 1.07]]}}}
+```
+
+- `time_s` is seconds from the move's first frame, at the speed the move was saved (`speed`).
+  Play the move twice as fast and each time halves.
+- `planted` is when each foot is on the ground. On a loop, a span that ends past
+  `loop_seconds` carries on from the start.
+- File paths are from the cue file's own folder.
+- The file holds no audio, so it has no licence of its own. `sound.license` repeats the
+  sound's licence and `sound.record` points at its record.
+
+### Using it in a game
+
+Each engine has its own name for "call me at this moment of the animation".
+
+| Engine | What to add | How |
+|---|---|---|
+| Unity | An **Animation Event** at each `time_s` | Select the clip, open the Animation tab of the import settings (or the Animation window), add an event at each time and name a function such as `Footstep`. In that function, play a random clip from the set, not the one just played. |
+| Godot | A **Call Method Track** key at each `time_s` | In the AnimationPlayer, add a Call Method Track on your character, and a key at each time calling `footstep()`. An `AudioStreamRandomizer` holding the set picks a take for you. |
+| Roblox | A **marker** (animation event) at each `time_s` | In the Animation Editor, add an event named `Footstep` at each time, and listen with `GetMarkerReachedSignal("Footstep")`. |
+
+For Roblox there is a catch, and we will not pretend otherwise: **Export for Roblox leaves the
+moves out** (Roblox cannot play this skeleton's moves; the copy comes in standing still). So
+the times are only of use there if you animate the character in Roblox yourself and its
+steps fall at the same moments. The sound files work in Roblox either way.
+
+One thing to check in your engine: moves made here start one frame (1/30 s) into the file.
+Times are counted from that first frame. If your engine counts from zero instead, add 1/30 s.
+
 ## The engine
 
 [MOSS-SoundEffect v2.0](https://huggingface.co/OpenMOSS-Team/MOSS-SoundEffect-v2.0), in its
@@ -178,10 +255,13 @@ The second command never downloads: with the model files missing it stops and sa
 `sound_status(job_id, wait_seconds)` follows it; `sound_status(job_id, keep=2)` keeps a try
 and answers its file path; `list_assets(kind="sound")` lists the kept ones and the saved
 sets. `make_variations(sound_id, count, how_different, change)` saves a set from a kept sound
-and answers its folder and files.
+and answers its folder and files. `footsteps(asset_id, move, sound_id)` finds the steps in a
+character's move, saves the cue file and answers the times; `save=False` only looks.
 
 The server routes are `/api/sound…` for making sounds, and for variations
 `POST /api/sounds/<id>/variations` (takes to listen to; writes nothing) and
 `POST /api/sounds/<id>/set` (saves them). Both take
-`{count, how_different, change, seed, name}`. `viewer/sound_api.py` is the code; the maths
+`{count, how_different, change, seed, name}`. Footsteps: `GET /api/footsteps?file=<move>` finds
+the steps and writes nothing; `POST /api/footsteps` with `{file, sound_id, on}` saves them
+(`viewer/footsteps_api.py`). `viewer/sound_api.py` is the code for the rest; the maths
 is in `image_to_3dlab/sound_post.py`.

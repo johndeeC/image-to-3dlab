@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Unity, Godot or Roblox, with one licence record for them all. No model runs, so it takes
   about a second. Higher takes come out a little shorter and lower ones longer. Sets show
   under **Library → Sounds**; each click plays a different take.
+- **Footsteps on this move**: a card under a character's move finds when each foot lands,
+  shows the steps on a small timeline, and plays the move with a step sound at each one
+  (**Play with sound**). Pick a kept sound or a set; a set never plays the same take twice
+  running. **Save step marks** writes `<move>.cues.json` beside the move: a list of times
+  for Unity, Godot or your own engine to play the sound at. No sound is baked in. Works on
+  any skeleton and any move; a move with both feet on the floor has no steps.
+- Agents: `footsteps(asset_id, move, sound_id)` finds and saves the same marks.
 - **Make more like this** on a sound try: four new tries from the same description and settings.
 - Agents: `make_variations` saves a variation set from a kept sound, and
   `list_assets(kind="sound")` lists sets with every file.
