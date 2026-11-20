@@ -792,3 +792,19 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .sound-row { flex-wrap: wrap; }
 .sound-row .asset { flex: 1 1 150px; }
 @container (max-width: 760px) { .layer-row, .layers-all { grid-template-columns: minmax(0, 1fr); } .layer-ruler { margin: 0 13px; } .layer-knobs { grid-template-columns: minmax(0, 1fr); } }
+
+/* Voice sheet (voice-pane.js): the Sound sheet's own parts, plus one block per line to say */
+.sound-form select, .sound-form input[type="text"] { width: 100%; min-height: 40px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line-hi); background: var(--coal); color: var(--bone); font-size: 15px; }
+.sound-form select:focus-visible, .sound-form input[type="text"]:focus-visible { outline: 2px solid var(--flame); outline-offset: 1px; }
+.voice-sheet .quick { margin-bottom: 8px; }
+.voice-line { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--panel) 60%, transparent); min-width: 0; }
+.voice-line .sound-head { align-items: center; flex-wrap: nowrap; }
+.voice-line h3 { font: 500 15px/1.4 var(--f-ui); min-width: 0; overflow-wrap: anywhere; }
+.voice-line h3 .meta { margin-right: 6px; }
+.voice-line .ghost.small { flex: none; }
+.voice-line .sound-tries { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.try-card.chosen { border-color: var(--flame); box-shadow: 0 0 0 1px var(--flame); }
+.try-card .row [aria-pressed="true"] { color: var(--flame); border-color: var(--flame); }
+.voice-join { display: grid; gap: 6px; justify-items: start; }
+.voice-join .primary { min-height: 44px; padding: 0 22px; }
+.voice-join .primary:disabled { opacity: .45; cursor: default; filter: none; }

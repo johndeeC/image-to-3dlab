@@ -29,10 +29,12 @@ export function notInstalledText(defaults) {
   return `The sound engine is not installed yet.${size} Open Setup to add it.`;
 }
 
-/** The kinds as buttons: only a built one can be pressed; the rest say "later". */
+/** The kinds as buttons: only a built one can be pressed; the rest say "later". A kind with
+ *  a `sheet` of its own (Voice) opens that sheet instead of changing this one. */
 export function kindButtons(defaults, chosen = 'effect') {
   return (defaults?.kinds || []).map((kind) => ({
     id: kind.id,
+    sheet: kind.sheet || null,
     label: kind.ready ? kind.label : `${kind.label} · later`,
     hint: kind.hint,
     disabled: !kind.ready,

@@ -22,6 +22,7 @@ import { gearPrompt, kitsWith, tryPlans } from './kit.js';
 import { openKitPane } from './kit-pane.js';
 import { openCanvasPane } from './canvas-pane.js';
 import { openSoundPane, createPlayer, SPEAKER } from './sound-pane.js';
+import { openVoicePane } from './voice-pane.js';
 import { filterSounds, keptMeta, soundsFoot, isSet, nextInOrder } from './sound.js';
 import { openVariationsPane } from './variations-pane.js';
 import { openLayersPane } from './layers-pane.js';
@@ -199,6 +200,11 @@ function playSound(id) {
 function openVariations(sound) {
   soundPlayer.stop();
   openVariationsPane({ stage: $('stage'), sound, on: { saved: refreshSounds } });
+}
+
+function openVoice() {
+  soundPlayer.stop();
+  openVoicePane({ stage: $('stage'), on: { kept: refreshSounds, back: () => $('soundBtn').click() } });
 }
 
 function openLayers({ description = '', sound = null } = {}) {
@@ -840,7 +846,7 @@ $('createBtn').addEventListener('click', () => {
 // ------------------------------------------------------------------ Sound (docs/sound.md)
 $('soundBtn').addEventListener('click', () => {
   soundPlayer.stop();
-  openSoundPane({ stage: $('stage'), on: { kept: refreshSounds, variations: openVariations, layers: openLayers } });
+  openSoundPane({ stage: $('stage'), on: { kept: refreshSounds, variations: openVariations, layers: openLayers, voice: openVoice } });
 });
 
 // ------------------------------------------------------------------ Canvas (docs/canvas.md)

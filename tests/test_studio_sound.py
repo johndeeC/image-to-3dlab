@@ -21,7 +21,7 @@ DEFAULTS = {
     "kinds": [{"id": "effect", "label": "Effect", "hint": "One short sound, like a footstep or a hit.", "ready": True},
               {"id": "loop", "label": "Background loop", "hint": "", "ready": False},
               {"id": "music", "label": "Music", "hint": "", "ready": False},
-              {"id": "voice", "label": "Voice", "hint": "", "ready": False}],
+              {"id": "voice", "label": "Voice", "hint": "", "ready": True, "sheet": "voice"}],
     "leave_out": ["music", "voices", "room echo"],
     "limits": {"min_seconds": 0.5, "max_seconds": 30, "default_seconds": 1.5, "max_prompt": 500, "tries": 4},
 }
@@ -43,11 +43,12 @@ def test_the_request_is_what_the_form_holds():
 
 
 @needs_node
-def test_only_effect_can_be_picked_and_the_rest_say_later():
+def test_effect_and_voice_can_be_picked_and_the_rest_say_later():
     out = _run("console.log(JSON.stringify(m.kindButtons(D)))")
     assert [(k["label"], k["disabled"], k["pressed"]) for k in out] == [
         ("Effect", False, True), ("Background loop · later", True, False),
-        ("Music · later", True, False), ("Voice · later", True, False)]
+        ("Music · later", True, False), ("Voice", False, False)]
+    assert [k["sheet"] for k in out] == [None, None, None, "voice"]       # Voice opens a sheet of its own
 
 
 @needs_node
