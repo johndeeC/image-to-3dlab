@@ -1,9 +1,14 @@
 """Clean-up for a generated sound: the maths between the engine and the WAV on disk.
 
 A raw sound from a model has dead air at both ends, may click where it starts and stops,
-and can peak past what a 16-bit file holds. `clean` fixes those in one fixed order:
+can peak past what a 16-bit file holds or come out far too quiet, and may still be ringing
+where it was cut. `clean` fixes those in one fixed order:
 
-    one channel -> 48 kHz -> trim the silence -> hold the peak under 0.98 -> 5 ms fades
+    one channel -> 48 kHz -> keep the tail -> trim the silence -> fades -> peak to 0.98
+
+Two rules for volume. A **fresh** sound is brought to the standard peak, up or down
+(`set_peak`), so four tries are as loud as each other. Once volumes mean something (a
+variation set, a mix of layers) a sound is only ever turned down (`limit_peak`).
 
 Inside, a sound is always **mono float32 at 48 kHz** (`RATE`). Each step is its own function
 so later work reuses them: several layers are summed and then pass through `limit_peak`
@@ -43,6 +48,19 @@ TRIM_FRACTION = 0.003    # quieter than 0.3% of the loudest sample counts as sil
 SILENCE_FLOOR = 1e-5     # ...and so does anything this small, however quiet the sound
 # Below this peak a "sound" is the model returning nothing: about -80 dB.
 SILENT_PEAK = 1e-4
+# The most a fresh sound is turned up: 24 dB is about 16 times. Anything that needs more is
+# mostly hiss, so it stays quiet rather than being blown up into noise.
+MAX_BOOST_DB = 24.0
+
+# A tail: what a struck thing does after the length asked for. The engine is asked for
+# extra audio (half as long again, at least half a second), and a sound still ringing at the
+# cut keeps going until it has died away.
+TAIL_SHARE = 0.5         # extra room: this share of the length asked...
+TAIL_MIN_S = 0.5         # ...and never less than this
+TAIL_QUIET_DB = -45.0    # "died away": this far under the sound's loudest point...
+TAIL_QUIET_MS = 30.0     # ...and staying there this long
+TAIL_FADE_MS = 30.0      # the fade-out for a sound that was still going when it ended
+STEADY_DB = 6.0          # a ring is at least this much quieter by the end of its extra room
 
 # "How different" for a variation set: the most a take may move, up or down. A little keeps
 # it the same thing ("same boot, different steps"); a lot makes it a different one. These
@@ -262,23 +280,91 @@ def limit_peak(samples: np.ndarray, peak: float = PEAK) -> np.ndarray:
     return (data * (peak / loudest)).astype(np.float32)
 
 
-def fade(samples: np.ndarray, rate: int = RATE, ms: float = FADE_MS) -> np.ndarray:
-    """A short ramp in and out, so the sound never starts or stops on a click."""
+def set_peak(samples: np.ndarray, peak: float = PEAK,
+             max_boost_db: float = MAX_BOOST_DB) -> tuple[np.ndarray, float]:
+    """Bring a fresh sound's loudest sample to `peak`, **up or down**. Returns the sound and
+    the decibels it moved. For a sound straight from the engine only: once volumes have been
+    chosen, use `limit_peak`.
+
+    It is never turned up by more than `max_boost_db`, and silence (under SILENT_PEAK) is
+    left alone, so `inspect` still refuses it instead of keeping amplified hiss.
+    """
+    data = np.asarray(samples, dtype=np.float32)
+    loudest = peak_of(data)
+    if loudest < SILENT_PEAK or loudest == peak:
+        return data.copy(), 0.0
+    gain_db = min(20.0 * math.log10(peak / loudest), float(max_boost_db))
+    return change_volume(data, gain_db), round(gain_db, 2)
+
+
+def fade(samples: np.ndarray, rate: int = RATE, ms: float = FADE_MS,
+         out_ms: float | None = None) -> np.ndarray:
+    """A short ramp in and out, so the sound never starts or stops on a click. `out_ms` is
+    for a fade-out longer than the fade-in; left out, both are `ms`."""
     data = np.asarray(samples, dtype=np.float32).copy()
-    frames = min(int(rate * max(0.0, ms) / 1000.0), data.size // 2)
-    if frames > 0:
-        ramp = np.linspace(0.0, 1.0, frames, dtype=np.float32)
-        data[:frames] *= ramp
-        data[-frames:] *= ramp[::-1]
+    for length, at_end in ((ms, False), (ms if out_ms is None else out_ms, True)):
+        frames = min(int(rate * max(0.0, length) / 1000.0), data.size // 2)
+        if frames > 0:
+            ramp = np.linspace(0.0, 1.0, frames, dtype=np.float32)
+            if at_end:
+                data[-frames:] *= ramp[::-1]
+            else:
+                data[:frames] *= ramp
     return data
 
 
+def seconds_with_tail(asked: float, most: float) -> float:
+    """How long to ask the engine for, so there is room for a tail: half as long again, at
+    least half a second more, never past `most`. To a tenth of a second, as engines take it."""
+    return round(min(float(most), float(asked) + max(TAIL_MIN_S, TAIL_SHARE * float(asked))), 1)
+
+
+def keep_tail(samples: np.ndarray, asked_seconds: float, rate: int = RATE) -> tuple[np.ndarray, float, float]:
+    """End a sound that was made longer than asked. Returns (the sound, seconds kept past
+    the length asked, the fade-out in ms it should get).
+
+    - Quiet at the length asked (45 dB under its loudest point): cut there, as always.
+    - Still ringing: it runs on until it has been that quiet for 30 ms, then ends.
+    - Never gets that quiet, but is at least 6 dB down by the end: all of it is kept.
+    - Not dying away at all (rain, an engine): cut at the length asked. More is not a tail.
+
+    Anything still going where it ends gets the longer fade-out, never a hard cut. Nothing is
+    changed here but where the sound stops.
+    """
+    data = np.asarray(samples, dtype=np.float32)
+    asked = min(int(round(float(asked_seconds) * rate)), data.size)
+    if asked <= 0:
+        return data.copy(), 0.0, FADE_MS
+    head, level = data[:asked], np.abs(data)
+    window = max(1, int(rate * TAIL_QUIET_MS / 1000.0))
+    quiet = max(SILENCE_FLOOR, peak_of(head) * 10.0 ** (TAIL_QUIET_DB / 20.0))
+    start = max(0, asked - window)
+    at_cut = float(level[start:asked].max())
+    if at_cut <= quiet:
+        return head.copy(), 0.0, FADE_MS
+    loud = np.flatnonzero(level[start:] > quiet) + start          # never empty: at_cut is in it
+    gaps = np.diff(np.append(loud, data.size + window))           # the end counts if there is room
+    ends = np.flatnonzero(gaps > window)
+    if ends.size and int(loud[ends[0]]) + 1 + window <= data.size:
+        end = int(loud[ends[0]]) + 1 + window
+        return data[:end].copy(), round((end - asked) / rate, 3), TAIL_FADE_MS
+    dying = float(level[-window:].max()) <= at_cut * 10.0 ** (-STEADY_DB / 20.0)
+    if data.size > asked and dying:
+        return data.copy(), round((data.size - asked) / rate, 3), TAIL_FADE_MS
+    return head.copy(), 0.0, TAIL_FADE_MS
+
+
 def clean(samples: Any, rate: int, *, trim: bool = True, fade_ms: float = FADE_MS,
-          peak: float = PEAK, channels_first: bool = False) -> tuple[np.ndarray, dict[str, Any]]:
+          peak: float = PEAK, channels_first: bool = False,
+          asked_seconds: float | None = None) -> tuple[np.ndarray, dict[str, Any]]:
     """Everything a fresh sound needs, in order. Returns (mono float32 at 48 kHz, what was done).
 
     The second value is the sidecar's `post` block. Empty or broken audio is refused here,
     before any of the maths can spread a NaN through the whole clip.
+
+    `asked_seconds` is for a sound made longer than asked, to leave room for a tail
+    (`seconds_with_tail`): `keep_tail` then decides where it ends. `gain_db` in the answer is
+    how far the volume moved, `tail_s` how much was kept past the length asked.
     """
     data = to_mono(samples, channels_first=channels_first)
     if not data.size:
@@ -286,11 +372,17 @@ def clean(samples: Any, rate: int, *, trim: bool = True, fade_ms: float = FADE_M
     if not np.isfinite(data).all():
         raise SoundProblem("the engine made a broken sound (it has values that are not numbers)")
     data = resample(data, rate, RATE)
+    tail_s, fade_out_ms = 0.0, float(fade_ms)
+    if asked_seconds is not None:
+        data, tail_s, tail_fade = keep_tail(data, asked_seconds)
+        fade_out_ms = max(fade_out_ms, tail_fade)
     trimmed = False
     if trim:
         data, trimmed = trim_silence(data)
-    data = fade(limit_peak(data, peak), RATE, fade_ms)
-    return data, {"trim": bool(trim), "trimmed": trimmed, "fade_ms": float(fade_ms), "peak": float(peak)}
+    # fades first: a hit that starts on its loudest sample would lose some of it to the fade-in
+    data, gain_db = set_peak(fade(data, RATE, fade_ms, fade_out_ms), peak)
+    return data, {"trim": bool(trim), "trimmed": trimmed, "fade_ms": float(fade_ms), "peak": float(peak),
+                  "gain_db": gain_db, "tail_s": tail_s, "fade_out_ms": fade_out_ms}
 
 
 def inspect(samples: Any, rate: int, *, want_rate: int = RATE, want_channels: int = CHANNELS) -> dict[str, Any]:

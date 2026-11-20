@@ -107,8 +107,108 @@ def test_clean_does_all_of_it_and_says_what_it_did():
     assert sp.peak_of(sound) <= 0.98 + 1e-4
     assert sound[0] == 0.0 and sound[-1] == 0.0
     assert 0.45 < sound.size / sp.RATE < 0.55             # the padding is gone
-    assert post == {"trim": True, "trimmed": True, "fade_ms": 5.0, "peak": 0.98}
+    assert post == {"trim": True, "trimmed": True, "fade_ms": 5.0, "peak": 0.98,
+                    "gain_db": pytest.approx(-3.7, abs=0.05), "tail_s": 0.0, "fade_out_ms": 5.0}
     assert sp.inspect(sound, sp.RATE)["channels"] == 1
+
+
+# ------------------------------------------------------------- a fresh sound: volume and tail
+
+def ring(seconds, half_life=0.2, hz=880.0, level=0.5):
+    """A struck thing: a tone that halves every `half_life` seconds."""
+    t = np.arange(int(seconds * sp.RATE)) / sp.RATE
+    return (level * np.sin(2 * np.pi * hz * t) * 0.5 ** (t / half_life)).astype(np.float32)
+
+
+def db(level, against):
+    return 20 * np.log10(level / against)
+
+
+def test_a_quiet_fresh_sound_is_turned_up_to_the_standard_peak():
+    sound, post = sp.clean(sine(level=0.25), sp.RATE)
+    assert sp.peak_of(sound) == pytest.approx(0.98, abs=1e-3)
+    assert post["gain_db"] == pytest.approx(db(0.98, 0.25), abs=0.05) and post["gain_db"] > 11
+
+
+def test_set_peak_goes_up_or_down_and_says_by_how_much():
+    up, gain_up = sp.set_peak(sine(level=0.25))
+    down, gain_down = sp.set_peak(sine(level=1.7))
+    assert sp.peak_of(up) == pytest.approx(0.98, abs=1e-4) and gain_up == pytest.approx(db(0.98, 0.25), abs=0.01)
+    assert sp.peak_of(down) == pytest.approx(0.98, abs=1e-4) and gain_down < 0
+
+
+def test_the_boost_stops_at_24_db_so_a_whisper_is_not_blown_up_into_noise():
+    faint = sine(level=0.001)
+    louder, gain = sp.set_peak(faint)
+    assert gain == pytest.approx(24.0) == sp.MAX_BOOST_DB
+    assert sp.peak_of(louder) == pytest.approx(0.001 * 10 ** (24 / 20), rel=1e-3)
+
+
+def test_near_silence_is_not_boosted_so_the_silence_check_still_refuses_it():
+    hiss = sine(level=sp.SILENT_PEAK / 2)
+    same, gain = sp.set_peak(hiss)
+    assert gain == 0.0 and np.array_equal(same, hiss)
+    sound, _ = sp.clean(hiss, sp.RATE)
+    with pytest.raises(sp.SoundProblem, match="silent"):
+        sp.inspect(sound, sp.RATE)
+
+
+@pytest.mark.parametrize("asked,most,want", [(1.0, 30.0, 1.5), (0.5, 30.0, 1.0), (4.0, 30.0, 6.0),
+                                             (25.0, 30.0, 30.0), (30.0, 30.0, 30.0), (1.5, 30.0, 2.25)])
+def test_the_engine_is_asked_for_room_for_a_tail(asked, most, want):
+    """Half as long again, at least half a second more, never past the engine's most."""
+    assert sp.seconds_with_tail(asked, most) == pytest.approx(want, abs=0.051)
+    assert asked <= sp.seconds_with_tail(asked, most) <= most
+
+
+def test_a_sound_still_ringing_at_the_cut_keeps_its_tail_until_it_has_died_away():
+    raw = ring(1.5, half_life=0.04)                     # asked for 0.2 s: 30 dB down, not yet 45
+    asked = int(0.2 * sp.RATE)
+    assert db(np.abs(raw[asked - 480:asked]).max(), 0.5) > -45          # still ringing at the cut
+    kept, tail_s, fade_out = sp.keep_tail(raw, 0.2)
+    assert kept.size > asked and np.array_equal(kept, raw[:kept.size])   # the same sound, just more of it
+    assert 0.05 < tail_s < 0.3 and tail_s == pytest.approx(kept.size / sp.RATE - 0.2, abs=1e-3)
+    assert db(np.abs(kept[-480:]).max(), 0.5) < -45                      # it ends once it is quiet
+    assert fade_out == sp.TAIL_FADE_MS >= 20
+
+
+def test_a_long_ring_runs_to_the_end_of_the_room_it_was_given_and_fades():
+    raw = ring(1.5, half_life=0.25)                     # 24 dB down at 1.0 s, 36 dB down at 1.5 s
+    kept, tail_s, fade_out = sp.keep_tail(raw, 1.0)
+    assert kept.size == raw.size and tail_s == pytest.approx(0.5) and fade_out == sp.TAIL_FADE_MS
+    sound, post = sp.clean(raw, sp.RATE, asked_seconds=1.0)
+    assert post["tail_s"] == pytest.approx(0.5) and post["fade_out_ms"] == sp.TAIL_FADE_MS
+    assert abs(sound.size - raw.size) <= 2 and sound[-1] == 0.0
+    frames = int(sp.TAIL_FADE_MS * sp.RATE / 1000)
+    half_way = np.abs(sound[-frames:-frames // 2]).max() / np.abs(sound[-2 * frames:-frames]).max()
+    assert 0.3 < half_way < 1.0                          # a slope, not a cliff
+
+
+def test_a_sound_already_quiet_at_the_cut_ends_as_before():
+    raw = np.concatenate([ring(0.5, half_life=0.03), np.zeros(sp.RATE, np.float32)])    # 1.5 s made
+    kept, tail_s, fade_out = sp.keep_tail(raw, 1.0)
+    assert kept.size == sp.RATE and tail_s == 0.0 and fade_out == sp.FADE_MS
+    with_room, post = sp.clean(raw, sp.RATE, asked_seconds=1.0)
+    as_before, _ = sp.clean(raw[:sp.RATE], sp.RATE)
+    assert np.array_equal(with_room, as_before)
+    assert post["tail_s"] == 0.0 and post["fade_out_ms"] == sp.FADE_MS
+
+
+def test_a_steady_sound_is_not_made_longer_only_faded_out():
+    """Rain does not die away, so more of it is not a tail: it ends where asked, on a slope."""
+    kept, tail_s, fade_out = sp.keep_tail(sine(seconds=1.5), 1.0)
+    assert kept.size == sp.RATE and tail_s == 0.0 and fade_out == sp.TAIL_FADE_MS
+
+
+def test_with_no_room_a_ringing_sound_still_gets_the_longer_fade():
+    kept, tail_s, fade_out = sp.keep_tail(ring(1.0), 1.0)
+    assert kept.size == sp.RATE and tail_s == 0.0 and fade_out == sp.TAIL_FADE_MS
+
+
+def test_the_fade_out_can_be_longer_than_the_fade_in():
+    faded = sp.fade(np.ones(4800, np.float32), ms=5.0, out_ms=30.0)
+    assert faded[0] == 0.0 and faded[-1] == 0.0
+    assert faded[240] == 1.0 and faded[-241] < 1.0 and faded[-1441] == 1.0
 
 
 @pytest.mark.parametrize("bad,why", [
