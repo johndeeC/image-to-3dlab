@@ -175,6 +175,7 @@ def test_image_and_3d_routes_are_distinguishable():
     assert kinds["qwen-image"] == "image"
     assert kinds["matte"] == "tool"  # a helper every route uses, not a route itself
     assert kinds["sound-effects"] == "sound"  # makes sounds: neither a picture nor a 3D route
+    assert kinds["voice-kokoro"] == kinds["voice-qwen"] == "sound"  # voice lines are sounds too
     assert all(k in {"image", "3d", "tool", "sound"} for k in kinds.values())
     assert "3d" in kinds.values()
 

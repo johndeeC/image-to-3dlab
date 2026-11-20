@@ -68,6 +68,8 @@ COMMANDS: dict[str, list[str]] = {
     "flux-image-light": [sys.executable, str(REPO / "scripts" / "bootstrap_flux_image.py"),
                          "--light", "--yes"],
     "sound-effects": [sys.executable, str(REPO / "scripts" / "bootstrap_sound_effects.py"), "--yes"],
+    "voice-kokoro": [sys.executable, str(REPO / "scripts" / "bootstrap_voice.py"), "--engine", "kokoro", "--yes"],
+    "voice-qwen": [sys.executable, str(REPO / "scripts" / "bootstrap_voice.py"), "--engine", "qwen", "--yes"],
     "matte": [sys.executable, str(REPO / "scripts" / "bootstrap_matte.py"), "--yes"],
     "upscaler": [sys.executable, str(REPO / "scripts" / "bootstrap_upscaler.py"), "--yes"],
     "autorig": [sys.executable, str(REPO / "scripts" / "bootstrap_autorig.py"), "--yes"],
@@ -214,6 +216,19 @@ def also_fetches(backend_id: str) -> list[dict[str, str]]:
             extra.append({"what": "moss-sfx-mlx, the code that runs the model on a Mac, and the Python "
                                   "packages it needs (in their own environment)",
                           "from": sound.PACKAGE_REPO, "size": sound.PACKAGES_SIZE, "licence": "Apache-2.0"})
+    elif backend_id in {"voice-kokoro", "voice-qwen"}:
+        import bootstrap_voice as voice
+
+        engine = voice.voice_api.ENGINES[backend_id.removeprefix("voice-")]
+        if not engine.python.exists():
+            extra.append({"what": "mlx-audio, the code that runs the voice models on a Mac, and the Python "
+                                  "packages it needs (one environment of their own, shared by both voice engines)",
+                          "from": "https://pypi.org/project/mlx-audio/0.6.7/", "size": voice.PACKAGES_SIZE,
+                          "licence": "MIT"})
+        if voice.needs_reader(engine) and voice.voice_api.package_folder(engine, "en_core_web_sm") is None:
+            extra.append({"what": f"spaCy's small English model ({voice.READER_NAME}), which reads each "
+                                  "sentence before Kokoro says it",
+                          "from": voice.READER_URL, "size": f"{voice.READER_BYTES / 1e6:.0f} MB", "licence": "MIT"})
     return extra
 
 

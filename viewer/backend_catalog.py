@@ -928,6 +928,53 @@ CATALOG: tuple[Backend, ...] = (
         ),
     ),
     Backend(
+        id="voice-kokoro",
+        label="Kokoro 82M (voice lines, clear and quick)",
+        kind="sound",
+        best_for=("Reads a line out loud, plainly, in about a second. 28 voices, American and "
+                  "British English. Good for narration and plain talk."),
+        tradeoff=("Apache-2.0: the lines you make are yours for any use. It cannot be told to "
+                  "shout or whisper, and it speaks English only here: its other languages need "
+                  "espeak-ng, which is GPL-3 and is not installed. Made-up names are said from "
+                  "their letters."),
+        license_name="Apache-2.0",
+        license_url="https://huggingface.co/hexgrad/Kokoro-82M",
+        install="scripts/bootstrap_voice.py --engine kokoro",
+        runs_on=(APPLE,),
+        setup_minutes=3,
+        # the voice engines' own environment, and the English reader Kokoro's word step needs
+        build_probes=(venv_python(REPO / "vendor" / "voice"),
+                      REPO / "vendor" / "voice" / ".venv" / "lib" / "python3.11" / "site-packages" / "en_core_web_sm"),
+        amd_blocked_reason="It runs on MLX, Apple's own library, so only on an Apple Silicon Mac.",
+        weights=(
+            WeightSet("Kokoro 82M and its English voices", "mlx-community/Kokoro-82M-bf16",
+                      341_742_463, HF_HUB_DIR / "models--mlx-community--Kokoro-82M-bf16",
+                      note="The voice model and its 28 English voices."),
+        ),
+    ),
+    Backend(
+        id="voice-qwen",
+        label="Qwen3-TTS 1.7B CustomVoice (voice lines, with feeling)",
+        kind="sound",
+        best_for=("Says a line the way you ask: angry, sad, a whisper, a shout. Nine voices, ten "
+                  "languages. Good for characters."),
+        tradeoff=("Apache-2.0, no region limits: the lines you make are yours for any use. A few "
+                  "seconds a line and about 5 GB of memory while it works. Its training data is "
+                  "not published."),
+        license_name="Apache-2.0",
+        license_url="https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+        install="scripts/bootstrap_voice.py --engine qwen",
+        runs_on=(APPLE,),
+        setup_minutes=10,
+        build_probes=(venv_python(REPO / "vendor" / "voice"),),
+        amd_blocked_reason="It runs on MLX, Apple's own library, so only on an Apple Silicon Mac.",
+        weights=(
+            WeightSet("Qwen3-TTS 1.7B CustomVoice (8-bit MLX)", "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+                      3_080_138_901, HF_HUB_DIR / "models--mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+                      note="The voice model and the part that turns its output into sound."),
+        ),
+    ),
+    Backend(
         id="matte",
         label="Background remover (BiRefNet-lite)",
         kind="tool",
