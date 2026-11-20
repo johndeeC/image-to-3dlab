@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Make a sound effect from a description with MOSS-SoundEffect v2.0, cleaned up and with its licence record.
+"""Make a sound effect or a background loop from a description with MOSS-SoundEffect v2.0, cleaned up and with its licence record.
 
 Runs inside the sound engine's own environment (`vendor/moss-sfx/.venv`, made by
 `bootstrap_sound_effects.py`), because that is where MLX and `moss-sfx-mlx` live. The studio
@@ -7,13 +7,17 @@ starts it for "Make a sound"; it also works by hand:
 
     vendor/moss-sfx/.venv/bin/python scripts/sound_generate.py \\
         --prompt "sword striking a wooden shield, one hit, dry" --seconds 1.5 --leave-out music
+    vendor/moss-sfx/.venv/bin/python scripts/sound_generate.py \\
+        --kind loop --prompt "rain on a tent" --seconds 10
 
 It never downloads anything. The weights must already be on disk (Setup, or the bootstrap);
 if they are not, it stops and says what is missing and how big it is.
 
 Each sound is trimmed, brought to the standard volume, faded and checked before it is written
 (`image_to_3dlab/sound_post.py`); one that is still ringing at the length asked runs a little
-longer so it is not cut off. Then it gets `sound.provenance.json` beside it. With
+longer so it is not cut off. A background loop (`--kind loop`) is made to play round with
+no click instead: no fades, an even average volume, and the loop marked in the WAV
+(`sound_post.clean_loop`). Then it gets `sound.provenance.json` beside it. With
 `--count` above 1 the tries land in `try-1/`, `try-2/`... under `--out`, and try n uses
 seed + n - 1.
 
@@ -82,13 +86,21 @@ def generate(pipe, request: dict[str, Any], seed: int, number: int,
     die away (`sound_post.keep_tail` picks the end). That costs nothing: the engine works on
     its full length every time and only cuts at the end. The words still carry the length
     asked for, written the way the engine writes it, so the sound itself is the same.
+
+    A background loop is asked for differently: the loop plus what its join needs
+    (`sound_post.seconds_for_loop`), and the words say that whole length, so the sound does
+    not stop where the loop ends. Its description gets its steadying words here
+    (`sound_api.engine_prompt`).
     """
     import numpy as np
 
+    looped = request.get("kind") == "loop"
+    seconds = (sound_post.seconds_for_loop(request["seconds"], most) if looped
+               else sound_post.seconds_with_tail(request["seconds"], most))
     audio = pipe(
-        prompt=f"{request['prompt'].strip()} duration: {request['seconds']:.1f}s",
+        prompt=f"{sound_api.engine_prompt(request)} duration: {seconds if looped else request['seconds']:.1f}s",
         append_duration_suffix=False,
-        seconds=sound_post.seconds_with_tail(request["seconds"], most),
+        seconds=seconds,
         num_inference_steps=request["steps"],
         cfg_scale=request["guidance"],
         seed=seed,
@@ -105,15 +117,23 @@ def make_one(pipe, engine: sound_api.SoundEngine, request: dict[str, Any], numbe
     started = time.monotonic()
     seed = sound_api.try_seed(request["seed"], number)
     raw, rate = generate(pipe, request, seed, number, tell, most=engine.max_seconds)
-    sound, post = sound_post.clean(raw, rate, channels_first=True, asked_seconds=request["seconds"])
+    points = None
+    if request.get("kind") == "loop":
+        sound, post = sound_post.clean_loop(raw, rate, request["seconds"], channels_first=True)
+        points = (post["loop"]["start_sample"], post["loop"]["end_sample"])
+    else:
+        sound, post = sound_post.clean(raw, rate, channels_first=True, asked_seconds=request["seconds"])
     sound_post.inspect(sound, sound_post.RATE, want_channels=engine.channels)   # before it touches the disk
-    wav = sound_post.write_wav(folder / sound_api.SOUND_FILE, sound)
+    wav = sound_post.write_wav(folder / sound_api.SOUND_FILE, sound, loop=points)
     facts = sound_post.inspect_wav(wav, want_channels=engine.channels)
+    if points and sound_post.read_loop(wav) != {"start_sample": points[0], "end_sample": points[1]}:
+        raise sound_post.SoundProblem("the loop was not written into the file")
     record = sound_api.sidecar(engine=engine, request=request, number=number, wav=wav, facts=facts,
                                post=post, elapsed=time.monotonic() - started)
     sound_api.write_sidecar(wav, record)
     return {"number": number, "seed": seed, "file": str(wav), "seconds": facts["seconds"],
-            "peak": facts["peak"], "bars": sound_post.wave_bars(sound)}
+            "peak": facts["peak"], "bars": sound_post.wave_bars(sound),
+            **({"level_db": post["loudness"]["measured"]} if points else {})}
 
 
 def make_batch(pipe, engine: sound_api.SoundEngine, request: dict[str, Any], out: Path,
@@ -135,9 +155,12 @@ def make_batch(pipe, engine: sound_api.SoundEngine, request: dict[str, Any], out
 
 def main(argv: list[str] | None = None, load: Callable[[Path], Any] = load_pipeline) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--kind", default="effect", choices=("effect", "loop"),
+                        help="effect: one short sound. loop: a background that plays round and round with "
+                             "no click (wind, rain, engines).")
     parser.add_argument("--prompt", required=True, help="What the sound is. One thing happening, close up.")
-    parser.add_argument("--seconds", type=float, help="How long, in seconds (0.5 to 30). A sound still ringing at the end runs a little "
-                                                    "longer, so it is not cut off.")
+    parser.add_argument("--seconds", type=float, help="How long, in seconds (0.5 to 30; a loop 4 to 30). An effect still ringing "
+                                                    "at the end runs a little longer, so it is not cut off.")
     parser.add_argument("--leave-out", action="append", default=[], metavar="THING",
                         help="Something the sound must not have, like music. Repeat for more.")
     parser.add_argument("--count", type=int, default=1, help="How many tries to make (1 to 4).")
@@ -153,7 +176,7 @@ def main(argv: list[str] | None = None, load: Callable[[Path], Any] = load_pipel
     engine = sound_api.pick_engine(args.engine)
     try:
         request = sound_api.clean_request(
-            {"prompt": args.prompt, "seconds": args.seconds, "leave_out": args.leave_out,
+            {"kind": args.kind, "prompt": args.prompt, "seconds": args.seconds, "leave_out": args.leave_out,
              "count": args.count, "seed": args.seed, "steps": args.steps, "name": args.name}, engine)
     except ValueError as exc:
         raise SystemExit(str(exc)) from None

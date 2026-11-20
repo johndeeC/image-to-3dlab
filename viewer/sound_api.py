@@ -1,4 +1,4 @@
-"""Text to sound: "Make a sound" in the studio. Effects only, for now.
+"""Text to sound: "Make a sound" in the studio. Effects and background loops.
 
 One engine, **MOSS-SoundEffect v2.0** in its 4-bit MLX form (Apache-2.0, about 6.4 GB), run
 through the third-party `moss-sfx-mlx` port. It lives in its own Python environment
@@ -29,6 +29,12 @@ takes (small seeded changes of pitch and volume, `sound_post.make_variations`) i
 a second, and `save_variation_set` writes them as `output/sounds/<name>_set__<stamp>/
 <name>_01.wav ...` with one `set.provenance.json` for the lot. The same numbers and seed
 always give the same takes, so nothing is stored between hearing a set and saving it.
+
+**A background loop is the same engine, asked differently.** The description gets a few
+steadying words unless it already has its own (`loop_prompt`), the engine is asked for the
+loop plus what the join needs, and the clean-up is the loop's own (`sound_post.clean_loop`):
+no fades, an average level instead of a peak, and the loop written into the WAV. Its record
+fills `loop` and `loudness`. A loop has no variations (they would not join up).
 
 A try lives in `output/sounds/.tries/` until you keep it. Keeping copies it to
 `output/sounds/<name>__<stamp>/`, which is what the Library lists.
@@ -80,11 +86,14 @@ KEPT_LAYERS = "layers"             # beside a sound built from layers: each laye
 KEPT_LAYER_FILE = re.compile(r"^layer-[1-9]\.wav$")
 KEPT_RUN = re.compile(r"^[A-Za-z0-9_-]{1,80}__\d{8}-\d{6}(?:-\d+)?$")
 
-# What the studio offers under "What kind?". Effect is made here and Voice on its own sheet
-# (viewer/voice_api.py, `sheet`); the rest are shown so people know they are coming, and say so.
+# What the studio offers under "What kind?". Effect and Background loop are made here and Voice
+# on its own sheet (viewer/voice_api.py, `sheet`); Music is shown so people know it is coming.
+# `seconds` is a kind's own range of lengths, inside the engine's.
 KINDS = (
     {"id": "effect", "label": "Effect", "hint": "One short sound, like a footstep or a hit.", "ready": True},
-    {"id": "loop", "label": "Background loop", "hint": "Wind, rain, a crowd: plays round and round.", "ready": False},
+    {"id": "loop", "label": "Background loop",
+     "hint": "Plays round and round with no click. Pick it for wind, rain, engines.", "ready": True,
+     "seconds": {"min": 4.0, "max": 30.0, "default": 8.0}},
     {"id": "music", "label": "Music", "hint": "A tune for a menu or a level.", "ready": False},
     {"id": "voice", "label": "Voice", "hint": "A line read out loud.", "ready": True, "sheet": "voice"},
 )
@@ -99,6 +108,15 @@ WHAT_CHANGES = (
     {"id": "pitch", "label": "Pitch", "hint": "Higher or lower. Higher ones come out a little shorter, lower ones longer."},
     {"id": "volume", "label": "Volume", "hint": "Louder or softer."},
 )
+# What a background loop's description is given, so the engine makes one even sound and not
+# a scene with things happening in it. Only what the description has not already said.
+LOOP_WORDS = "continuous, steady, no single events"
+LOOP_WORDS_WITH_EVENTS = "continuous"
+SAYS_STEADY = re.compile(r"\b(continuous(ly)?|steady|steadily|constant(ly)?|loop(s|ed|ing)?|seamless(ly)?|"
+                         r"non-?stop|endless(ly)?|unbroken|drone|droning)\b", re.IGNORECASE)
+SAYS_EVENTS = re.compile(r"\b(occasional(ly)?|now and then|now and again|sometimes|from time to time|"
+                         r"every so often|every few|once in a while|intermittent(ly)?|sporadic(ally)?|"
+                         r"random(ly)?|bursts?|single events?)\b", re.IGNORECASE)
 # Things people most often want gone from an effect. Sent as the engine's negative prompt.
 LEAVE_OUT = ("music", "voices", "room echo")
 
@@ -231,6 +249,33 @@ def _number(raw: dict[str, Any], key: str, default: float, kind: type, what: str
     return number
 
 
+def loop_prompt(prompt: str) -> str:
+    """A background loop's description as the engine gets it. The user's words always come
+    first and are never changed or contradicted:
+
+    - it already says how steady it is ("steady rain", "a constant hum"): sent as it is;
+    - it asks for things to happen ("occasional thunder"): only "continuous" is added;
+    - otherwise: "continuous, steady, no single events" is added.
+    """
+    words = " ".join(str(prompt or "").split())
+    if SAYS_STEADY.search(words):
+        return words
+    return f"{words}, {LOOP_WORDS_WITH_EVENTS if SAYS_EVENTS.search(words) else LOOP_WORDS}"
+
+
+def engine_prompt(request: dict[str, Any]) -> str:
+    """The description the engine is given for `request`, before the length is added."""
+    return loop_prompt(request["prompt"]) if request.get("kind") == "loop" else request["prompt"].strip()
+
+
+def kind_seconds(kind: str, engine: SoundEngine = MOSS) -> dict[str, float]:
+    """The shortest, longest and usual length of a sound of this kind, inside the engine's own."""
+    own = next((k.get("seconds") for k in KINDS if k["id"] == kind), None) or {}
+    return {"min": max(engine.min_seconds, own.get("min", engine.min_seconds)),
+            "max": min(engine.max_seconds, own.get("max", engine.max_seconds)),
+            "default": own.get("default", engine.default_seconds)}
+
+
 def clean_request(raw: dict[str, Any], engine: SoundEngine = MOSS) -> dict[str, Any]:
     """What to make, checked. Anything outside the engine's limits is refused with the
     limit named (ValueError), never quietly pulled inside it."""
@@ -241,7 +286,7 @@ def clean_request(raw: dict[str, Any], engine: SoundEngine = MOSS) -> dict[str, 
     if kind not in known:
         raise ValueError(f"no sound kind {kind!r}; choose {', '.join(known)}")
     if not known[kind]["ready"]:
-        raise ValueError(f"{known[kind]['label']} is not built yet. Effects are.")
+        raise ValueError(f"{known[kind]['label']} is not built yet. Effects and background loops are.")
     if known[kind].get("sheet"):
         raise ValueError(f"{known[kind]['label']} has its own page: it is made from a line to say, not a description")
     prompt = " ".join(str(raw.get("prompt") or "").split())
@@ -249,8 +294,11 @@ def clean_request(raw: dict[str, Any], engine: SoundEngine = MOSS) -> dict[str, 
         raise ValueError("describe the sound first")
     if len(prompt) > MAX_PROMPT:
         raise ValueError(f"the description is longer than {MAX_PROMPT} characters")
-    seconds = _number(raw, "seconds", engine.default_seconds, float, "the length")
-    if not engine.min_seconds <= seconds <= engine.max_seconds:      # also refuses not-a-number
+    lengths = kind_seconds(kind, engine)
+    seconds = _number(raw, "seconds", lengths["default"], float, "the length")
+    if not lengths["min"] <= seconds <= lengths["max"]:      # also refuses not-a-number
+        if kind == "loop":
+            raise ValueError(f"a background loop is {lengths['min']:g} to {lengths['max']:g} seconds long")
         raise ValueError(f"{engine.label} makes sounds from {engine.min_seconds:g} to "
                          f"{engine.max_seconds:g} seconds long")
     steps = _number(raw, "steps", engine.steps, int, "steps")
@@ -325,8 +373,12 @@ def sidecar(*, engine: SoundEngine, request: dict[str, Any], number: int, wav: P
     """The record written beside a sound: what it is, how it was made, and its licence.
 
     `facts` is `sound_post.inspect_wav` of the finished file. A single effect is one layer;
-    `variation`, `loop` and `made_for` are there, empty, for what comes next.
+    `variation` and `made_for` are there, empty, for what comes next. A background loop
+    (`post` from `sound_post.clean_loop`) fills `loop` (its first and last sample, both
+    played, and the length of the blend) and `loudness` (its average level and the mark it
+    was set to); its layer also says the description as the engine got it (`prompt_sent`).
     """
+    loop, level = post.get("loop"), post.get("loudness") or {}
     layer = {
         "id": "layer-1",
         "source": {
@@ -336,6 +388,7 @@ def sidecar(*, engine: SoundEngine, request: dict[str, Any], number: int, wav: P
             "revision": engine.revision,
             "runtime": engine.route,
             "prompt": request["prompt"],
+            **({"prompt_sent": engine_prompt(request)} if loop else {}),
             "leave_out": list(request.get("leave_out") or []),
             "seed": try_seed(request["seed"], number),
             "batch_seed": request["seed"],
@@ -372,10 +425,13 @@ def sidecar(*, engine: SoundEngine, request: dict[str, Any], number: int, wav: P
         # gain_db: how far the volume moved. tail_s: kept past the length asked, for a ring.
         "post": {"trim": post["trim"], "fade_ms": post["fade_ms"], "peak": post["peak"],
                  "gain_db": post.get("gain_db", 0.0), "tail_s": post.get("tail_s", 0.0),
-                 "fade_out_ms": post.get("fade_out_ms", post["fade_ms"])},
-        # target and measured wait for "Even volume"; the peak is what the file really has
-        "loudness": {"target": None, "measured": None, "peak": facts["peak"]},
-        "loop": None,
+                 "fade_out_ms": post.get("fade_out_ms", post["fade_ms"]),
+                 # a loop: how its join measures (sound_post.seam_report)
+                 **({"join": dict(post["join"])} if loop and post.get("join") else {})},
+        # an effect is set by its peak alone; a background loop by its average level, in dB
+        # below full scale. The peak is what the file really has.
+        "loudness": {"target": level.get("target"), "measured": level.get("measured"), "peak": facts["peak"]},
+        "loop": dict(loop) if loop else None,
         "made_for": None,
     }
     if elapsed is not None:
@@ -398,6 +454,7 @@ def build_command(request: dict[str, Any], out: Path, engine: SoundEngine = MOSS
     command = [
         str(engine.python), str(RUNNER),
         "--engine", engine.id,
+        "--kind", request.get("kind", "effect"),
         "--prompt", request["prompt"],
         "--seconds", str(request["seconds"]),
         "--steps", str(request["steps"]),
@@ -736,6 +793,7 @@ def kept_sounds(output: Path) -> list[dict[str, Any]]:
             "prompt": _prompt(record),
             "licence": _licence_name(record),
             "layers": len(kept_layer_files(run, record)),
+            "loop": isinstance(record.get("loop"), dict),      # plays round: the Library loops it
             "updated": wav.stat().st_mtime,
         })
     return sorted(sounds, key=lambda sound: sound["updated"], reverse=True)
@@ -826,6 +884,9 @@ def variations_of(root: Path, sound_id: Any, request: dict[str, Any]) -> tuple[P
     is remembered, so playing its takes one by one does not make them all again each time."""
     global _LAST_TAKES
     folder = kept_folder(root, sound_id)
+    if _record(folder / SIDECAR_FILE).get("sound_kind") == "loop":
+        raise ValueError("a background loop has no variations: they would not join up. "
+                         "Change its pitch or volume in the game")
     wav = folder / SOUND_FILE
     stat = wav.stat()
     key = (str(wav), stat.st_mtime_ns, stat.st_size, request["count"], request["how_different"],

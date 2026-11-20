@@ -3505,7 +3505,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     # ------------------------------------------------------------------ sound
     def _create_sound_job(self) -> None:
-        """Start "Make a sound": {prompt, seconds?, leave_out?, count?, seed?, name?}. Never
+        """Start "Make a sound": {prompt, kind? (effect or loop), seconds?, leave_out?, count?, seed?, name?}. Never
         downloads: with the engine missing it answers 503 and points at Setup."""
         try:
             payload = self._small_json(64 * 1024)

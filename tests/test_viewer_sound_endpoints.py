@@ -111,6 +111,35 @@ def test_make_listen_keep(studio, tmp_path):
     assert call(studio, "POST", f"/api/sound/{started['job_id']}/keep", {"try": 7})[0] == 422
 
 
+def test_a_background_loop_starts_at_the_same_door_with_its_own_lengths(studio):
+    kinds = {k["id"]: k for k in call(studio, "GET", "/api/sound/defaults")[1]["kinds"]}
+    assert kinds["loop"]["ready"] is True and kinds["loop"]["seconds"] == {"min": 4.0, "max": 30.0, "default": 8.0}
+    status, told, _ = call(studio, "POST", "/api/sound", {"kind": "loop", "prompt": "rain on a tent", "seconds": 2})
+    assert status == 422 and told["error"] == "a background loop is 4 to 30 seconds long"
+    assert sound_api.MANAGER.jobs == {}
+    status, started, _ = call(studio, "POST", "/api/sound", {"kind": "loop", "prompt": "rain on a tent", "count": 1})
+    assert status == 202
+    told = wait_done(studio, started["job_id"])
+    assert told["kind"] == "loop" and told["seconds"] == 8.0
+    assert sound_api.MANAGER.jobs[started["job_id"]].request["kind"] == "loop"
+
+
+def test_a_kept_loop_is_refused_variations_in_words(studio, tmp_path):
+    loop, post = sound_post.clean_loop(np.random.default_rng(1).standard_normal(int(5.1 * 48_000)), 48_000, 4.0)
+    folder = tmp_path / "output" / "sounds" / "rain-on-a-tent__20261120-101700"
+    wav = sound_post.write_wav(folder / "sound.wav", loop, loop=(0, loop.size - 1))
+    request = sound_api.clean_request({"kind": "loop", "prompt": "rain on a tent", "seconds": 4, "seed": 1, "count": 1})
+    sound_api.write_sidecar(wav, sound_api.sidecar(engine=sound_api.MOSS, request=request, number=1, wav=wav,
+                                                   facts=sound_post.inspect_wav(wav), post=post))
+    (listed,) = call(studio, "GET", "/api/sound/kept")[1]["sounds"]
+    assert listed["loop"] is True and listed["sound_kind"] == "loop"
+    for door in ("variations", "set"):
+        status, told, _ = call(studio, "POST", f"/api/sounds/{folder.name}/{door}", {})
+        assert status == 422 and "a background loop has no variations" in told["error"]
+    status, body, _ = call(studio, "GET", "/output/" + listed["file"])       # served whole, loop and all
+    assert status == 200 and sound_post.read_loop(body) == {"start_sample": 0, "end_sample": loop.size - 1}
+
+
 def test_tries_are_not_served_as_plain_files(studio):
     _, started, _ = call(studio, "POST", "/api/sound", ASK)
     wait_done(studio, started["job_id"])

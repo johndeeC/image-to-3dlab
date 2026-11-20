@@ -516,7 +516,10 @@ def test_the_sheet_is_told_the_kinds_the_limits_and_whether_the_engine_is_here(m
     told = api.defaults_payload()
     assert told["installed"] is False and told["setup_id"] == "sound-effects" and told["download_size"] == "6.4 GB"
     assert [(k["label"], k["ready"]) for k in told["kinds"]] == [
-        ("Effect", True), ("Background loop", False), ("Music", False), ("Voice", True)]
+        ("Effect", True), ("Background loop", True), ("Music", False), ("Voice", True)]
+    loop = told["kinds"][1]
+    assert loop["hint"] == "Plays round and round with no click. Pick it for wind, rain, engines."
+    assert loop["seconds"] == {"min": 4.0, "max": 30.0, "default": 8.0}
     assert [k.get("sheet") for k in told["kinds"]] == [None, None, None, "voice"]      # Voice has its own sheet
     assert told["leave_out"] == ["music", "voices", "room echo"]
     assert told["limits"] == {"min_seconds": 0.5, "max_seconds": 30.0, "default_seconds": 1.5,
@@ -722,3 +725,152 @@ def test_the_sheet_is_told_what_variations_it_may_ask_for():
     assert [c["label"] for c in told["change"]] == ["Pitch", "Volume"]
     assert "shorter" in told["change"][0]["hint"]                              # pitch changes the length: say so
     assert all(len(item["hint"]) < 90 for item in told["how_different"] + told["change"])
+
+
+# --------------------------------------------------------------------------- background loops
+
+LOOP = {"kind": "loop", "prompt": "rain on a tent", "seconds": 8, "seed": 7, "count": 1}
+
+
+def steady(t):
+    """What a good engine answers for a loop: noise that goes on for as long as it was asked."""
+    return 0.9 * np.random.default_rng(3).standard_normal(t.size)
+
+
+def test_a_loop_request_has_its_own_lengths():
+    request = api.clean_request(LOOP)
+    assert (request["kind"], request["seconds"], request["prompt"]) == ("loop", 8.0, "rain on a tent")
+    assert api.clean_request({"kind": "loop", "prompt": "wind"})["seconds"] == 8.0        # its own usual length
+    assert api.clean_request({**LOOP, "seconds": 4})["seconds"] == 4.0
+    assert api.clean_request({**LOOP, "seconds": 30})["seconds"] == 30.0
+    for seconds in (3.9, 1.5, 30.5):
+        with pytest.raises(ValueError, match="a background loop is 4 to 30 seconds long"):
+            api.clean_request({**LOOP, "seconds": seconds})
+    assert api.clean_request({"prompt": "a door"})["seconds"] == 1.5                       # effects are as they were
+    with pytest.raises(ValueError, match="Music is not built yet"):
+        api.clean_request({**LOOP, "kind": "music"})
+
+
+@pytest.mark.parametrize(("typed", "sent"), [
+    ("rain on a tent", "rain on a tent, continuous, steady, no single events"),
+    ("  spaceship engine\n hum ", "spaceship engine hum, continuous, steady, no single events"),
+    # already says how steady it is: not a word is added
+    ("steady rain on a tent", "steady rain on a tent"),
+    ("a constant low hum", "a constant low hum"),
+    ("Looping wind over a moor", "Looping wind over a moor"),
+    ("an engine droning, non-stop", "an engine droning, non-stop"),
+    # asks for things to happen: never told "no single events"
+    ("a sea storm with occasional thunder", "a sea storm with occasional thunder, continuous"),
+    ("forest at night, an owl now and then", "forest at night, an owl now and then, continuous"),
+    ("fire with random crackles and bursts", "fire with random crackles and bursts, continuous"),
+])
+def test_a_loops_description_gets_steadying_words_only_where_it_has_none(typed, sent):
+    assert api.loop_prompt(typed) == sent
+    assert api.loop_prompt(typed).startswith(" ".join(typed.split()))          # the user's words, whole and first
+
+
+def test_an_effects_description_is_never_touched():
+    assert api.engine_prompt(api.clean_request({"prompt": "a door slams"})) == "a door slams"
+    assert api.engine_prompt(api.clean_request(LOOP)) == "rain on a tent, continuous, steady, no single events"
+
+
+def test_the_engine_is_asked_for_the_loop_and_what_its_join_needs(tmp_path):
+    pipe = FakePipe(shape=steady)
+    runner.generate(pipe, api.clean_request(LOOP), 7, 1, lambda *a, **k: None, most=api.MOSS.max_seconds)
+    (call,) = pipe.calls
+    # the words say the whole length made, so the sound does not stop where the loop ends
+    assert call["prompt"] == "rain on a tent, continuous, steady, no single events duration: 9.5s"
+    assert call["seconds"] == 9.5 and call["suffix"] is False
+    pipe = FakePipe(shape=steady)
+    runner.generate(pipe, api.clean_request({**LOOP, "seconds": 30}), 7, 1, lambda *a, **k: None, most=30.0)
+    assert pipe.calls[0]["seconds"] == 30.0 and pipe.calls[0]["prompt"].endswith(" duration: 30.0s")
+
+
+def test_a_loop_is_made_levelled_and_written_with_its_loop_inside(tmp_path):
+    request = api.clean_request(LOOP)
+    facts = runner.make_one(FakePipe(shape=steady), api.MOSS, request, 1, tmp_path, lambda *a, **k: None)
+    wav = tmp_path / "sound.wav"
+    sound, rate = sound_post.read_wav(wav)
+    assert rate == 48_000 and sound.size == 8 * 48_000 and facts["seconds"] == 8.0
+    assert sound_post.read_loop(wav) == {"start_sample": 0, "end_sample": sound.size - 1}
+    assert sound_post.seam_report(sound)["step_ratio"] < 4.0             # round it goes, no click
+    assert abs(sound[0]) > 1e-3 or abs(sound[1]) > 1e-3                  # and no fade at its ends
+    assert sound_post.loudness_db(sound) == pytest.approx(-20.0, abs=0.1)   # a wall of noise came in
+    assert facts["level_db"] == pytest.approx(-20.0, abs=0.1) and facts["peak"] < 0.6
+
+    record = json.loads((tmp_path / "sound.provenance.json").read_text())
+    assert record["sound_kind"] == "loop"
+    assert record["loop"] == {"start_sample": 0, "end_sample": sound.size - 1, "crossfade_ms": 800.0}
+    assert set(record["loudness"]) == {"target", "measured", "peak"}
+    assert record["loudness"]["target"] == -20.0 and record["loudness"]["measured"] == pytest.approx(-20.0, abs=0.1)
+    assert record["loudness"]["peak"] == facts["peak"]
+    post = record["post"]
+    assert (post["fade_ms"], post["fade_out_ms"], post["tail_s"]) == (0.0, 0.0, 0.0) and post["gain_db"] < 0
+    assert post["join"]["step_ratio"] < 4.0 and "level_jump_db" in post["join"]
+    source = record["layers"][0]["source"]
+    assert source["prompt"] == "rain on a tent"                          # what was typed...
+    assert source["prompt_sent"] == "rain on a tent, continuous, steady, no single events"   # ...and what was sent
+    assert source["seconds_asked"] == 8.0 and record["license"]["name"] == "Apache-2.0"
+
+
+def test_an_effects_record_is_as_it_was(tmp_path):
+    runner.make_one(FakePipe(), api.MOSS, api.clean_request({**ASK, "count": 1}), 1, tmp_path, lambda *a, **k: None)
+    record = json.loads((tmp_path / "sound.provenance.json").read_text())
+    assert record["loop"] is None and record["loudness"]["target"] is None and "join" not in record["post"]
+    assert "prompt_sent" not in record["layers"][0]["source"]
+    assert sound_post.read_loop(tmp_path / "sound.wav") is None
+    assert sound_post.peak_of(sound_post.read_wav(tmp_path / "sound.wav")[0]) == pytest.approx(0.98, abs=2e-3)
+
+
+def test_a_loop_that_stops_too_soon_is_reported_not_kept(tmp_path):
+    def stops(t):
+        return np.where(t < 1.0, 0.5 * np.sin(2 * np.pi * 200 * t), 0.0)
+    said = []
+    made = runner.make_batch(FakePipe(shape=stops), api.MOSS, api.clean_request(LOOP), tmp_path,
+                             lambda event, **f: said.append((event, f)))
+    assert made == [] and not (tmp_path / "sound.wav").exists()
+    assert [f["error"] for e, f in said if e == "problem"] == ["Try 1: the sound stops too soon to make a loop of it."]
+
+
+def test_the_command_says_which_kind(tmp_path):
+    command = api.build_command(api.clean_request(LOOP), tmp_path, api.MOSS)
+    assert command[command.index("--kind") + 1] == "loop" and command[command.index("--seconds") + 1] == "8.0"
+    command = api.build_command(api.clean_request(ASK), tmp_path, api.MOSS)
+    assert command[command.index("--kind") + 1] == "effect"
+
+
+def test_the_runner_takes_the_kind_from_its_command_line(tmp_path):
+    pipe = FakePipe(shape=steady)
+    code = runner.main(["--kind", "loop", "--prompt", "rain on a tent", "--seconds", "4", "--count", "1", "--seed", "3",
+                        "--steps", "10", "--model-dir", str(weights_folder(tmp_path)), "--out", str(tmp_path / "out")],
+                       load=lambda weights: pipe)
+    assert code == 0 and pipe.calls[0]["seconds"] == 5.1
+    assert sound_post.read_loop(tmp_path / "out" / "sound.wav")["end_sample"] == 4 * 48_000 - 1
+    with pytest.raises(SystemExit, match="a background loop is 4 to 30 seconds long"):
+        runner.main(["--kind", "loop", "--prompt", "rain", "--seconds", "2", "--model-dir", str(weights_folder(tmp_path))])
+
+
+def keep_a_loop(tmp_path):
+    manager = api.SoundJobManager(tmp_path / "sounds")
+    job = manager.create(api.clean_request(LOOP))
+    runner.make_one(FakePipe(shape=steady), api.MOSS, job.request, 1, job.directory, lambda *a, **k: None)
+    job.tries.append({"number": 1})
+    return manager, manager.keep(job.id, 1)
+
+
+def test_a_kept_loop_keeps_its_loop_and_the_library_says_it_is_one(tmp_path):
+    _, kept = keep_a_loop(tmp_path)
+    wav = tmp_path / kept["file"]
+    assert sound_post.read_loop(wav) == {"start_sample": 0, "end_sample": 8 * 48_000 - 1}
+    (listed,) = api.kept_sounds(tmp_path)
+    assert listed["sound_kind"] == "loop" and listed["loop"] is True and listed["seconds"] == 8.0
+    assert listed["prompt"] == "rain on a tent"
+
+
+def test_a_loop_has_no_variations_and_an_effect_still_does(tmp_path):
+    _, kept = keep_a_loop(tmp_path)
+    loop_id = kept["file"].split("/")[1]
+    for ask in (api.variations_preview, api.save_variation_set):
+        with pytest.raises(ValueError, match="a background loop has no variations"):
+            ask(tmp_path / "sounds", loop_id, {})
+    assert [p.name for p in (tmp_path / "sounds").iterdir() if "_set" in p.name] == []
