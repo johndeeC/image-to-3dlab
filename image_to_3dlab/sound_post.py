@@ -36,6 +36,14 @@ clipped. Speech has sharp peaks, so reaching the mark often means pressing the l
 syllables down a little (`press_peaks`, by at most 6 dB); a line that would need more than
 that is held under its mark instead, and its record says so.
 
+Background loops take their own route (`clean_loop`), because a loop must not be faded at
+its ends or have a tail kept: either would be heard every time it comes round. The engine is
+asked for a little more than the loop's length; that extra is blended into the loop's first
+part (`make_loop`), so its last sample runs straight into its first as the engine made them.
+A loop is set by its **average** level, about -20 dB (`level_background`), not its loudest
+sample: it sits under the game, it does not sit on top of it. And its WAV says where the loop
+is (`wav_bytes(..., loop=...)`, read back by `read_loop`), which game engines pick up.
+
 Ported from the `postprocess_wav` / `inspect_wav` pair in our older ai-sfx project (trim at
 0.3% of the peak, 5 ms fades, peak 0.98, 16-bit, refuse empty or broken audio).
 """
@@ -117,6 +125,19 @@ VOICE_SHORT_S = 0.4            # less speech than this is too little to measure:
 VOICE_CREST_DB = 12.0          # speech's loudest sample sits about this far over its level
 VOICE_PRESS_DB = 6.0           # the most the loudest syllables are pressed down to reach the mark
 VOICE_PRESS_MS = 5.0           # ...in pieces this long, each looking one piece either side
+
+
+# Background loops. The join: the engine makes more than the loop's length, and that extra
+# is blended into the loop's first part, so the end runs into the start with no click.
+LOOP_LEVEL_DB = -20.0          # a background's average level, dB below full scale
+LOOP_BLEND_SHARE = 0.10        # the blend is this share of the loop...
+LOOP_BLEND_MIN_MS = 250.0      # ...never shorter than this (a short blend can be heard as a blip)
+LOOP_BLEND_MAX_MS = 1000.0     # ...or longer than this
+LOOP_LEAD_S = 0.5              # the engine's first half second is left out: sounds often swell in
+LOOP_SEARCH_MS = 150.0         # the loop may come out this much longer or shorter, to join better
+LOOP_MATCH = 0.3               # how alike the two ends must be (0 to 1) before the length moves
+LOOP_SHORTEST_S = 2.0          # less sound than this cannot be made into a loop
+SEAM_LEVEL_MS = 100.0          # the level either side of the join is measured over this long
 
 
 class SoundProblem(ValueError):
@@ -461,8 +482,193 @@ def inspect(samples: Any, rate: int, *, want_rate: int = RATE, want_channels: in
             "seconds": round(frames / rate, 3), "peak": round(peak, 4)}
 
 
-def wav_bytes(samples: Any, rate: int = RATE) -> bytes:
-    """A sound as the bytes of a 16-bit PCM WAV: what every game engine reads."""
+def loop_blend_ms(seconds: float) -> float:
+    """How long a loop's blend is: a tenth of the loop, from a quarter second to a second."""
+    return min(LOOP_BLEND_MAX_MS, max(LOOP_BLEND_MIN_MS, LOOP_BLEND_SHARE * float(seconds) * 1000.0))
+
+
+def seconds_for_loop(asked: float, most: float) -> float:
+    """How long to ask the engine for, to make a loop `asked` seconds long: the loop, the part
+    blended in, the start that is left out and room to move the join. Never past `most`; a
+    loop near the engine's limit then comes out a little shorter. To a tenth of a second."""
+    extra = LOOP_LEAD_S + (loop_blend_ms(asked) + LOOP_SEARCH_MS) / 1000.0
+    return min(float(most), math.ceil(round((float(asked) + extra) * 10.0, 6)) / 10.0)
+
+
+def pick_loop_length(samples: np.ndarray, start: int, asked: int, blend: int,
+                     search: int) -> tuple[int, float]:
+    """The loop's length in samples, near `asked`, and how alike its two ends are there (-1 to 1).
+
+    A loop starting at `start` blends the `blend` samples that follow it into its own first
+    `blend`. Those two pieces are compared at every length within `search` of the one asked.
+    For a hum or a drone some lengths line the waves up; the closest such length is taken.
+    For rain or wind none does (alike stays under `LOOP_MATCH`), and the length asked is kept.
+    """
+    data = np.asarray(samples, dtype=np.float64)
+    low = max(2 * blend, asked - search)
+    high = min(asked + search, data.size - start - blend)
+    if high < low or not low <= asked <= high:
+        raise SoundProblem("the sound is too short for a loop that long")
+    head = data[start:start + blend]
+    window = data[start + low:start + high + blend]
+    size = 1 << (window.size + blend - 1).bit_length()
+    across = np.fft.irfft(np.fft.rfft(window, size) * np.conj(np.fft.rfft(head, size)), size)[: high - low + 1]
+    total = np.concatenate([[0.0], np.cumsum(window * window)])
+    power = (total[blend:] - total[:-blend]) * float(head @ head)
+    alike = across / np.sqrt(np.maximum(power, 1e-20))
+    best = float(alike.max())
+    if best < LOOP_MATCH:
+        return asked, float(alike[asked - low])
+    good = np.flatnonzero(alike >= best - 0.01)
+    at = int(good[np.argmin(np.abs(good + low - asked))])
+    while at + 1 < alike.size and alike[at + 1] > alike[at]:       # ...then up to the top of that rise
+        at += 1
+    while at > 0 and alike[at - 1] > alike[at]:
+        at -= 1
+    return at + low, float(alike[at])
+
+
+def blend_loop(samples: np.ndarray, start: int, length: int, blend: int, alike: float = 0.0) -> np.ndarray:
+    """`length` samples from `start` that play round with no click: the `blend` samples after
+    them are faded out over the loop's own first `blend`, which fade in.
+
+    So the loop's last sample is followed by its first exactly as the engine made them, and
+    the change of material happens slowly, inside the loop. The two fades are a quarter of a
+    sine and a cosine wave ("equal power"): two unlike sounds, like two stretches of rain,
+    then keep their loudness through the blend. Two alike ones (a hum whose waves line up,
+    `alike` near 1) would come out louder that way, so the sum is scaled back by how alike
+    they are, and the level stays even for both.
+    """
+    data = np.asarray(samples, dtype=np.float64)
+    if blend < 1 or length < 2 * blend or start < 0 or start + length + blend > data.size:
+        raise SoundProblem("the sound is too short for a loop that long")
+    loop = data[start:start + length].copy()
+    turn = (np.pi / 2.0) * np.arange(blend) / blend
+    up, down = np.sin(turn), np.cos(turn)
+    both = loop[:blend] * up + data[start + length:start + length + blend] * down
+    loop[:blend] = both / np.sqrt(1.0 + 2.0 * min(1.0, max(0.0, float(alike))) * up * down)
+    return loop.astype(np.float32)
+
+
+def make_loop(samples: Any, asked_seconds: float, rate: int = RATE) -> tuple[np.ndarray, dict[str, Any]]:
+    """A loop about `asked_seconds` long from a sound made a little longer (`seconds_for_loop`).
+    Returns (the loop, where it came from).
+
+    Dead air is cut from both ends first, and the first half second is left out when there
+    is room. With too little sound for the length asked the loop comes out shorter; with
+    under two seconds it is refused. `start_sample` and `end_sample` are the loop's first and
+    last sample in the finished file: all of it.
+    """
+    data, _ = trim_silence(np.asarray(samples, dtype=np.float32))
+    asked = int(round(float(asked_seconds) * rate))
+    blend = int(round(loop_blend_ms(asked_seconds) * rate / 1000.0))
+    search = int(round(LOOP_SEARCH_MS * rate / 1000.0))
+    if data.size < asked + blend:                       # not enough sound: a shorter loop
+        asked = data.size - blend
+        blend = min(blend, asked // 2)
+        if asked < LOOP_SHORTEST_S * rate:
+            raise SoundProblem("the sound stops too soon to make a loop of it")
+    spare = data.size - asked - blend
+    start = min(int(LOOP_LEAD_S * rate), max(0, spare - search))
+    length, alike = pick_loop_length(data, start, asked, blend, search)
+    loop = blend_loop(data, start, length, blend, alike)
+    return loop, {"start_sample": 0, "end_sample": length - 1,
+                  "crossfade_ms": round(blend * 1000.0 / rate, 1),
+                  "seconds": round(length / rate, 3), "alike": round(alike, 3),
+                  "taken_from_s": round(start / rate, 3)}
+
+
+def seam_report(samples: Any, rate: int = RATE) -> dict[str, Any]:
+    """How a loop's join measures, going from its last sample round to its first.
+
+    - `step_ratio`: the jump across the join, against the usual jump between two samples
+      next to each other. About 1 is "like any other pair"; a click is tens or hundreds.
+    - `slope_ratio`: the same for the change of direction there.
+    - `level_jump_db`: how much louder the first tenth of a second is than the last, and
+      `usual_level_jump_db`: the same between tenths next to each other anywhere in the loop
+      (the middle one of them all). Wind swells and drops on its own; this says by how much.
+    """
+    data = np.asarray(samples, dtype=np.float64).reshape(-1)
+    if data.size < 8:
+        raise SoundProblem("that is too short to be a loop")
+    steps = np.diff(data)
+    usual = float(np.sqrt(np.mean(steps * steps)))
+    bends = np.diff(steps)
+    usual_bend = float(np.sqrt(np.mean(bends * bends)))
+    step = abs(float(data[0] - data[-1]))
+    bend = max(abs(float(data[1] - 2.0 * data[0] + data[-1])), abs(float(data[0] - 2.0 * data[-1] + data[-2])))
+    window = max(1, min(data.size // 2, int(rate * SEAM_LEVEL_MS / 1000.0)))
+    before, after = (float(np.sqrt(np.mean(part * part))) for part in (data[-window:], data[:window]))
+    count = data.size // window
+    power = np.maximum((data[: count * window].reshape(count, window) ** 2).mean(axis=1), 1e-20)
+    usual_jump = float(np.median(np.abs(np.diff(10.0 * np.log10(power))))) if count > 1 else 0.0
+    return {"step": round(step, 6), "usual_step": round(usual, 6),
+            "step_ratio": round(step / usual, 2) if usual > 0 else 0.0,
+            "slope_ratio": round(bend / usual_bend, 2) if usual_bend > 0 else 0.0,
+            "level_jump_db": round(20.0 * math.log10(after / before), 2) if before > 0 and after > 0 else 0.0,
+            "usual_level_jump_db": round(usual_jump, 2)}
+
+
+def level_background(samples: Any, target: float = LOOP_LEVEL_DB,
+                     peak: float = PEAK) -> tuple[np.ndarray, dict[str, Any]]:
+    """A background at its standard volume: its **average** level (`loudness_db`) brought to
+    `target`, up or down. Returns (the sound, what was done).
+
+    An effect is set by its loudest sample; a background set that way comes out as a wall of
+    noise, since rain has no loud sample to speak of. Nothing is clipped: a background whose
+    loudest sample would pass `peak` is held under its mark instead (`held_by_peak`). Never
+    turned up by more than `MAX_BOOST_DB`. The whole sound moves as one, so a loop still joins.
+    """
+    data = np.asarray(samples, dtype=np.float32)
+    before, loudest = loudness_db(data), peak_of(data)
+    facts: dict[str, Any] = {"target": float(target), "measured": before, "peak": round(loudest, 4),
+                             "gain_db": 0.0, "held_by_peak": False,
+                             "measure": "average power over the whole sound, dB below full scale"}
+    if before is None or loudest < SILENT_PEAK:
+        return data.copy(), facts
+    gain_db = min(float(target) - before, MAX_BOOST_DB)
+    room = 20.0 * math.log10(peak / loudest)
+    if gain_db > room:
+        gain_db, facts["held_by_peak"] = room, True
+    out = change_volume(data, gain_db)
+    facts.update(measured=loudness_db(out), peak=round(peak_of(out), 4), gain_db=round(gain_db, 2))
+    return out, facts
+
+
+def clean_loop(samples: Any, rate: int, asked_seconds: float, *, channels_first: bool = False,
+               target: float = LOOP_LEVEL_DB) -> tuple[np.ndarray, dict[str, Any]]:
+    """Everything a fresh background loop needs, in order: one channel, 48 kHz, the loop made
+    (`make_loop`), then its volume (`level_background`). Returns (mono float32 at 48 kHz, the
+    record's `post` block, with `loop`, `loudness` and how the join measures under `join`).
+
+    No fades and no tail: a loop's ends are its join, and anything done to them is heard
+    every time round.
+    """
+    data = to_mono(samples, channels_first=channels_first)
+    if not data.size:
+        raise SoundProblem("the engine made an empty sound")
+    if not np.isfinite(data).all():
+        raise SoundProblem("the engine made a broken sound (it has values that are not numbers)")
+    loop, made = make_loop(resample(data, rate, RATE), asked_seconds)
+    loop, loudness = level_background(loop, target)
+    return loop, {"trim": True, "fade_ms": 0.0, "peak": float(PEAK), "gain_db": loudness["gain_db"],
+                  "tail_s": 0.0, "fade_out_ms": 0.0,
+                  "loop": {key: made[key] for key in ("start_sample", "end_sample", "crossfade_ms")},
+                  "loudness": loudness,
+                  "join": {**seam_report(loop), "alike": made["alike"], "taken_from_s": made["taken_from_s"]}}
+
+
+def _loop_chunk(start: int, end: int, rate: int) -> bytes:
+    """A WAV's `smpl` chunk holding one loop: play forward from `start` to `end` (the last
+    sample played), for ever. Samplers and game engines read it."""
+    body = struct.pack("<9I", 0, 0, int(round(1e9 / rate)), 60, 0, 0, 0, 1, 0)     # ..., one loop, no extra data
+    body += struct.pack("<6I", 0, 0, int(start), int(end), 0, 0)               # id, forward, start, end, -, for ever
+    return b"smpl" + struct.pack("<I", len(body)) + body
+
+
+def wav_bytes(samples: Any, rate: int = RATE, loop: tuple[int, int] | None = None) -> bytes:
+    """A sound as the bytes of a 16-bit PCM WAV: what every game engine reads. `loop` is
+    (first sample, last sample) of the part that plays round, written into the file itself."""
     data = np.asarray(samples, dtype=np.float32)
     channels = 1 if data.ndim == 1 else int(data.shape[1])
     pcm = np.round(np.clip(data, -1.0, 1.0) * 32767.0).astype("<i2")
@@ -472,15 +678,38 @@ def wav_bytes(samples: Any, rate: int = RATE) -> bytes:
         out.setsampwidth(2)
         out.setframerate(int(rate))
         out.writeframes(pcm.tobytes())
-    return held.getvalue()
+    made = held.getvalue()
+    if loop is None:
+        return made
+    start, end = int(loop[0]), int(loop[1])
+    if not 0 <= start < end < data.shape[0]:
+        raise SoundProblem("the loop must start and end inside the sound")
+    made += _loop_chunk(start, end, int(rate))
+    return made[:4] + struct.pack("<I", len(made) - 8) + made[8:]       # the file's own size, with the new part
 
 
-def write_wav(path: Path, samples: Any, rate: int = RATE) -> Path:
+def write_wav(path: Path, samples: Any, rate: int = RATE, loop: tuple[int, int] | None = None) -> Path:
     """`wav_bytes` on disk. Mono, or (frames, channels)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(wav_bytes(samples, rate))
+    path.write_bytes(wav_bytes(samples, rate, loop))
     return path
+
+
+def read_loop(source: Path | bytes) -> dict[str, int] | None:
+    """Where a WAV says its loop is: `{start_sample, end_sample}` (both played), or None when
+    it names none. Takes a file or its bytes. Reads the first loop of the `smpl` chunk."""
+    data = bytes(source) if isinstance(source, bytes | bytearray) else Path(source).read_bytes()
+    if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise SoundProblem("that is not a WAV file")
+    at = 12
+    while at + 8 <= len(data):
+        name, size = data[at:at + 4], struct.unpack_from("<I", data, at + 4)[0]
+        if name == b"smpl" and size >= 60 and at + 68 <= len(data) and struct.unpack_from("<I", data, at + 36)[0]:
+            start, end = struct.unpack_from("<2I", data, at + 52)
+            return {"start_sample": int(start), "end_sample": int(end)}
+        at += 8 + size + (size & 1)
+    return None
 
 
 def read_wav(path: Path) -> tuple[np.ndarray, int]:

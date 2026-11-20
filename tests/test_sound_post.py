@@ -700,3 +700,223 @@ def test_peaks_are_pressed_by_six_decibels_at_most_and_then_the_line_is_held():
     assert sp.peak_of(line) <= sp.PEAK + 1e-6
     # short of a shout's mark, and still louder than the same line said plainly
     assert sp.speech_level_db(sp.level_voice(raw)[0]) < sp.speech_level_db(line) < sp.voice_target_db("shout")
+
+
+# ------------------------------------------------------------------------- background loops
+
+def noise(seconds, seed=1, level=0.2):
+    return (level * np.random.default_rng(seed).standard_normal(int(seconds * sp.RATE))).astype(np.float32)
+
+
+def rumble(seconds, seed=2):
+    """Noise with most of its power low down, like wind or a storm: each sample close to the last."""
+    white = np.random.default_rng(seed).standard_normal(int(seconds * sp.RATE))
+    spectrum = np.fft.rfft(white)
+    spectrum /= np.maximum(1.0, np.arange(spectrum.size) / 200.0)
+    out = np.fft.irfft(spectrum, n=white.size)
+    return (0.3 * out / np.abs(out).max()).astype(np.float32)
+
+
+def block_levels(sound, ms=100.0):
+    size = int(sp.RATE * ms / 1000.0)
+    count = sound.size // size
+    power = (sound[: count * size].astype(np.float64).reshape(count, size) ** 2).mean(axis=1)
+    return 10.0 * np.log10(power)
+
+
+def test_the_blend_is_a_tenth_of_the_loop_within_its_limits():
+    assert [sp.loop_blend_ms(s) for s in (1, 4, 8, 10, 30)] == [250.0, 400.0, 800.0, 1000.0, 1000.0]
+
+
+def test_the_engine_is_asked_for_the_loop_plus_what_the_join_needs():
+    assert sp.seconds_for_loop(8.0, 30.0) == 9.5            # 8 + 0.5 left out + 0.8 blend + 0.15 to move, rounded up
+    assert sp.seconds_for_loop(4.0, 30.0) == 5.1
+    assert sp.seconds_for_loop(10.0, 30.0) == 11.7
+    assert sp.seconds_for_loop(30.0, 30.0) == 30.0          # never past the engine's most
+
+
+@pytest.mark.parametrize("make", [noise, rumble, lambda s: sine(s, 110.0, level=0.4)])
+def test_a_loop_has_no_step_where_it_wraps(make):
+    source = make(9.5)
+    loop, made = sp.make_loop(source, 8.0)
+    seam = sp.seam_report(loop)
+    assert seam["step_ratio"] < 4.0 and seam["slope_ratio"] < 4.0      # like any two neighbours; a click is 10s
+    swings = np.abs(np.diff(block_levels(source)))                     # wind swells on its own: no more than that
+    assert abs(seam["level_jump_db"]) <= max(1.0, swings.max())
+    assert seam["usual_level_jump_db"] == pytest.approx(np.median(np.abs(np.diff(block_levels(loop)))), abs=0.01)
+    assert made["start_sample"] == 0 and made["end_sample"] == loop.size - 1
+    assert made["crossfade_ms"] == 800.0 and abs(loop.size / sp.RATE - 8.0) <= 0.15
+
+
+def test_the_wrap_is_the_engines_own_next_sample():
+    """The last sample is followed by the first exactly as the source had them: that is why
+    there is no click, whatever the sound."""
+    source = rumble(9.5)
+    loop, made = sp.make_loop(source, 8.0)
+    start = int(made["taken_from_s"] * sp.RATE)
+    assert made["taken_from_s"] == 0.5
+    assert loop[-1] == source[start + loop.size - 1] and loop[0] == pytest.approx(source[start + loop.size], abs=1e-6)
+    blend = int(0.8 * sp.RATE)
+    np.testing.assert_array_equal(loop[blend:], source[start + blend:start + loop.size])   # past the blend: untouched
+
+
+def test_a_plain_cut_does_click_and_the_report_says_so():
+    cut = rumble(9.5)[: 8 * sp.RATE]
+    assert sp.seam_report(cut)["step_ratio"] > 10.0
+
+
+@pytest.mark.parametrize("make", [noise, rumble, lambda s: sine(s, 110.0, level=0.4),
+                                  lambda s: sine(s, 60.0, level=0.3) + noise(s, level=0.05)])
+def test_loudness_stays_even_through_the_blend_and_across_the_wrap(make):
+    source = make(9.5)
+    loop, _ = sp.make_loop(source, 8.0)
+    levels, own = block_levels(np.tile(loop, 2)), block_levels(source)     # twice round: the wrap is in the middle
+    # no dip and no bump, for unlike sounds and alike ones: it moves no more than the source does by itself
+    assert levels.max() - levels.min() < (own.max() - own.min()) + 1.0
+    assert levels.min() > own.min() - 1.0 and levels.max() < own.max() + 1.0
+
+
+def test_equal_power_keeps_two_unlike_sounds_level_and_a_plain_fade_would_dip():
+    source = noise(6.0)
+    blend = sp.RATE
+    loop = sp.blend_loop(source, 0, 4 * sp.RATE, blend, alike=0.0)
+    middle = loop[blend // 2 - 2400:blend // 2 + 2400].astype(np.float64)
+    assert 10 * math.log10(np.mean(middle ** 2) / np.mean(source.astype(np.float64) ** 2)) == pytest.approx(0.0, abs=0.5)
+    ramp = np.arange(blend) / blend                          # the straight fade, for contrast: 3 dB down midway
+    straight = source[:blend] * ramp + source[4 * sp.RATE:5 * sp.RATE] * (1 - ramp)
+    dip = straight[blend // 2 - 2400:blend // 2 + 2400].astype(np.float64)
+    assert 10 * math.log10(np.mean(dip ** 2) / np.mean(source.astype(np.float64) ** 2)) < -2.0
+
+
+def test_two_alike_ends_are_not_made_louder_by_the_blend():
+    tone = sine(6.0, 100.0, level=0.4)                       # 480 samples a wave: 4 s is a whole number of them
+    even = sp.blend_loop(tone, 0, 4 * sp.RATE, sp.RATE, alike=1.0)
+    np.testing.assert_allclose(even, tone[: 4 * sp.RATE], atol=1e-4)      # the same wave, untouched
+    bump = sp.blend_loop(tone, 0, 4 * sp.RATE, sp.RATE, alike=0.0)
+    assert sp.peak_of(bump) > 0.4 * 1.3                      # what equal power alone would do: 3 dB up
+
+
+def test_a_hum_gets_the_nearest_length_that_lines_its_waves_up():
+    tone = sine(6.0, 100.0, level=0.4)                       # one wave is 480 samples
+    asked = int(4.003 * sp.RATE)                             # 144 samples past a whole wave
+    length, alike = sp.pick_loop_length(tone, 0, asked, int(0.4 * sp.RATE), int(0.15 * sp.RATE))
+    assert length % 480 == 0 and abs(length - asked) <= 240 and alike > 0.99
+    loop, made = sp.make_loop(tone, 4.003)
+    assert loop.size % 480 == 0 and made["alike"] > 0.99
+
+
+def test_rain_keeps_the_length_asked():
+    source = noise(6.0)
+    length, alike = sp.pick_loop_length(source, 0, 4 * sp.RATE, int(0.4 * sp.RATE), int(0.15 * sp.RATE))
+    assert length == 4 * sp.RATE and abs(alike) < 0.1
+    loop, made = sp.make_loop(source, 4.0)
+    assert loop.size == 4 * sp.RATE and made["seconds"] == 4.0
+
+
+def test_dead_air_and_the_swell_at_the_start_stay_out_of_the_loop():
+    source = padded(noise(9.5), before=4800, after=4800)
+    loop, made = sp.make_loop(source, 8.0)
+    assert made["taken_from_s"] == 0.5 and np.abs(loop).min() < 1e-3 < np.abs(loop[:100]).max()
+    assert block_levels(loop).min() > -30                    # no silent stretch inside
+
+
+def test_too_little_sound_makes_a_shorter_loop_and_far_too_little_is_refused():
+    loop, made = sp.make_loop(noise(6.0), 8.0)               # the engine stopped early
+    assert 5.0 <= made["seconds"] < 6.0 and made["end_sample"] == loop.size - 1
+    assert sp.seam_report(loop)["step_ratio"] < 4.0
+    with pytest.raises(sp.SoundProblem, match="too soon"):
+        sp.make_loop(noise(1.5), 8.0)
+    with pytest.raises(sp.SoundProblem, match="too soon"):
+        sp.make_loop(padded(noise(1.0), 48_000, 6 * 48_000), 4.0)
+
+
+def test_a_loop_at_the_engines_limit_comes_out_a_little_shorter():
+    _, made = sp.make_loop(noise(30.0), 30.0)
+    assert made["seconds"] == pytest.approx(29.0, abs=0.01)  # 30 s made, a second of it blended in
+
+
+def test_a_background_is_set_by_its_average_level_not_its_loudest_sample():
+    for level in (0.9, 0.03):                                # a wall of noise, and a whisper of one
+        out, facts = sp.level_background(noise(4.0, level=level / 3))
+        assert sp.loudness_db(out) == pytest.approx(-20.0, abs=0.05)
+        assert facts["target"] == -20.0 and facts["measured"] == pytest.approx(-20.0, abs=0.05)
+        assert facts["held_by_peak"] is False and facts["peak"] == pytest.approx(sp.peak_of(out), abs=1e-4)
+    loud, facts = sp.level_background(noise(4.0, level=0.3))
+    assert facts["gain_db"] < 0 and sp.peak_of(loud) < 0.6   # an effect would have been pushed to 0.98
+
+
+def test_a_spiky_background_is_held_under_its_mark_and_never_clipped():
+    spiky = noise(4.0, level=0.001)
+    spiky[1000] = 0.5                                        # one thunderclap
+    out, facts = sp.level_background(spiky)
+    assert facts["held_by_peak"] is True and sp.peak_of(out) == pytest.approx(0.98, abs=1e-3)
+    assert facts["measured"] < -20.0
+
+
+def test_silence_is_left_for_the_check_to_refuse_and_hiss_is_not_blown_up():
+    out, facts = sp.level_background(np.zeros(4800, np.float32))
+    assert facts["gain_db"] == 0.0 and facts["measured"] is None and not out.any()
+    _, facts = sp.level_background(noise(1.0, level=1e-4))
+    assert facts["gain_db"] == sp.MAX_BOOST_DB
+
+
+def test_a_loop_is_cleaned_without_fades_or_a_tail():
+    stereo = np.stack([rumble(9.5), rumble(9.5, seed=5)])    # (channels, frames), as an engine answers
+    loop, post = sp.clean_loop(stereo, sp.RATE, 8.0, channels_first=True)
+    assert post["fade_ms"] == 0.0 and post["fade_out_ms"] == 0.0 and post["tail_s"] == 0.0
+    assert post["loop"] == {"start_sample": 0, "end_sample": loop.size - 1, "crossfade_ms": 800.0}
+    assert post["loudness"]["target"] == -20.0 and sp.loudness_db(loop) == pytest.approx(-20.0, abs=0.05)
+    assert post["join"]["step_ratio"] < 4.0 and abs(loop[0]) > 1e-4 and abs(loop[-1]) > 1e-4   # not faded to zero
+    sp.inspect(loop, sp.RATE)
+
+
+def test_a_steady_effect_still_gets_its_fade_and_its_peak():
+    """Loops take their own route: the effect path is as it was."""
+    sound, post = sp.clean(noise(3.0), sp.RATE, asked_seconds=1.5)
+    assert sp.peak_of(sound) == pytest.approx(0.98, abs=1e-3) and post["fade_out_ms"] == sp.LONG_FADE_MS
+    assert abs(sound[-1]) < 1e-3 and "loop" not in post and sound.size == int(1.5 * sp.RATE)
+    assert sp.voice_target_db() == -16.0 and sp.voice_target_db("shout") == -12.0
+
+
+def test_broken_or_empty_audio_is_refused_for_a_loop_too():
+    with pytest.raises(sp.SoundProblem, match="empty"):
+        sp.clean_loop(np.zeros(0, np.float32), sp.RATE, 4.0)
+    bad = noise(6.0)
+    bad[10] = np.nan
+    with pytest.raises(sp.SoundProblem, match="broken"):
+        sp.clean_loop(bad, sp.RATE, 4.0)
+
+
+def test_loop_points_are_written_into_the_wav_and_read_back(tmp_path):
+    loop, post = sp.clean_loop(rumble(5.1), sp.RATE, 4.0)
+    points = (post["loop"]["start_sample"], post["loop"]["end_sample"])
+    wav = sp.write_wav(tmp_path / "loop.wav", loop, loop=points)
+    assert sp.read_loop(wav) == {"start_sample": 0, "end_sample": loop.size - 1}
+    assert sp.read_loop(wav.read_bytes()) == sp.read_loop(wav)
+    raw = wav.read_bytes()
+    assert int.from_bytes(raw[4:8], "little") == len(raw) - 8          # the header still tells the truth
+    back, rate = sp.read_wav(wav)                                      # and it is still an ordinary WAV
+    assert rate == sp.RATE and back.size == loop.size
+    assert sp.inspect_wav(wav)["frames"] == loop.size
+    assert sp.seam_report(back)["step_ratio"] < 4.0                    # 16 bits do not open the join
+    again, facts = sp.import_wav(raw)
+    assert again.size == loop.size and facts["bits"] == 16
+
+
+def test_the_loop_part_of_the_file_is_what_samplers_expect():
+    raw = sp.wav_bytes(sine(0.1), loop=(10, 4000))
+    at = raw.index(b"smpl")
+    assert at > raw.index(b"data") and int.from_bytes(raw[at + 4:at + 8], "little") == 60
+    fields = np.frombuffer(raw[at + 8:at + 68], dtype="<u4").tolist()
+    assert fields[2] == 20833 and fields[3] == 60 and fields[7] == 1   # 1e9 / 48000 ns a sample; middle C; one loop
+    assert fields[9:] == [0, 0, 10, 4000, 0, 0]                        # forward, from 10 to 4000, for ever
+
+
+def test_a_wav_with_no_loop_says_none_and_a_bad_loop_is_refused(tmp_path):
+    assert sp.read_loop(sp.wav_bytes(sine(0.1))) is None
+    assert sp.wav_bytes(sine(0.1)) == sp.wav_bytes(sine(0.1), loop=None)
+    for bad in ((0, 4800), (-1, 100), (200, 100)):
+        with pytest.raises(sp.SoundProblem, match="inside the sound"):
+            sp.wav_bytes(sine(0.1), loop=bad)
+    with pytest.raises(sp.SoundProblem, match="not a WAV"):
+        sp.read_loop(b"nope")
