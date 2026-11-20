@@ -80,13 +80,13 @@ KEPT_LAYERS = "layers"             # beside a sound built from layers: each laye
 KEPT_LAYER_FILE = re.compile(r"^layer-[1-9]\.wav$")
 KEPT_RUN = re.compile(r"^[A-Za-z0-9_-]{1,80}__\d{8}-\d{6}(?:-\d+)?$")
 
-# What the studio offers under "What kind?". Only Effect is built; the rest are shown so
-# people know they are coming, and say so.
+# What the studio offers under "What kind?". Effect is made here and Voice on its own sheet
+# (viewer/voice_api.py, `sheet`); the rest are shown so people know they are coming, and say so.
 KINDS = (
     {"id": "effect", "label": "Effect", "hint": "One short sound, like a footstep or a hit.", "ready": True},
     {"id": "loop", "label": "Background loop", "hint": "Wind, rain, a crowd: plays round and round.", "ready": False},
     {"id": "music", "label": "Music", "hint": "A tune for a menu or a level.", "ready": False},
-    {"id": "voice", "label": "Voice", "hint": "A line read out loud.", "ready": False},
+    {"id": "voice", "label": "Voice", "hint": "A line read out loud.", "ready": True, "sheet": "voice"},
 )
 # "Make variations": the same words in the studio, for agents and in the set's record.
 HOW_DIFFERENT = (
@@ -242,6 +242,8 @@ def clean_request(raw: dict[str, Any], engine: SoundEngine = MOSS) -> dict[str, 
         raise ValueError(f"no sound kind {kind!r}; choose {', '.join(known)}")
     if not known[kind]["ready"]:
         raise ValueError(f"{known[kind]['label']} is not built yet. Effects are.")
+    if known[kind].get("sheet"):
+        raise ValueError(f"{known[kind]['label']} has its own page: it is made from a line to say, not a description")
     prompt = " ".join(str(raw.get("prompt") or "").split())
     if not prompt:
         raise ValueError("describe the sound first")
@@ -413,8 +415,12 @@ def build_command(request: dict[str, Any], out: Path, engine: SoundEngine = MOSS
 class SoundJob:
     """One "Make 4": up to four tries from one description, made one after another."""
 
-    def __init__(self, job_id: str, directory: Path, request: dict[str, Any], engine: SoundEngine = MOSS):
+    def __init__(self, job_id: str, directory: Path, request: dict[str, Any], engine: SoundEngine = MOSS,
+                 prepare: Any = None):
         self.id = job_id
+        # For a job another engine family runs (a voice line): answers the runner's command,
+        # after checking that engine is here. Left out, it is a sound effect's (`run_job`).
+        self.prepare = prepare
         self.directory = directory
         self.request = request
         self.engine = engine
@@ -446,11 +452,14 @@ class SoundJob:
             "job_id": self.id,
             "status": self.status,
             "engine": self.engine.id,
+            "kind": self.request.get("kind", "effect"),
             "prompt": self.request["prompt"],
-            "seconds": self.request["seconds"],
+            "seconds": self.request.get("seconds"),
             "seed": self.request["seed"],
             "count": self.request["count"],
-            "leave_out": self.request["leave_out"],
+            "leave_out": self.request.get("leave_out") or [],
+            # a voice job: the lines, the voice and how it is said (viewer/voice_api.py)
+            **({"voice": dict(self.request["voice_facts"])} if self.request.get("voice_facts") else {}),
             "tries": [dict(item) for item in self.tries],
             "error": self.error,
             "elapsed_seconds": round(time.monotonic() - self.started, 1),
@@ -468,7 +477,10 @@ class SoundJobManager:
         self.lock = threading.Lock()
         self.active: str | None = None
 
-    def create(self, request: dict[str, Any], engine: SoundEngine = MOSS) -> SoundJob:
+    def create(self, request: dict[str, Any], engine: SoundEngine = MOSS, *, prepare: Any = None,
+               using: Any = ()) -> SoundJob:
+        """A new batch. `using` names earlier batches whose tries are still on the page (a
+        voice line made again, while the other lines wait to be joined): those are not cleared."""
         with self.lock:
             running = self.jobs.get(self.active) if self.active else None
             if running and running.status in {"queued", "running", "cancelling"}:
@@ -478,10 +490,12 @@ class SoundJobManager:
             # tries nobody kept, from batches before this one (or before a restart): gone, so
             # they never pile up. Nothing is running, so none of them is in use.
             tries = self.output_root / TRIES_FOLDER
+            spared = {str(item) for item in using or () if str(item) in self.jobs}
             for old in (tries.iterdir() if tries.is_dir() else ()):
-                shutil.rmtree(old, ignore_errors=True)
+                if old.name not in spared:
+                    shutil.rmtree(old, ignore_errors=True)
             directory.mkdir(parents=True, exist_ok=True)
-            job = SoundJob(job_id, directory, request, engine)
+            job = SoundJob(job_id, directory, request, engine, prepare)
             self.jobs[job.id] = job
             self.active = job.id
             return job
@@ -552,10 +566,12 @@ def failure_reason(log_lines) -> str | None:
 def run_job(job: SoundJob, manager: SoundJobManager, command: list[str] | None = None) -> None:
     """Drive one batch to its end, passing on progress and each try as it lands."""
     try:
-        if command is None:
+        if command is None and job.prepare is not None:
+            command = job.prepare(job)
+        elif command is None:
             check_ready(job.engine)
             command = build_command(job.request, job.directory, job.engine, weights_dir(job.engine))
-        job.set_status("running", count=job.request["count"], total_steps=job.request["steps"])
+        job.set_status("running", count=job.request["count"], total_steps=job.request.get("steps"))
         job.process = subprocess.Popen(
             command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=str(REPO),
             **processes.group_popen_kwargs(),
@@ -577,11 +593,13 @@ def run_job(job: SoundJob, manager: SoundJobManager, command: list[str] | None =
                         "seconds": event.get("seconds"), "peak": event.get("peak"),
                         "bars": event.get("bars") or [],
                         "url": f"/api/sound/{job.id}/try-{int(event['number'])}.wav",
-                        "kept": None}
+                        "kept": None,
+                        # a voice try: which line it says, which take of it, and words it had to guess
+                        **{key: event[key] for key in ("line", "take", "level_db", "guessed") if key in event}}
                 job.tries.append(made)
                 job.emit({"phase": "try", **made})
             elif kind == "step":
-                total = event.get("total") or job.request["steps"]
+                total = event.get("total") or job.request.get("steps") or 1
                 done = (int(event.get("number", 1)) - 1) + int(event.get("step", 0)) / max(1, total)
                 job.emit({"phase": "making", "number": event.get("number"), "step": event.get("step"),
                           "total_steps": total,
@@ -659,6 +677,9 @@ def _record(path: Path) -> dict[str, Any]:
 
 
 def _prompt(record: dict[str, Any]) -> str | None:
+    voice = record.get("voice") if isinstance(record.get("voice"), dict) else {}
+    if isinstance(voice.get("text"), str):          # a voice line: the words said, all of them
+        return voice["text"]
     layers = record.get("layers") if isinstance(record.get("layers"), list) else []
     source = (layers[0].get("source") or {}) if layers and isinstance(layers[0], dict) else {}
     return source.get("prompt") if isinstance(source, dict) else None

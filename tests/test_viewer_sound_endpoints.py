@@ -120,7 +120,7 @@ def test_tries_are_not_served_as_plain_files(studio):
 @pytest.mark.parametrize("body,why", [
     ({**ASK, "seconds": 45}, "0.5 to 30 seconds"),
     ({**ASK, "prompt": ""}, "describe the sound"),
-    ({**ASK, "kind": "voice"}, "Voice is not built yet"),
+    ({**ASK, "kind": "voice"}, "Voice has its own page"),
     ({**ASK, "engine": "tango"}, "no sound engine"),
     ({**ASK, "count": 9}, "between 1 and 4"),
 ])

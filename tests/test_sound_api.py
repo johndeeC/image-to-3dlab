@@ -105,6 +105,7 @@ def test_a_good_request_comes_back_tidy():
     ({"leave_out": ["y" * 41]}, "a few words each"),
     ({"leave_out": 5}, "list of things"),
     ({"kind": "music"}, "Music is not built yet"),
+    ({"kind": "voice"}, "Voice has its own page"),
     ({"kind": "noise"}, "no sound kind"),
 ])
 def test_anything_past_a_limit_is_refused_not_clipped(change, why):
@@ -515,7 +516,8 @@ def test_the_sheet_is_told_the_kinds_the_limits_and_whether_the_engine_is_here(m
     told = api.defaults_payload()
     assert told["installed"] is False and told["setup_id"] == "sound-effects" and told["download_size"] == "6.4 GB"
     assert [(k["label"], k["ready"]) for k in told["kinds"]] == [
-        ("Effect", True), ("Background loop", False), ("Music", False), ("Voice", False)]
+        ("Effect", True), ("Background loop", False), ("Music", False), ("Voice", True)]
+    assert [k.get("sheet") for k in told["kinds"]] == [None, None, None, "voice"]      # Voice has its own sheet
     assert told["leave_out"] == ["music", "voices", "room echo"]
     assert told["limits"] == {"min_seconds": 0.5, "max_seconds": 30.0, "default_seconds": 1.5,
                               "max_prompt": 500, "tries": 4}

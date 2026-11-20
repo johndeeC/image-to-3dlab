@@ -641,3 +641,16 @@ def test_a_fresh_voice_line_is_cleaned_in_one_go():
         sp.clean_voice(np.zeros(0, np.float32), 24_000)
     with pytest.raises(sp.SoundProblem, match="broken"):
         sp.clean_voice(np.array([0.1, np.nan], np.float32), 24_000)
+
+
+def test_lines_are_joined_with_a_gap_and_keep_their_own_levels():
+    loud, quiet = sp.level_voice(speech(1.0), "shout")[0], sp.level_voice(speech(1.0), "whisper")[0]
+    joined, facts = sp.join_lines([loud, quiet], gap_ms=250)
+    gap = int(0.25 * sp.RATE)
+    assert joined.size == loud.size + gap + quiet.size and facts["seconds"] == round(joined.size / sp.RATE, 3)
+    assert facts["starts_ms"] == [0.0, round((loud.size + gap) * 1000 / sp.RATE, 1)]
+    assert not joined[loud.size:loud.size + gap].any()                  # the gap is silence
+    np.testing.assert_array_equal(joined[:loud.size], loud)             # nothing was turned up or down
+    np.testing.assert_array_equal(joined[-quiet.size:], quiet)
+    with pytest.raises(sp.SoundProblem, match="no line"):
+        sp.join_lines([])

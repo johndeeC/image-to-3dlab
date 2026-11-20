@@ -130,6 +130,23 @@ MOSS_OUTPUT_RIGHTS = (
 )
 
 
+# Voice lines. Both models, their MLX conversions and mlx-audio (MIT), which runs them, were
+# checked on their Hugging Face cards 2026-11-20. The voices are the preset ones each model
+# ships with: nothing here copies a person's voice, and the record says so.
+KOKORO_OUTPUT_RIGHTS = (
+    "The lines you generate are yours, for any use including commercial: Kokoro-82M, its MLX "
+    "conversion and its preset voices are Apache-2.0. Its maker says it was trained only on "
+    "audio that is free to use; we have not checked that."
+)
+QWEN_TTS_OUTPUT_RIGHTS = (
+    "The lines you generate are yours, for any use including commercial: Qwen3-TTS and its MLX "
+    "conversion are Apache-2.0, with no region limits. The model's training data is not published."
+)
+VOICE_PRESET_RULE = (
+    "The voice is a preset one shipped with the model. No person's voice was copied to make this line."
+)
+
+
 # Whichever remover this machine runs (image_to_3dlab/matte.py picks it); both are MIT.
 MATTE_LICENSES = {
     "birefnet-lite-lean": "MIT (BiRefNet)",
@@ -230,6 +247,23 @@ LICENSES = {
         license_url="https://huggingface.co/OpenMOSS-Team/MOSS-SoundEffect-v2.0",
         conditions=(MOSS_OUTPUT_RIGHTS,),
         models=("OpenMOSS-Team/MOSS-SoundEffect-v2.0", "mlx-community/MOSS-SoundEffect-v2.0-4bit"),
+    ),
+    # Text to a spoken line, both run through mlx-audio (MIT).
+    "kokoro-82m": LicenseProfile(
+        classification="commercial-clear",
+        folder="commercial",
+        license_name="Apache-2.0",
+        license_url="https://huggingface.co/hexgrad/Kokoro-82M",
+        conditions=(KOKORO_OUTPUT_RIGHTS, VOICE_PRESET_RULE),
+        models=("hexgrad/Kokoro-82M", "mlx-community/Kokoro-82M-bf16"),
+    ),
+    "qwen3-tts-customvoice": LicenseProfile(
+        classification="commercial-clear",
+        folder="commercial",
+        license_name="Apache-2.0",
+        license_url="https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+        conditions=(QWEN_TTS_OUTPUT_RIGHTS, VOICE_PRESET_RULE),
+        models=("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"),
     ),
 }
 

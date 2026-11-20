@@ -613,6 +613,27 @@ def clean_voice(samples: Any, rate: int, direction: str | None = None, *,
                   "loudness": loudness}
 
 
+def join_lines(lines: Any, gap_ms: float = 250.0, rate: int = RATE) -> tuple[np.ndarray, dict[str, Any]]:
+    """Voice lines one after another, with `gap_ms` of silence between them. Each is mono at
+    48 kHz and already at its own level; none is made louder or quieter here, so the balance
+    between a shout and a whisper is kept. Returns (the joined sound, its length and where
+    each line starts)."""
+    parts = [np.asarray(line, dtype=np.float32).reshape(-1) for line in lines or []]
+    if not parts or any(not part.size for part in parts):
+        raise SoundProblem("there is no line to join")
+    gap = np.zeros(int(round(max(0.0, float(gap_ms)) * rate / 1000.0)), dtype=np.float32)
+    out, starts, at = [], [], 0
+    for index, part in enumerate(parts):
+        if index:
+            out.append(gap)
+            at += gap.size
+        starts.append(round(at * 1000.0 / rate, 1))
+        out.append(part)
+        at += part.size
+    joined = limit_peak(np.concatenate(out))
+    return joined, {"seconds": round(joined.size / rate, 3), "starts_ms": starts, "gap_ms": float(gap_ms)}
+
+
 def check_layer_numbers(layer: dict[str, Any]) -> dict[str, float]:
     """A layer's start, volume and pitch as numbers, or `SoundProblem` naming the limit.
     Missing ones are 0. Out of range is refused, never pulled inside."""
