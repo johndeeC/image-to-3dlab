@@ -1138,6 +1138,8 @@ def sound_summary(sound: dict[str, Any]) -> dict[str, Any]:
             "file": str(REPO / "output" / sound["file"]) if sound.get("file") else None}
     if sound.get("layers"):
         told["layers"] = sound["layers"]
+    if sound.get("loop"):
+        told["loop"] = True         # plays round with no click; the loop is written inside the WAV
     if sound.get("kind") == "sound_set":
         told.update(count=sound.get("count"), of=sound.get("of"),
                     files=[str(REPO / "output" / name) for name in sound.get("files") or []])
@@ -1254,9 +1256,15 @@ def sound_job_summary(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def make_sound(studio: Studio, *, description: str, seconds: float | None = None,
-               leave_out: list[str] | None = None, tries: int = 4, seed: int | None = None) -> dict[str, Any]:
-    """Start a batch of sound effects from a description. Never downloads the engine."""
+               leave_out: list[str] | None = None, tries: int = 4, seed: int | None = None,
+               kind: str = "effect") -> dict[str, Any]:
+    """Start a batch of sound effects, or of background loops (`kind="loop"`), from a
+    description. Never downloads the engine."""
+    if kind not in ("effect", "loop"):
+        raise StudioError('kind is "effect" (one short sound) or "loop" (a background that plays round and round).')
     body = {"prompt": description, "count": tries, "leave_out": list(leave_out or [])}
+    if kind != "effect":
+        body["kind"] = kind
     if seconds is not None:
         body["seconds"] = seconds
     if seed is not None:
@@ -1265,7 +1273,9 @@ def make_sound(studio: Studio, *, description: str, seconds: float | None = None
     return {"job_id": started["job_id"], "seed": started.get("seed"), "tries": started.get("count"),
             "next": "Takes a few minutes: sound_status(job_id, wait_seconds=50) until done. Then ask the user "
                     "which try to keep (they can listen in the studio's Sound page) and call "
-                    "sound_status(job_id, keep=<try>)."}
+                    "sound_status(job_id, keep=<try>)."
+                    + (" A kept loop's WAV has its loop written inside, so a game engine plays it round with no click."
+                       if kind == "loop" else "")}
 
 
 def list_voices(studio: Studio) -> dict[str, Any]:
@@ -1950,16 +1960,20 @@ def build_server(studio: Studio | None = None):
 
     @server.tool(name="make_sound", structured_output=False)
     def tool_make_sound(description: str, seconds: float | None = None, leave_out: list[str] | None = None,
-                        tries: int = 4, seed: int | None = None):
+                        tries: int = 4, seed: int | None = None, kind: str = "effect"):
         """Make sound effects from a description: a footstep, a hit, a door. Mono 48 kHz WAVs, Apache-2.0 engine.
         description: one thing happening, close up; say what hits what ("sword striking a wooden shield, one hit, dry").
         seconds: 0.5 to 30 (default 1.5); past that it is refused, not shortened. A sound still ringing at the end
         runs a little longer, so it is not cut off. leave_out: things it must not
         have, e.g. ["music", "voices", "room echo"]. tries: 1 to 4 made from one seed (try n uses seed + n - 1).
+        kind="loop" makes a background loop instead (wind, rain, an engine): it plays round and round with no
+        click, sits at an even, quiet volume, and its WAV has the loop written inside. For a loop: seconds 4 to 30
+        (default 8), and describe one steady sound ("rain on a tent"); words like "continuous, steady" are added
+        for you unless the description has its own, and "occasional thunder" is respected. A loop has no variations.
         Needs the "sound-effects" engine (list_engines); if it is missing this says so and downloads nothing:
-        install_backend asks the user first. Effects only: no loops or music yet; a spoken line is make_voice."""
+        install_backend asks the user first. No music yet; a spoken line is make_voice."""
         return safe(lambda: make_sound(studio, description=description, seconds=seconds, leave_out=leave_out,
-                                       tries=tries, seed=seed))
+                                       tries=tries, seed=seed, kind=kind))
 
     @server.tool(name="sound_status", structured_output=False)
     def tool_sound_status(job_id: str, wait_seconds: int = 30, keep: int | None = None, name: str | None = None,

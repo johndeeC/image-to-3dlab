@@ -1187,6 +1187,24 @@ def test_make_sound_sends_what_was_asked_and_says_what_to_do_next():
     assert http.calls[0][2] == {"prompt": "a door", "count": 4, "leave_out": []}
 
 
+def test_make_sound_can_ask_for_a_background_loop():
+    http = SoundHttp()
+    out = ms.make_sound(sound_studio(http), description="rain on a tent", seconds=10, tries=1, kind="loop")
+    assert http.calls == [("POST", "api/sound", {"prompt": "rain on a tent", "count": 1, "leave_out": [],
+                                                 "kind": "loop", "seconds": 10})]
+    assert "loop written inside" in out["next"] and "sound_status" in out["next"]
+    with pytest.raises(ms.StudioError, match='"effect" .* or "loop"'):
+        ms.make_sound(sound_studio(http), description="a tune", kind="music")
+    assert len(http.calls) == 1                                  # refused before the studio is asked
+
+
+def test_a_kept_loop_is_listed_as_one():
+    loop = {"id": "rain__20261120-101700", "name": "Rain", "kind": "sound", "sound_kind": "loop", "seconds": 8.0,
+            "loop": True, "file": "sounds/rain__20261120-101700/sound.wav"}
+    assert ms.sound_summary(loop)["loop"] is True and ms.sound_summary(loop)["sound_kind"] == "loop"
+    assert "loop" not in ms.sound_summary({**loop, "loop": False, "sound_kind": "effect"})
+
+
 def test_a_missing_sound_engine_reaches_the_agent_in_words_and_nothing_else_is_called():
     http = SoundHttp(error=(503, {"error": "MOSS-SoundEffect v2.0 is not set up yet. Missing: its model files "
                                            "(6.4 GB). Open Setup to download it.", "needs_setup": True}))
