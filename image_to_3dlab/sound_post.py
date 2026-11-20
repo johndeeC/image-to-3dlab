@@ -23,6 +23,11 @@ to one sound, so a footstep heard twenty times does not sound copied. Pitch is c
 resampling, the way a game engine does it, so **a higher take is also shorter and a lower one
 longer**. And `play_order` is the shuffle a game uses: never the same take twice running.
 
+Layers live here too (`mix_layers`): each layer is placed at its start time with its own volume
+and pitch, they are summed, and the sum passes through `limit_peak` once. A layer is never
+brought back up to full volume after its volume was chosen. `import_wav` reads a file someone
+brings (16- or 24-bit WAV) into the same one channel at 48 kHz.
+
 Ported from the `postprocess_wav` / `inspect_wav` pair in our older ai-sfx project (trim at
 0.3% of the peak, 5 ms fades, peak 0.98, 16-bit, refuse empty or broken audio).
 """
@@ -33,6 +38,7 @@ import hashlib
 import io
 import math
 import random
+import struct
 import wave
 from itertools import pairwise
 from pathlib import Path
@@ -76,6 +82,19 @@ CHANGES = ("pitch", "volume", "start")   # what may change; "start" is a few ms 
 MIN_VARIATIONS, MAX_VARIATIONS, DEFAULT_VARIATIONS = 2, 12, 6
 START_JITTER_MS = 8.0      # the most a take's start moves, earlier or later
 NEAR_ZERO = 0.15           # a changed take moves at least this share of the range
+
+
+# Layers: a sound built from a few parts, each made cleanly on its own, then stacked.
+MAX_LAYERS = 8
+LAYER_LIMITS = {               # outside these a layer is refused, never pulled inside
+    "start_ms": (0.0, 10_000.0),
+    "volume_db": (-40.0, 12.0),
+    "pitch_semitones": (-12.0, 12.0),
+}
+LAYER_WORDS = {"start_ms": "Starts at", "volume_db": "Volume", "pitch_semitones": "Pitch"}
+LAYER_UNITS = {"start_ms": "ms", "volume_db": "dB", "pitch_semitones": "semitones"}
+MAX_IMPORT_SECONDS = 30.0      # a file brought in as a layer: an effect, not a song
+IMPORT_BITS = (16, 24)
 
 
 class SoundProblem(ValueError):
@@ -451,6 +470,124 @@ def read_wav(path: Path) -> tuple[np.ndarray, int]:
         raw = source.readframes(source.getnframes())
     data = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32767.0
     return (data if channels == 1 else data.reshape(-1, channels)), int(rate)
+
+
+def import_wav(data: bytes) -> tuple[np.ndarray, dict[str, Any]]:
+    """A WAV someone brought, as (one channel float32 at 48 kHz, what it was).
+
+    Reads 16- and 24-bit PCM, one or two channels (or more: they are averaged), at any sample
+    rate. Anything else is refused in plain words: not a WAV at all, compressed or 32-bit float
+    audio, 8-bit, empty, silent, or longer than 30 seconds.
+    """
+    try:
+        with wave.open(io.BytesIO(bytes(data)), "rb") as source:
+            width, channels, rate = source.getsampwidth(), source.getnchannels(), source.getframerate()
+            frames = source.getnframes()
+            raw = source.readframes(frames)
+    except (wave.Error, EOFError, struct.error) as exc:
+        raise SoundProblem("that file is not a WAV this can read. Save it as a plain 16-bit or 24-bit "
+                           "WAV and try again") from exc
+    bits = width * 8
+    if bits not in IMPORT_BITS:
+        raise SoundProblem(f"that WAV is {bits}-bit. Save it as 16-bit or 24-bit and try again")
+    if channels < 1 or rate <= 0:
+        raise SoundProblem("that WAV does not say how many channels or how fast it plays")
+    count = len(raw) // (width * channels)
+    if not count:
+        raise SoundProblem("that WAV is empty")
+    if count / rate > MAX_IMPORT_SECONDS:
+        raise SoundProblem(f"that WAV is {count / rate:.0f} seconds long. A layer can be up to "
+                           f"{MAX_IMPORT_SECONDS:g} seconds")
+    raw = raw[: count * width * channels]
+    if width == 2:
+        samples = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+    else:
+        b = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 3).astype(np.int32)
+        whole = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16)
+        samples = (np.where(whole >= 1 << 23, whole - (1 << 24), whole) / float(1 << 23)).astype(np.float32)
+    mono = to_mono(samples.reshape(-1, channels))
+    if peak_of(mono) < SILENT_PEAK:
+        raise SoundProblem("that WAV is silent")
+    out = resample(mono, rate, RATE)
+    return out, {"sample_rate": int(rate), "channels": int(channels), "bits": bits,
+                 "seconds": round(count / rate, 3), "resampled": rate != RATE, "mixed_down": channels > 1}
+
+
+def loudness_db(samples: np.ndarray) -> float | None:
+    """How loud a sound is over its whole length, in dB below full scale (its average power).
+    Measured on a finished mix, never per layer. None for silence."""
+    data = np.asarray(samples, dtype=np.float64)
+    rms = float(np.sqrt(np.mean(data * data))) if data.size else 0.0
+    return round(20.0 * math.log10(rms), 2) if rms > 0 else None
+
+
+def check_layer_numbers(layer: dict[str, Any]) -> dict[str, float]:
+    """A layer's start, volume and pitch as numbers, or `SoundProblem` naming the limit.
+    Missing ones are 0. Out of range is refused, never pulled inside."""
+    numbers = {}
+    for key, (low, high) in LAYER_LIMITS.items():
+        value = layer.get(key)
+        if value is None or value == "":
+            value = 0.0
+        if isinstance(value, bool):
+            raise SoundProblem(f"{LAYER_WORDS[key]} must be a number")
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            raise SoundProblem(f"{LAYER_WORDS[key]} must be a number") from None
+        if not low <= value <= high:              # also refuses not-a-number
+            raise SoundProblem(f"{LAYER_WORDS[key]} must be between {low:g} and {high:g} {LAYER_UNITS[key]}")
+        numbers[key] = value
+    return numbers
+
+
+def place_layer(samples: Any, *, start_ms: float = 0.0, volume_db: float = 0.0,
+                pitch_semitones: float = 0.0) -> tuple[int, np.ndarray]:
+    """One layer ready to be summed: (the sample it starts on, its samples). Pitch first (by
+    resampling, so **its length changes**), then short fades so its ends never click, then its
+    volume. Its volume is exactly what was asked: nothing here brings it back up or down."""
+    data = fade(shift_pitch(to_mono(samples), pitch_semitones))
+    return int(round(float(start_ms) * RATE / 1000.0)), change_volume(data, volume_db)
+
+
+def mix_layers(layers: Any) -> tuple[np.ndarray, dict[str, Any]]:
+    """Several layers as one sound. Each is `{samples, start_ms, volume_db, pitch_semitones}`,
+    with samples already mono at 48 kHz (`import_wav`, `read_wav`).
+
+    They are placed, **summed**, and the sum is turned down **once** if it passes the peak
+    (`limit_peak`). It is never turned up, and no layer is levelled on its own, so the balance
+    you set is the balance you get. Returns (the mix, facts): its length, its peak before and
+    after, how far it was turned down, its loudness, and where each layer landed.
+    """
+    layers = list(layers or [])
+    if not layers:
+        raise SoundProblem("add a layer first")
+    if len(layers) > MAX_LAYERS:
+        raise SoundProblem(f"a sound can have up to {MAX_LAYERS} layers")
+    placed = []
+    for layer in layers:
+        numbers = check_layer_numbers(layer)
+        data = np.asarray(layer.get("samples"), dtype=np.float32)
+        if data.ndim != 1 or not data.size or not np.isfinite(data).all():
+            raise SoundProblem("a layer has no sound in it")
+        placed.append(place_layer(data, **numbers))
+    total = max(start + data.size for start, data in placed)
+    mix = np.zeros(total, dtype=np.float32)
+    for start, data in placed:
+        mix[start:start + data.size] += data
+    before = peak_of(mix)
+    if before < SILENT_PEAK:
+        raise SoundProblem("the layers together are silent. Turn a layer up")
+    mix = limit_peak(mix)
+    after = peak_of(mix)
+    return mix, {
+        "seconds": round(total / RATE, 3),
+        "peak_before": round(before, 4), "peak": round(after, 4),
+        "turned_down_db": round(20.0 * math.log10(after / before), 2) if after < before else 0.0,
+        "loudness_db": loudness_db(mix),
+        "layers": [{"start_s": round(start / RATE, 3), "seconds": round(data.size / RATE, 3)}
+                   for start, data in placed],
+    }
 
 
 def sha256_file(path: Path) -> str:

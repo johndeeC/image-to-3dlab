@@ -7,6 +7,7 @@ package. The functions are imported, never re-implemented.
 from __future__ import annotations
 
 import hashlib
+import math
 from itertools import pairwise
 
 import numpy as np
@@ -438,3 +439,139 @@ def test_wav_bytes_are_what_write_wav_puts_on_disk(tmp_path):
     sound = sine(seconds=0.05)
     path = sp.write_wav(tmp_path / "deep" / "a.wav", sound)
     assert path.read_bytes() == sp.wav_bytes(sound) and sp.wav_bytes(sound)[:4] == b"RIFF"
+
+
+# ------------------------------------------------------------------ layers: the mix maths
+
+def _wav(samples, rate=48_000, width=2, channels=1, fmt=1) -> bytes:
+    """A WAV file's bytes, written by hand so odd ones (24-bit, float) can be made."""
+    import struct
+    data = np.asarray(samples, dtype=np.float64)
+    if width == 2:
+        body = np.round(data * 32767).astype("<i2").tobytes()
+    elif width == 3:
+        whole = np.round(data * (2**23 - 1)).astype(np.int32)
+        body = b"".join(int(v).to_bytes(3, "little", signed=True) for v in whole.reshape(-1))
+    elif width == 1:
+        body = (np.round(data * 127) + 128).astype(np.uint8).tobytes()
+    else:
+        body = data.astype("<f4").tobytes()
+    head = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + len(body), b"WAVE", b"fmt ", 16, fmt, channels,
+                       rate, rate * channels * width, channels * width, width * 8, b"data", len(body))
+    return head + body
+
+
+def _tone(seconds=0.1, hz=440.0, level=0.5, rate=48_000):
+    return (level * np.sin(2 * np.pi * hz * np.arange(int(seconds * rate)) / rate)).astype(np.float32)
+
+
+def test_a_layer_lands_where_it_starts_and_the_mix_is_as_long_as_its_last_layer():
+    first, second = _tone(0.1, level=0.2), _tone(0.2, 880, level=0.2)
+    mix, facts = sp.mix_layers([{"samples": first}, {"samples": second, "start_ms": 250}])
+    assert mix.dtype == np.float32 and mix.size == 12_000 + 9_600
+    assert facts["seconds"] == 0.45
+    assert facts["layers"] == [{"start_s": 0.0, "seconds": 0.1}, {"start_s": 0.25, "seconds": 0.2}]
+    assert not mix[4_800:12_000].any()                              # the gap between them is silence
+    assert np.allclose(mix[1_000:3_000], first[1_000:3_000], atol=1e-6)
+    assert np.allclose(mix[12_000 + 1_000:12_000 + 3_000], second[1_000:3_000], atol=1e-6)
+
+
+def test_layers_that_overlap_are_added_together():
+    tone = _tone(0.1, level=0.2)
+    mix, facts = sp.mix_layers([{"samples": tone}, {"samples": tone}])
+    assert np.allclose(mix[500:4_000], 2 * tone[500:4_000], atol=1e-6)
+    assert facts["turned_down_db"] == 0.0 and facts["peak"] == pytest.approx(0.4, abs=1e-3)
+
+
+def test_the_mix_is_turned_down_once_as_a_whole_and_keeps_its_balance():
+    loud, soft = _tone(0.1, level=0.9), _tone(0.1, 880, level=0.9)
+    mix, facts = sp.mix_layers([{"samples": loud}, {"samples": soft, "volume_db": -6, "start_ms": 200}])
+    assert sp.peak_of(mix) == pytest.approx(0.9, abs=1e-3) and facts["turned_down_db"] == 0.0
+    # no overlap and under the peak: nothing moves, and the softer layer stays 6 dB under the other
+    assert sp.peak_of(mix[9_600:]) / sp.peak_of(mix[:4_800]) == pytest.approx(10 ** (-6 / 20), abs=5e-3)
+    both, facts = sp.mix_layers([{"samples": loud}, {"samples": loud}, {"samples": soft, "volume_db": -6, "start_ms": 200}])
+    assert facts["peak_before"] == pytest.approx(1.8, abs=1e-2) and facts["peak"] == pytest.approx(0.98, abs=1e-3)
+    assert facts["turned_down_db"] == pytest.approx(20 * math.log10(0.98 / 1.8), abs=0.05)
+    assert not (np.abs(both) > 0.98 + 1e-6).any()                   # turned down, not clipped flat
+    assert sp.peak_of(both[9_600:]) / sp.peak_of(both[:4_800]) == pytest.approx(10 ** (-6 / 20) / 2, abs=5e-3)
+
+
+def test_a_quiet_mix_is_never_turned_up():
+    quiet = _tone(0.1, level=0.05)
+    mix, facts = sp.mix_layers([{"samples": quiet, "volume_db": -6}])
+    assert sp.peak_of(mix) == pytest.approx(0.05 * 10 ** (-6 / 20), abs=1e-4)
+    assert facts["turned_down_db"] == 0.0 and facts["loudness_db"] < -30
+
+
+def test_pitch_changes_a_layers_length_and_so_the_mix():
+    tone = _tone(0.2)
+    up, facts_up = sp.mix_layers([{"samples": tone, "pitch_semitones": 12}])
+    down, facts_down = sp.mix_layers([{"samples": tone, "pitch_semitones": -12}])
+    assert up.size == tone.size // 2 and down.size == tone.size * 2
+    assert facts_up["layers"][0]["seconds"] == 0.1 and facts_down["layers"][0]["seconds"] == 0.4
+    spectrum = np.abs(np.fft.rfft(up))
+    assert np.argmax(spectrum) * 48_000 / up.size == pytest.approx(880, abs=15)
+
+
+@pytest.mark.parametrize("layer, said", [
+    ({"start_ms": -1}, "Starts at must be between 0 and 10000 ms"),
+    ({"start_ms": 10_001}, "Starts at"),
+    ({"volume_db": 12.5}, "Volume must be between -40 and 12 dB"),
+    ({"volume_db": float("nan")}, "Volume"),
+    ({"pitch_semitones": -13}, "Pitch must be between -12 and 12 semitones"),
+    ({"pitch_semitones": "high"}, "Pitch must be a number"),
+    ({"volume_db": True}, "Volume must be a number"),
+])
+def test_a_layer_outside_the_limits_is_refused_not_pulled_inside(layer, said):
+    with pytest.raises(sp.SoundProblem, match=said):
+        sp.mix_layers([{"samples": _tone(), **layer}])
+
+
+def test_no_layers_too_many_or_an_empty_one_are_refused():
+    with pytest.raises(sp.SoundProblem, match="add a layer first"):
+        sp.mix_layers([])
+    with pytest.raises(sp.SoundProblem, match="up to 8 layers"):
+        sp.mix_layers([{"samples": _tone()}] * 9)
+    with pytest.raises(sp.SoundProblem, match="no sound in it"):
+        sp.mix_layers([{"samples": []}])
+    with pytest.raises(sp.SoundProblem, match="silent"):
+        sp.mix_layers([{"samples": np.zeros(100, np.float32)}])
+
+
+def test_loudness_is_measured_on_the_mix():
+    square = np.where(np.arange(4_800) % 2, 0.5, -0.5).astype(np.float32)
+    assert sp.loudness_db(square) == pytest.approx(-6.02, abs=0.01)
+    assert sp.loudness_db(np.zeros(10)) is None
+
+
+def test_a_16_bit_mono_wav_comes_in_as_it_is():
+    tone = _tone(0.1)
+    audio, facts = sp.import_wav(_wav(tone))
+    assert audio.dtype == np.float32 and audio.size == tone.size
+    assert np.allclose(audio, tone, atol=1e-4)
+    assert facts == {"sample_rate": 48_000, "channels": 1, "bits": 16, "seconds": 0.1,
+                     "resampled": False, "mixed_down": False}
+
+
+def test_a_24_bit_stereo_wav_at_another_rate_becomes_one_channel_at_48k():
+    left, right = _tone(0.1, 440, 0.6, 44_100), _tone(0.1, 440, 0.2, 44_100)
+    audio, facts = sp.import_wav(_wav(np.stack([left, right], axis=1), 44_100, width=3, channels=2))
+    assert audio.ndim == 1 and audio.size == 4_800
+    assert facts["resampled"] and facts["mixed_down"] and (facts["bits"], facts["channels"]) == (24, 2)
+    assert np.allclose(audio[500:4_300], _tone(0.1, 440, 0.4)[500:4_300], atol=5e-3)     # the two averaged
+    negative, _ = sp.import_wav(_wav(np.full(480, -0.5), width=3))
+    assert np.allclose(negative[100:300], -0.5, atol=1e-3)                               # 24-bit sign is kept
+
+
+@pytest.mark.parametrize("data, said", [
+    (b"not a wav at all", "not a WAV this can read"),
+    (b"", "not a WAV this can read"),
+    (_wav(_tone(0.01), width=4, fmt=3), "not a WAV this can read"),          # 32-bit float
+    (_wav(_tone(0.01), width=1), "8-bit"),
+    (_wav([]), "empty"),
+    (_wav(np.zeros(480)), "silent"),
+    (_wav(np.full(8_000 * 31, 0.1), rate=8_000), "up to 30 seconds"),
+])
+def test_a_file_that_cannot_be_read_is_refused_in_plain_words(data, said):
+    with pytest.raises(sp.SoundProblem, match=said):
+        sp.import_wav(data)
