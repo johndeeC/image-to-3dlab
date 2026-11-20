@@ -24,6 +24,8 @@ import { openCanvasPane } from './canvas-pane.js';
 import { openSoundPane, createPlayer, SPEAKER } from './sound-pane.js';
 import { filterSounds, keptMeta, soundsFoot, isSet, nextInOrder } from './sound.js';
 import { openVariationsPane } from './variations-pane.js';
+import { openLayersPane } from './layers-pane.js';
+import { canEditLayers } from './layers.js';
 import { mountFootsteps } from './footsteps-pane.js';
 
 const $ = (id) => document.getElementById(id);
@@ -180,6 +182,7 @@ function soundRows() {
     return `<li class="sound-row"><button class="asset sound" data-sound="${escape(sound.id)}" title="${escape(tip)}" aria-pressed="${on}">
       <span class="thumb">${SPEAKER}</span>
       <span style="min-width:0"><span class="nm">${escape(sound.name)}</span><span class="st">${escape(keptMeta(sound))}${on ? ' · playing' : ''}</span></span></button>
+      ${canEditLayers(sound) ? `<button class="ghost small" data-layers="${escape(sound.id)}" data-tip="Open its layers to change the mix. Saving makes a new sound; this one stays.">Edit layers</button>` : ''}
       ${isSet(sound) ? '' : `<button class="ghost small" data-variations="${escape(sound.id)}" data-tip="Small changes of this sound, so repeats don't sound copied. Takes seconds.">Make variations</button>`}</li>`;
   }).join('');
 }
@@ -196,6 +199,11 @@ function playSound(id) {
 function openVariations(sound) {
   soundPlayer.stop();
   openVariationsPane({ stage: $('stage'), sound, on: { saved: refreshSounds } });
+}
+
+function openLayers({ description = '', sound = null } = {}) {
+  soundPlayer.stop();
+  openLayersPane({ stage: $('stage'), description, sound, on: { saved: refreshSounds, back: () => $('soundBtn').click() } });
 }
 
 async function refreshSounds() {
@@ -568,6 +576,8 @@ $('assetList').addEventListener('click', (event) => {
   if (kitRow) { openKit(kitRow.dataset.kit); return; }
   const vary = event.target.closest('[data-variations]');
   if (vary) { openVariations(sounds.find((item) => item.id === vary.dataset.variations)); return; }
+  const layered = event.target.closest('[data-layers]');
+  if (layered) { openLayers({ sound: sounds.find((item) => item.id === layered.dataset.layers) }); return; }
   const soundRow = event.target.closest('[data-sound]');
   if (soundRow) { playSound(soundRow.dataset.sound); return; }
   const toggle = event.target.closest('[data-family]');
@@ -830,7 +840,7 @@ $('createBtn').addEventListener('click', () => {
 // ------------------------------------------------------------------ Sound (docs/sound.md)
 $('soundBtn').addEventListener('click', () => {
   soundPlayer.stop();
-  openSoundPane({ stage: $('stage'), on: { kept: refreshSounds, variations: openVariations } });
+  openSoundPane({ stage: $('stage'), on: { kept: refreshSounds, variations: openVariations, layers: openLayers } });
 });
 
 // ------------------------------------------------------------------ Canvas (docs/canvas.md)

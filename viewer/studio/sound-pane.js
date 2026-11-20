@@ -118,7 +118,8 @@ function keptHtml(sounds, base, playing) {
 
 /**
  * Open the sheet over the viewer. `on.kept()` tells the page a sound joined the Library;
- * `on.variations({ id, name })` asks it to open "Make variations" for a kept sound.
+ * `on.variations({ id, name })` asks it to open "Make variations" for a kept sound;
+ * `on.layers({ description })` asks it to open Layers, split from what is described.
  * Returns { element } so the page can tell whether it is still open.
  */
 export function openSoundPane({ stage, on = {} }) {
@@ -156,6 +157,7 @@ export function openSoundPane({ stage, on = {} }) {
       <div class="sound-go">
         <button type="button" class="primary" data-make ${blocked ? 'disabled' : ''}>Make ${limits.tries}</button>
         <small class="hint">${limits.tries} tries, a few minutes. Keep the one you like.</small>
+        <button type="button" class="ghost" data-layers data-tip="For a sound made of two or three things, like a whoosh then a thud. Each part is made on its own, then stacked.">Build it from layers</button>
         <p class="sound-note" data-note role="status" aria-live="polite"></p>
       </div>
     </section>`;
@@ -237,6 +239,7 @@ export function openSoundPane({ stage, on = {} }) {
     try {
       if (t.dataset.close !== undefined) close();
       else if (t.dataset.make !== undefined) await make();
+      else if (t.dataset.layers !== undefined) on.layers?.({ description: form.prompt });
       else if (t.dataset.stop !== undefined) { await post(`/api/sound/${job.job_id}/cancel`); }
       else if (t.dataset.more !== undefined) {
         // the same description and settings, shown in the form so it is plain what is being made
