@@ -194,7 +194,9 @@ export function openVoicePane({ stage, on = {} }) {
       else if (t.dataset.play) await player.toggle(t.dataset.play);
       else if (t.dataset.keep) {
         t.disabled = true;
-        const made = await post(`/api/sound/${t.dataset.job}/keep`, { try: Number(t.dataset.keep) });
+        // named after its own line, not the whole text it came with
+        const line = blocks.find((block) => block.takes.some((take) => take.job_id === t.dataset.job && take.number === Number(t.dataset.keep)));
+        const made = await post(`/api/sound/${t.dataset.job}/keep`, { try: Number(t.dataset.keep), name: line?.text || '' });
         blocks = blocks.map((block) => ({ ...block, takes: block.takes.map((take) => (
           take.job_id === t.dataset.job && take.number === Number(t.dataset.keep) ? { ...take, kept: made.file } : take)) }));
         await loadKept();

@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import re
 import sys
 import time
 import types
@@ -90,7 +91,9 @@ class LetterGuess:
         sounds = voice_text.guess_phonemes(word)
         if not sounds:
             return None, None
-        self.guessed.append(word)
+        word = re.sub(r"^\W+|\W+$", "", word)          # "Zog." is the word Zog
+        if word not in self.guessed:
+            self.guessed.append(word)
         return sounds, 1
 
 

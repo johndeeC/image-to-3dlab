@@ -386,6 +386,8 @@ def test_the_letter_guess_answers_sounds_and_skips_what_has_no_letters():
     guess = runner.LetterGuess(british=True)
     assert guess(types.SimpleNamespace(text="Zog")) == ("zˈɑɡ", 1) and guess.guessed == ["Zog"]
     assert guess(types.SimpleNamespace(text="…")) == (None, None) and guess.guessed == ["Zog"]
+    assert guess(types.SimpleNamespace(text="Zog.")) == ("zˈɑɡ", 1) and guess.guessed == ["Zog"]     # once, without its full stop
+    assert guess(types.SimpleNamespace(text='"Eldoria,'))[0] == "ɛldˈɔɹiə" and guess.guessed == ["Zog", "Eldoria"]
 
 
 # ----------------------------------------------------------------- the command and the job
