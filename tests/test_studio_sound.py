@@ -19,7 +19,9 @@ needs_node = pytest.mark.skipif(NODE is None, reason="Node is required to execut
 DEFAULTS = {
     "installed": True, "download_size": "6.4 GB", "setup_id": "sound-effects",
     "kinds": [{"id": "effect", "label": "Effect", "hint": "One short sound, like a footstep or a hit.", "ready": True},
-              {"id": "loop", "label": "Background loop", "hint": "", "ready": False},
+              {"id": "loop", "label": "Background loop", "ready": True,
+               "hint": "Plays round and round with no click. Pick it for wind, rain, engines.",
+               "seconds": {"min": 4, "max": 30, "default": 8}},
               {"id": "music", "label": "Music", "hint": "", "ready": False},
               {"id": "voice", "label": "Voice", "hint": "", "ready": True, "sheet": "voice"}],
     "leave_out": ["music", "voices", "room echo"],
@@ -43,11 +45,12 @@ def test_the_request_is_what_the_form_holds():
 
 
 @needs_node
-def test_effect_and_voice_can_be_picked_and_the_rest_say_later():
+def test_effect_loop_and_voice_can_be_picked_and_music_says_later():
     out = _run("console.log(JSON.stringify(m.kindButtons(D)))")
     assert [(k["label"], k["disabled"], k["pressed"]) for k in out] == [
-        ("Effect", False, True), ("Background loop · later", True, False),
+        ("Effect", False, True), ("Background loop", False, False),
         ("Music · later", True, False), ("Voice", False, False)]
+    assert out[1]["hint"] == "Plays round and round with no click. Pick it for wind, rain, engines."
     assert [k["sheet"] for k in out] == [None, None, None, "voice"]       # Voice opens a sheet of its own
 
 
@@ -252,6 +255,70 @@ def test_the_sheet_has_its_styles():
     assert "#fd6d14" not in css.split("/* Sound sheet")[1].split("/*")[0]      # the studio's own colours, by name
 
 
+# ------------------------------------------------------------------ background loops
+
+@needs_node
+def test_a_loop_has_its_own_lengths_and_its_own_words():
+    out = _run("""console.log(JSON.stringify({
+        loop: m.kindLimits(D, 'loop'), effect: m.kindLimits(D, 'effect'), other: m.kindLimits(D, 'nope'),
+        words: m.formWords('loop'), plain: m.formWords('effect'),
+        request: m.soundRequest({ prompt: 'rain on a tent', seconds: 10, kind: 'loop' }),
+        again: m.moreLikeThis({ kind: 'loop', prompt: 'rain on a tent', seconds: 10, leave_out: [] }) }))""")
+    assert out["loop"] == {"min": 4, "max": 30, "usual": 8}
+    assert out["effect"] == out["other"] == {"min": 0.5, "max": 30, "usual": 1.5}
+    assert out["words"]["placeholder"] == "Rain on a tent" and "goes on and on" in out["words"]["describe"]
+    assert "comes round again" in out["words"]["length"] and "ringing" in out["plain"]["length"]
+    assert set(out["words"]) == set(out["plain"])
+    assert out["request"] == {"kind": "loop", "prompt": "rain on a tent", "seconds": 10, "leave_out": [], "count": 4}
+    assert out["again"] == out["request"]                    # more like this stays a loop
+
+
+@needs_node
+def test_what_counts_as_a_loop_and_where_its_join_is_heard():
+    out = _run("""console.log(JSON.stringify({
+        is: [m.isLoop({ kind: 'loop' }), m.isLoop({ kind: 'sound', sound_kind: 'loop' }), m.isLoop({ kind: 'sound', loop: true }),
+             m.isLoop({ kind: 'effect' }), m.isLoop({ kind: 'sound', sound_kind: 'effect', loop: false }), m.isLoop(null)],
+        join: [m.joinWindow(8), m.joinWindow(30), m.joinWindow(3), m.joinWindow(0)] }))""")
+    assert out["is"] == [True, True, True, False, False, False]
+    # the last two seconds, round the join, into the first two; a short loop gives half of itself each side
+    assert out["join"] == [{"offset": 6, "duration": 4}, {"offset": 28, "duration": 4},
+                           {"offset": 1.5, "duration": 3}, {"offset": 0, "duration": 0}]
+
+
+def test_a_loop_plays_round_in_the_sheet_and_the_library_and_its_join_can_be_heard():
+    pane = (STUDIO / "sound-pane.js").read_text(encoding="utf-8")
+    assert "node.loop = true" in pane and "createBufferSource" in pane       # joined sample to sample, not a gap
+    assert "joinWindow(node.buffer.duration)" in pane and "node.start(0, part.offset, part.duration)" in pane
+    assert "Hear the join" in pane and "player.toggle(t.dataset.join, { join: true })" in pane
+    assert "{ loop: t.dataset.loop !== undefined }" in pane and "isLoop(job)" in pane
+    assert "form.seconds = kindLimits(defaults, form.kind).usual" in pane    # picking the kind sets its usual length
+    tip = re.search(r'data-join=[^>]*data-tip="([^"]+)"', pane)[1]
+    assert "no click" in tip and len(tip) < 140
+    app = (STUDIO / "app.js").read_text(encoding="utf-8")
+    assert "soundPlayer.toggle(url(sound.file), { loop: isLoop(sound) })" in app
+    assert "playing round and round" in app
+
+
+def test_loop_words_on_screen_are_plain():
+    """No sound-engineer words where a user reads: the control is "Hear the join"."""
+    shown = "".join((STUDIO / name).read_text(encoding="utf-8") for name in ("sound-pane.js", "sound.js"))
+    said = " ".join(re.findall(r">([A-Z][^<>{}$=;()]*)<", shown) + re.findall(r"'([A-Z][^'\n]{8,})'", shown)
+                    + re.findall(r'data-tip="([^"]+)"', shown)).lower()
+    for jargon in ("lufs", "crossfade", "smpl", "chunk", "rms", "seam", "decibel", " db", "sample", "equal power"):
+        assert jargon not in said, jargon
+    assert "hear the join" in said and "round and round" in said
+
+
+@needs_node
+def test_the_sound_sheet_loads_as_a_module():
+    """A slip in the file would only show when someone opens the sheet: import the real one."""
+    url = (STUDIO / "sound-pane.js").as_uri()
+    result = subprocess.run([NODE, "--input-type=module", "--eval",
+                             f"const m = await import({json.dumps(url)}); console.log(Object.keys(m).sort().join())"],
+                            check=True, capture_output=True, text=True)
+    assert "createPlayer" in result.stdout and "openSoundPane" in result.stdout
+
+
 # ------------------------------------------------------------------ variations, as they ship
 
 @needs_node
@@ -268,7 +335,7 @@ def test_variations_open_from_a_kept_sound_in_the_library_and_from_a_kept_try():
     app = (STUDIO / "app.js").read_text(encoding="utf-8")
     assert "from './variations-pane.js'" in app and "openVariationsPane({ stage: $('stage'), sound" in app
     assert 'data-variations="${escape(sound.id)}"' in app and "variations: openVariations" in app
-    assert "isSet(sound) ? ''" in app                                   # a set is not varied again
+    assert "isSet(sound) || isLoop(sound) ? ''" in app                  # a set is not varied again, nor is a loop
     pane = (STUDIO / "sound-pane.js").read_text(encoding="utf-8")
     assert 'data-variations="${esc(soundIdOf(card.kept))}"' in pane and "on.variations?.(" in pane
     assert ">Make variations</button>" in pane and ">Make variations</button>" in app

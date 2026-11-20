@@ -2,7 +2,7 @@
 // like. Logic lives in sound.js; this file only draws it and talks to the server.
 // With the engine missing it says so and links to Setup. It never fetches anything itself.
 
-import { lengthText, soundRequest, requestProblem, notInstalledText, kindButtons, tryCards, progressLine, barHeights, keptMeta, moreLikeThis, soundIdOf } from './sound.js';
+import { lengthText, soundRequest, requestProblem, notInstalledText, kindButtons, tryCards, progressLine, barHeights, keptMeta, moreLikeThis, soundIdOf, kindLimits, formWords, isLoop, joinWindow } from './sound.js';
 
 export const esc = (text) => String(text ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export const PLAY = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>';
@@ -27,17 +27,51 @@ const GAP_MS = 180;     // the breath between sounds when a set plays on: about 
 
 /** Plays one sound at a time. The file is fetched whole first, so it plays in every browser
  *  (some refuse to stream audio from a server that cannot send it in pieces).
- *  `playEach(next)` keeps going: when a sound ends it asks `next()` for another, until stopped. */
+ *  `playEach(next)` keeps going: when a sound ends it asks `next()` for another, until stopped.
+ *  `toggle(source, { loop: true })` plays it round and round until stopped, joined sample to
+ *  sample (an audio element leaves a small gap, which would sound like a fault in the loop).
+ *  `{ join: true }` plays only its last two seconds running into its first two, then stops. */
 export function createPlayer(onChange = () => {}) {
-  let audio = null, playing = null, follow = null, wait = null;
-  const urls = new Map();
+  let audio = null, playing = null, follow = null, wait = null, mode = null, round = null, context = null, asked = 0;
+  const urls = new Map(), decoded = new Map();
   const stop = () => {
     clearTimeout(wait);
+    asked += 1;
     audio?.pause();
     audio = null;
+    if (round) { round.onended = null; try { round.stop(); } catch { /* never started */ } round.disconnect(); }
+    round = null;
     playing = null;
+    mode = null;
     follow = null;
     onChange(null);
+  };
+  const startRound = async (source, join) => {
+    const mine = asked;
+    if (!context) {
+      const Make = window.AudioContext || window.webkitAudioContext;
+      try { context = new Make({ sampleRate: 48000 }); } catch { context = new Make(); }   // our files' own rate: nothing is re-made
+    }
+    if (!decoded.has(source)) {
+      const response = await fetch(source);
+      if (!response.ok) throw new Error('That sound could not be played.');
+      decoded.set(source, await context.decodeAudioData(await response.arrayBuffer()));
+    }
+    if (asked !== mine) return;           // stopped, or something else started, while it was fetched
+    await context.resume();
+    const node = context.createBufferSource();
+    node.buffer = decoded.get(source);
+    node.loop = true;
+    node.connect(context.destination);
+    round = node;
+    playing = source;
+    mode = join ? 'join' : 'loop';
+    if (join) {
+      const part = joinWindow(node.buffer.duration);
+      node.onended = () => { if (round === node) stop(); };
+      node.start(0, part.offset, part.duration);
+    } else node.start();
+    onChange(source);
   };
   const start = async (source) => {
     const mine = follow;
@@ -65,11 +99,14 @@ export function createPlayer(onChange = () => {}) {
   return {
     get playing() { return playing; },
     get playingOn() { return !!follow; },
+    /** 'loop' while a sound plays round, 'join' while its join is heard, else null. */
+    get mode() { return mode; },
     stop,
-    async toggle(source) {
-      if (playing === source && !follow) { stop(); return; }
+    async toggle(source, { loop = false, join = false } = {}) {
+      const wanted = join ? 'join' : loop ? 'loop' : null;
+      if (playing === source && !follow && mode === wanted) { stop(); return; }
       stop();
-      await start(source);
+      if (wanted) await startRound(source, join); else await start(source);
     },
     async playEach(next) {
       stop();
@@ -81,6 +118,9 @@ export function createPlayer(onChange = () => {}) {
       stop();
       urls.forEach((made) => URL.revokeObjectURL(made));
       urls.clear();
+      decoded.clear();
+      context?.close?.().catch(() => {});
+      context = null;
     },
   };
 }
@@ -90,19 +130,21 @@ export function waveHtml(bars, tallest = 64) {
   return `<div class="wave" aria-hidden="true">${(heights.length ? heights : Array(60).fill(3)).map((h) => `<i style="height:${h}px"></i>`).join('')}</div>`;
 }
 
-function tryHtml(card, playing, busy = false) {
+function tryHtml(card, player, busy = false, loop = false) {
   const ready = card.state === 'ready';
   const words = { making: 'Being made…', waiting: 'Waiting', missing: 'Came out silent', empty: '' }[card.state] ?? lengthText(card.seconds);
-  const on = ready && playing === card.url;
+  const here = ready && player.playing === card.url;
+  const on = here && player.mode !== 'join', joining = here && player.mode === 'join';
   return `<li class="try-card ${card.state}${card.kept ? ' kept' : ''}">
       <div class="try-top">
-        <button type="button" class="play" data-play="${esc(card.url || '')}" aria-label="${on ? 'Stop' : 'Play'} try ${card.number}" ${ready ? '' : 'disabled'}>${on ? STOP : PLAY}</button>
-        <b>Try ${card.number}</b><span class="meta">${esc(words)}</span>
+        <button type="button" class="play" data-play="${esc(card.url || '')}" ${loop ? 'data-loop data-tip="Plays round and round until you stop it."' : ''} aria-label="${on ? 'Stop' : 'Play'} try ${card.number}" ${ready ? '' : 'disabled'}>${on ? STOP : PLAY}</button>
+        <b>Try ${card.number}</b><span class="meta">${esc(on && loop ? 'Playing round and round' : words)}</span>
       </div>
       ${waveHtml(card.bars)}
       <div class="row"><button type="button" class="ghost small keep" data-keep="${card.number}" ${ready && !card.kept ? '' : 'disabled'}
         data-tip="${card.kept ? 'It is in your Library.' : 'Save this one to your Library. The others are cleared when you make more.'}">${card.kept ? 'Kept' : 'Keep'}</button>
-        ${soundIdOf(card.kept) ? `<button type="button" class="ghost small keep" data-variations="${esc(soundIdOf(card.kept))}" data-tip="Small changes of this sound, so repeats don't sound copied. Takes seconds.">Make variations</button>` : ''}
+        ${loop && ready ? `<button type="button" class="ghost small more" data-join="${esc(card.url)}" aria-pressed="${joining}" data-tip="Plays the end running into the start, two seconds of each, so you can check there is no click.">${joining ? 'Stop' : 'Hear the join'}</button>` : ''}
+        ${!loop && soundIdOf(card.kept) ? `<button type="button" class="ghost small keep" data-variations="${esc(soundIdOf(card.kept))}" data-tip="Small changes of this sound, so repeats don't sound copied. Takes seconds.">Make variations</button>` : ''}
         ${ready ? `<button type="button" class="ghost small more" data-more ${busy ? 'disabled' : ''} data-tip="New tries from the same description. Tries you have not kept are cleared.">Make more like this</button>` : ''}</div>
     </li>`;
 }
@@ -111,7 +153,7 @@ function keptHtml(sounds, base, playing) {
   if (!sounds.length) return '<p class="hint">Sounds you keep show here.</p>';
   return sounds.slice(0, 8).map((sound) => {
     const source = base + sound.file;
-    return `<button type="button" class="kept-sound" data-play="${esc(source)}" data-tip="${esc(sound.prompt || sound.name)}" aria-label="${playing === source ? 'Stop' : 'Play'} ${esc(sound.name)}">
+    return `<button type="button" class="kept-sound" data-play="${esc(source)}" ${isLoop(sound) ? 'data-loop' : ''} data-tip="${esc(sound.prompt || sound.name)}" aria-label="${playing === source ? 'Stop' : 'Play'} ${esc(sound.name)}">
         <span class="icon">${playing === source ? STOP : SPEAKER}</span><b>${esc(sound.name)}</b><small class="meta">${esc(keptMeta(sound))}</small></button>`;
   }).join('');
 }
@@ -138,6 +180,7 @@ export function openSoundPane({ stage, on = {} }) {
 
   const formHtml = () => {
     const limits = defaults.limits;
+    const lengths = kindLimits(defaults, form.kind), words = formWords(form.kind);
     const kinds = kindButtons(defaults, form.kind);
     const chosen = kinds.find((k) => k.pressed);
     const blocked = !defaults.installed;
@@ -148,17 +191,17 @@ export function openSoundPane({ stage, on = {} }) {
         <div class="kinds" role="group" aria-label="What kind?">${kinds.map((k) => `<button type="button" class="kind" data-kind="${esc(k.id)}" aria-pressed="${k.pressed}" ${k.disabled ? 'disabled' : ''}>${esc(k.label)}</button>`).join('')}</div>
         <small class="hint">${esc(chosen?.hint || '')}</small></div>
       <label class="field"><span>Describe it</span>
-        <textarea data-prompt rows="3" maxlength="${limits.max_prompt}" placeholder="Sword striking a wooden shield, one hit, dry">${esc(form.prompt)}</textarea>
-        <small class="hint">One thing happening, close up. Say what hits what.</small></label>
+        <textarea data-prompt rows="3" maxlength="${limits.max_prompt}" placeholder="${esc(words.placeholder)}">${esc(form.prompt)}</textarea>
+        <small class="hint">${esc(words.describe)}</small></label>
       ${defaults.leave_out?.length ? `<div class="field"><span>Leave out</span>
         <div class="quick" role="group" aria-label="Leave out">${defaults.leave_out.map((word) => `<button type="button" class="qs${form.leaveOut.has(word) ? ' on' : ''}" data-leave="${esc(word)}" aria-pressed="${form.leaveOut.has(word)}">${esc(word)}</button>`).join('')}</div></div>` : ''}
       <label class="field"><span>Length <output data-length>${esc(lengthText(form.seconds))}</output></span>
-        <input type="range" data-seconds min="${limits.min_seconds}" max="${limits.max_seconds}" step="0.5" value="${form.seconds}">
-        <small class="hint">A sound still ringing at the end runs a little longer, so it is not cut off.</small></label>
+        <input type="range" data-seconds min="${lengths.min}" max="${lengths.max}" step="0.5" value="${form.seconds}">
+        <small class="hint">${esc(words.length)}</small></label>
       <div class="sound-go">
         <button type="button" class="primary" data-make ${blocked ? 'disabled' : ''}>Make ${limits.tries}</button>
-        <small class="hint">${limits.tries} tries, a few minutes. Keep the one you like.</small>
-        <button type="button" class="ghost" data-layers data-tip="For a sound made of two or three things, like a whoosh then a thud. Each part is made on its own, then stacked.">Build it from layers</button>
+        <small class="hint">${limits.tries} tries, ${esc(words.make)}</small>
+        ${form.kind === 'loop' ? '' : '<button type="button" class="ghost" data-layers data-tip="For a sound made of two or three things, like a whoosh then a thud. Each part is made on its own, then stacked.">Build it from layers</button>'}
         <p class="sound-note" data-note role="status" aria-live="polite"></p>
       </div>
     </section>`;
@@ -167,9 +210,9 @@ export function openSoundPane({ stage, on = {} }) {
   const resultsHtml = () => {
     const count = defaults.limits.tries;
     return `<div class="sound-head"><h3>${job?.count || count} tries</h3><span class="meta">Made on this computer · free to use in games</span></div>
-      <p class="hint" data-progress role="status" aria-live="polite">${esc(progressLine(job) || 'Describe a sound and press Make. Your tries show here.')}
+      <p class="hint" data-progress role="status" aria-live="polite">${esc(progressLine(job) || formWords(form.kind).empty)}
         ${running() ? '<button type="button" class="ghost small" data-stop>Stop</button>' : ''}</p>
-      <ul class="sound-tries">${tryCards(job, count).map((card) => tryHtml(card, player.playing, !!running())).join('')}</ul>
+      <ul class="sound-tries">${tryCards(job, count).map((card) => tryHtml(card, player, !!running(), isLoop(job))).join('')}</ul>
       <div class="kept"><h3>In your Library</h3><div class="kept-strip">${keptHtml(kept, base, player.playing)}</div></div>`;
   };
 
@@ -218,7 +261,7 @@ export function openSoundPane({ stage, on = {} }) {
     player.stop();
     try {
       const started = await post('/api/sound', request);
-      job = { job_id: started.job_id, status: 'queued', count: started.count, tries: [] };
+      job = { job_id: started.job_id, status: 'queued', count: started.count, tries: [], kind: request.kind };
       drawResults();
       poll();
     } catch (error) {
@@ -245,7 +288,7 @@ export function openSoundPane({ stage, on = {} }) {
       else if (t.dataset.more !== undefined) {
         // the same description and settings, shown in the form so it is plain what is being made
         const again = moreLikeThis(job, defaults.limits.tries);
-        Object.assign(form, { prompt: again.prompt, seconds: again.seconds, leaveOut: new Set(again.leave_out) });
+        Object.assign(form, { prompt: again.prompt, seconds: again.seconds, leaveOut: new Set(again.leave_out), kind: again.kind });
         draw();
         await make(again);
       } else if (t.dataset.variations) {
@@ -255,14 +298,20 @@ export function openSoundPane({ stage, on = {} }) {
       else if (t.dataset.kind) {
         // Voice is made from a line to say, on a sheet of its own
         if (kindButtons(defaults).find((k) => k.id === t.dataset.kind)?.sheet === 'voice') on.voice?.();
-        else { form.kind = t.dataset.kind; draw(); }
+        else if (form.kind !== t.dataset.kind) {
+          // each kind has its own lengths: a loop starts at its usual 8 s, an effect at 1.5 s
+          form.kind = t.dataset.kind;
+          form.seconds = kindLimits(defaults, form.kind).usual;
+          draw();
+        }
       }
       else if (t.dataset.leave) {
         const word = t.dataset.leave;
         if (form.leaveOut.has(word)) form.leaveOut.delete(word); else form.leaveOut.add(word);
         t.classList.toggle('on', form.leaveOut.has(word));
         t.setAttribute('aria-pressed', String(form.leaveOut.has(word)));
-      } else if (t.dataset.play) await player.toggle(t.dataset.play);
+      } else if (t.dataset.join) await player.toggle(t.dataset.join, { join: true });
+      else if (t.dataset.play) await player.toggle(t.dataset.play, { loop: t.dataset.loop !== undefined });
       else if (t.dataset.keep) {
         t.disabled = true;
         await post(`/api/sound/${job.job_id}/keep`, { try: Number(t.dataset.keep) });

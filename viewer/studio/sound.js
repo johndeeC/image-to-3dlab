@@ -42,6 +42,46 @@ export function kindButtons(defaults, chosen = 'effect') {
   }));
 }
 
+/** The lengths a kind may have: its own range if it has one (a loop is 4 to 30 s), else the engine's. */
+export function kindLimits(defaults, kind = 'effect') {
+  const all = defaults?.limits || {};
+  const own = (defaults?.kinds || []).find((k) => k.id === kind)?.seconds || {};
+  return { min: own.min ?? all.min_seconds, max: own.max ?? all.max_seconds, usual: own.default ?? all.default_seconds };
+}
+
+/** The form's words for a kind: a loop is described and sized differently from an effect. */
+export function formWords(kind = 'effect') {
+  if (kind === 'loop') {
+    return {
+      placeholder: 'Rain on a tent',
+      describe: 'One sound that goes on and on. Leave out things that happen once, like a door or a shout.',
+      length: 'How long before it comes round again. Longer hides the repeat better.',
+      make: 'a few minutes. Each one plays round and round; keep the one you like.',
+      empty: 'Describe a background and press Make. Your tries show here, playing round and round.',
+    };
+  }
+  return {
+    placeholder: 'Sword striking a wooden shield, one hit, dry',
+    describe: 'One thing happening, close up. Say what hits what.',
+    length: 'A sound still ringing at the end runs a little longer, so it is not cut off.',
+    make: 'a few minutes. Keep the one you like.',
+    empty: 'Describe a sound and press Make. Your tries show here.',
+  };
+}
+
+/** Whether this plays round and round: a loop job (`kind`), or a kept loop (`sound_kind`, `loop`). */
+export function isLoop(thing) {
+  return thing?.kind === 'loop' || thing?.sound_kind === 'loop' || thing?.loop === true;
+}
+
+/** "Hear the join": where to start in a loop of `seconds`, and for how long, so its last
+ *  `each` seconds are heard running into its first `each`. A short loop gives half of itself each side. */
+export function joinWindow(seconds, each = 2) {
+  const total = Math.max(0, Number(seconds) || 0);
+  const side = Math.min(each, total / 2);
+  return { offset: total - side, duration: 2 * side };
+}
+
 /** The tries as cards, always `count` of them: made ones can be played, the one being made
  *  says so, the rest wait. A try the engine could not make (silent, say) is marked. */
 export function tryCards(job, count = 4) {
@@ -117,7 +157,7 @@ export function soundIdOf(file) {
 /** "Make more like this": the same description and settings as the batch a try came from.
  *  No seed is sent, so the server picks a new one and the tries come out different. */
 export function moreLikeThis(job, count = 4) {
-  return soundRequest({ prompt: job?.prompt || '', seconds: job?.seconds, leaveOut: job?.leave_out || [], count });
+  return soundRequest({ prompt: job?.prompt || '', seconds: job?.seconds, leaveOut: job?.leave_out || [], count, kind: job?.kind || 'effect' });
 }
 
 /** The "How different" slider: one stop per choice the server offers. */

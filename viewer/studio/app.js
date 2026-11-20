@@ -23,7 +23,7 @@ import { openKitPane } from './kit-pane.js';
 import { openCanvasPane } from './canvas-pane.js';
 import { openSoundPane, createPlayer, SPEAKER } from './sound-pane.js';
 import { openVoicePane } from './voice-pane.js';
-import { filterSounds, keptMeta, soundsFoot, isSet, nextInOrder } from './sound.js';
+import { filterSounds, keptMeta, soundsFoot, isSet, nextInOrder, isLoop } from './sound.js';
 import { openVariationsPane } from './variations-pane.js';
 import { openLayersPane } from './layers-pane.js';
 import { canEditLayers } from './layers.js';
@@ -179,19 +179,20 @@ function soundRows() {
     // a set plays a different take each click, in a game's order; a single sound just plays
     const files = isSet(sound) ? sound.files.map(url) : [url(sound.file)];
     const on = files.includes(soundPlayer.playing);
-    const tip = isSet(sound) ? 'Click to hear one. Each click plays a different one, like a game would.' : (sound.prompt || '');
+    const tip = isSet(sound) ? 'Click to hear one. Each click plays a different one, like a game would.'
+      : isLoop(sound) ? `Plays round and round until you click again. ${sound.prompt || ''}`.trim() : (sound.prompt || '');
     return `<li class="sound-row"><button class="asset sound" data-sound="${escape(sound.id)}" title="${escape(tip)}" aria-pressed="${on}">
       <span class="thumb">${SPEAKER}</span>
-      <span style="min-width:0"><span class="nm">${escape(sound.name)}</span><span class="st">${escape(keptMeta(sound))}${on ? ' · playing' : ''}</span></span></button>
+      <span style="min-width:0"><span class="nm">${escape(sound.name)}</span><span class="st">${escape(keptMeta(sound))}${on ? (isLoop(sound) ? ' · playing round and round' : ' · playing') : ''}</span></span></button>
       ${canEditLayers(sound) ? `<button class="ghost small" data-layers="${escape(sound.id)}" data-tip="Open its layers to change the mix. Saving makes a new sound; this one stays.">Edit layers</button>` : ''}
-      ${isSet(sound) ? '' : `<button class="ghost small" data-variations="${escape(sound.id)}" data-tip="Small changes of this sound, so repeats don't sound copied. Takes seconds.">Make variations</button>`}</li>`;
+      ${isSet(sound) || isLoop(sound) ? '' : `<button class="ghost small" data-variations="${escape(sound.id)}" data-tip="Small changes of this sound, so repeats don't sound copied. Takes seconds.">Make variations</button>`}</li>`;
   }).join('');
 }
 
 function playSound(id) {
   const sound = sounds.find((item) => item.id === id);
   if (!sound) return;
-  if (!isSet(sound)) { soundPlayer.toggle(url(sound.file)).catch(() => {}); return; }
+  if (!isSet(sound)) { soundPlayer.toggle(url(sound.file), { loop: isLoop(sound) }).catch(() => {}); return; }
   const next = nextInOrder(sound.play_order, setPlays.get(id) || 0);
   setPlays.set(id, next.played);
   soundPlayer.toggle(url(sound.files[next.index] || sound.file)).catch(() => {});
