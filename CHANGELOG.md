@@ -13,7 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sounds show under **Library → Sounds** and play there. Pick a length up to 30 seconds and
   what to leave out (music, voices, room echo). Each sound is trimmed, given click-free ends
   and saved as a one-channel 48 kHz WAV in `output/sounds/`, with its licence record beside it.
-  Background loops and music are marked "later".
+  Music is marked "later".
+- **Background loop** on the Sound sheet: rain, wind, an engine. It plays round and round
+  with no click: the end is blended into the start. Pick a length from 4 to 30 seconds.
+  Tries play round and round in the studio, and **Hear the join** plays just the end running
+  into the start. A loop sits at an even, quiet volume (set by its average, not its loudest
+  point), so it stays under your effects and voices. The WAV has the loop marked inside,
+  the way samplers read it. Agents: `make_sound(kind="loop")`; terminal:
+  `sound_generate.py --kind loop`. A loop has no variations.
 - **Voice** on the Sound sheet: type a line and hear it said. Pick **Clear and quick** (a
   plain reading in about a second; English, 28 voices) or **With feeling** (shout, whisper,
   angry, sad, calm, excited, or your own words; nine voices, ten languages), then a voice.

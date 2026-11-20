@@ -1,8 +1,9 @@
 # Sound: make a sound effect
 
 Describe a sound, get four tries, keep the one you like: a footstep, a hit, a door. Or type
-a line and have it said out loud: see [Voice](#voice-a-line-said-out-loud). Background loops
-and music come later.
+a line and have it said out loud: see [Voice](#voice-a-line-said-out-loud). Or make rain,
+wind or an engine that plays round and round: see [Background loops](#background-loops).
+Music comes later.
 
 ## Flow
 
@@ -22,6 +23,75 @@ are cleared when you make the next batch.
 
 On a try, **Make more like this** starts four new tries from the same description and
 settings. Tries you have not kept are cleared, as with any new batch.
+
+## Background loops
+
+Rain, wind, a crowd, an engine: a sound that sits under the game and never ends. A game
+plays a few seconds of it round and round, so the end must run into the start with no click
+and no bump. **What kind? → Background loop** makes one.
+
+1. **Describe it**: one sound that goes on and on. *"Rain on a tent"*, *"spaceship engine
+   hum"*. Leave out things that happen once, like a door or a shout.
+2. Pick a **Length**, 4 to 30 seconds (8 to start). Longer hides the repeat better.
+3. Press **Make 4**. Each try plays **round and round** until you stop it, so you hear
+   it as a game would play it. **Hear the join** plays just the end running into the start,
+   two seconds of each.
+4. **Keep** the good one. In the Library it says "Background loop" and plays round too.
+
+**What is different from an effect**
+
+- **The join.** The engine makes a little more sound than the loop needs. That extra is
+  blended into the loop's first part, over a tenth of the loop (a quarter second to a
+  second). So the loop's last sample is followed by its first exactly as the engine made
+  them one after the other: nothing to click. The two are mixed with "equal power" curves,
+  so rain stays as loud through the blend as either side of it.
+- **The length may move a touch**, up to 0.15 seconds either way. A hum has waves; if the
+  loop's length cuts one in half you hear a wobble each time round. So for a hum the
+  nearest length that lines the waves up is taken. Rain has none, and keeps the length asked.
+- **No fades, no tail.** An effect gets a fade at each end; on a loop you would hear that
+  every time round.
+- **Volume is set by the average, not the loudest point.** An effect's loudest sample is
+  brought to 0.98. Do that to rain, which has no loud sample to speak of, and you get a wall
+  of noise (our first storm averaged -2.5 dB: louder than any effect). A loop's **average
+  level** is set to -20 dB below full scale, so it sits under the effects and voices.
+  Nothing is clipped: a loop with one very loud moment is held a little under that mark.
+- **The words.** Unless your description already says so, "continuous, steady, no single
+  events" is added for the engine. Your own words come first and are never changed. If you
+  wrote "steady", "constant", "looping" or the like, nothing is added. If you asked for
+  things to happen ("occasional thunder", "an owl now and then"), only "continuous" is
+  added. The record keeps both: what you typed and what was sent.
+- **The loop is written into the WAV** (a `smpl` chunk with one forward loop over the whole
+  file), the way samplers and audio tools mark a loop. Not every game engine reads it, and
+  we have not tested any yet. It does not matter much: the whole file is the loop, so
+  ticking the sound's own "loop" setting in the game does the same thing.
+
+A loop at the engine's 30 second limit comes out about a second shorter, since there is no
+extra to blend. A sound that stops before the loop is long enough is made into a shorter
+loop; under two seconds of sound it is dropped and the sheet says so.
+
+**What a loop cannot do, yet.** *No variations*: changing a loop's pitch or volume is the
+game's job (one setting there), and our varied takes would not join up. The button is not
+shown and the server refuses. *Layers*: a kept loop can be a layer in a stack, but the
+saved stack is an effect with faded ends. It does not loop. A loop built from layers is not
+there yet.
+
+The record fills two blocks that are empty for an effect:
+
+```json
+"sound_kind": "loop",
+"loop": {"start_sample": 0, "end_sample": 383999, "crossfade_ms": 800.0},
+"loudness": {"target": -20.0, "measured": -20.0, "peak": 0.33},
+"post": {"...": "...", "join": {"step_ratio": 0.12, "slope_ratio": 1.3, "level_jump_db": -0.4,
+                               "usual_level_jump_db": 1.3, "alike": 0.03, "taken_from_s": 0.5}}
+```
+
+`start_sample` and `end_sample` are the first and last sample played, counted from 0.
+`crossfade_ms` is how long the blend is. `join` is the measure of the join
+(`sound_post.seam_report`): `step_ratio` is the jump from the last sample to the first
+against the usual jump between two samples (about 1 or less is "like any other pair"; a
+click is tens or hundreds), `slope_ratio` the same for the change of direction, and
+`level_jump_db` how much louder the first tenth of a second is than the last, beside what
+is usual inside the loop. `alike` is how well the two blended ends matched (near 1 for a hum).
 
 ## Variations
 
@@ -393,7 +463,8 @@ with the studio's.
 ## Limits refuse, they do not clip
 
 Ask for 45 seconds and you are told the most is 30. You do not get 30 and a surprise. The
-same goes for an empty description, more than four tries, or a kind that is not built yet.
+same goes for an empty description, more than four tries, a loop under 4 seconds, or a kind
+that is not built yet.
 
 ## One seed per batch
 
@@ -412,6 +483,9 @@ Every sound goes through `image_to_3dlab/sound_post.py` before it is written:
 5. brought to the standard volume: its loudest point becomes 0.98 of full scale, up or down
 
 Then it is checked. A try that is silent or broken is dropped, and the sheet says so.
+
+A background loop skips steps 2, 4 and 5 and takes its own route (`clean_loop`): see
+[Background loops](#background-loops).
 
 **Volume.** A fresh sound is turned up as well as down, so four tries are as loud as each
 other and none comes out too quiet. It is never turned up by more than 24 dB (about 16
@@ -445,7 +519,8 @@ output/sounds/.tries/        tries not kept yet
 ```
 
 A sound is a list of layers: one for a sound kept from a try, several for one built
-from layers (see Layers). There is room for loops and "made for this move". Variation sets have a record of their own
+from layers (see Layers). A background loop fills `loop` and `loudness` (see Background
+loops). There is room for "made for this move". Variation sets have a record of their own
 (see Variations).
 
 ```json
@@ -475,13 +550,17 @@ is marked unverified.
 python scripts/bootstrap_sound_effects.py          # says what it wants, then asks
 vendor/moss-sfx/.venv/bin/python scripts/sound_generate.py \
     --prompt "sword striking a wooden shield, one hit, dry" --seconds 1.5 --leave-out music
+vendor/moss-sfx/.venv/bin/python scripts/sound_generate.py \
+    --kind loop --prompt "rain on a tent" --seconds 10
 ```
 
 The second command never downloads: with the model files missing it stops and says so.
 
 ## For agents
 
-`make_sound(description, seconds, leave_out, tries, seed)` starts a batch;
+`make_sound(description, seconds, leave_out, tries, seed, kind)` starts a batch
+(`kind="loop"` for a background loop, 4 to 30 seconds; a kept loop is listed with
+`loop: true` and has no variations);
 `sound_status(job_id, wait_seconds)` follows it; `sound_status(job_id, keep=2)` keeps a try
 and answers its file path; `list_assets(kind="sound")` lists the kept ones and the saved
 sets. `make_variations(sound_id, count, how_different, change)` saves a set from a kept sound
