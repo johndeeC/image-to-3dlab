@@ -12,7 +12,8 @@ a hit, a door). Background loops, music and voice come later.
 3. **Describe it.** One thing happening, close up. Say what hits what: *"sword striking a
    wooden shield, one hit, dry"*.
 4. **Leave out** what you do not want: music, voices, room echo.
-5. Pick a **Length**, from half a second to 30 seconds.
+5. Pick a **Length**, from half a second to 30 seconds. A sound still ringing at the end
+   runs a little longer, so it is not cut off; each try shows its real length.
 6. Press **Make 4**. Play each try, look at its wave, and press **Keep** on the good one.
 
 Kept sounds show under **Library → Sounds**; click one to hear it. Tries you do not keep
@@ -200,11 +201,33 @@ both numbers, so any try can be made again.
 Every sound goes through `image_to_3dlab/sound_post.py` before it is written:
 
 1. mixed down to one channel, at 48 kHz
-2. silence cut from both ends
-3. turned down if its loudest point is past 0.98 of full scale (never clipped, never turned up)
+2. the tail is kept, if it is still ringing (below)
+3. silence cut from both ends
 4. a 5 millisecond fade in and out, so it never clicks
+5. brought to the standard volume: its loudest point becomes 0.98 of full scale, up or down
 
 Then it is checked. A try that is silent or broken is dropped, and the sheet says so.
+
+**Volume.** A fresh sound is turned up as well as down, so four tries are as loud as each
+other and none comes out too quiet. It is never turned up by more than 24 dB (about 16
+times): anything needing more is mostly hiss, and true silence is left alone so the check
+still drops it. Never clipped. This is for fresh sounds only. Once volumes mean something
+(a variation set, a mix of layers) a sound is only ever turned down.
+
+**Tails.** A coin ding asked for at 1 second is still ringing at 1 second. The engine makes
+30 seconds every time anyway, so we ask it for extra: half as long again, at least half a
+second more, never past 30 in all. The words it is given still say the length you asked
+for, so the sound itself does not change. Then:
+
+- Quiet at the length asked (45 dB under its loudest point): it ends there, as before.
+- Still ringing: it runs on until it has been that quiet for 30 milliseconds.
+- Not that quiet by the end of the extra, but at least 6 dB down: all the extra is kept.
+- Not dying away at all (rain, an engine): it ends at the length asked. More is not a tail.
+
+Whatever was still going where it ends gets a 30 millisecond fade-out, not a hard cut. So
+a sound can be a little longer than asked; the sheet and the Library show its real length.
+The record says what happened: `gain_db` (how far the volume moved), `tail_s` (seconds kept
+past the length asked) and `fade_out_ms`; the length asked is `seconds_asked` on the layer.
 
 ## Where it lives
 
@@ -229,8 +252,8 @@ with room for loops and "made for this move". Variation sets have a record of th
              "file": "sound.wav", "sha256": "...", "license": {"name": "Apache-2.0"},
              "start_ms": 0, "volume_db": 0.0, "pitch_semitones": 0}],
  "variation": null,
- "post": {"trim": true, "fade_ms": 5.0, "peak": 0.98},
- "loudness": {"target": null, "measured": null, "peak": 0.97},
+ "post": {"trim": true, "fade_ms": 5.0, "peak": 0.98, "gain_db": 11.9, "tail_s": 0.31, "fade_out_ms": 30.0},
+ "loudness": {"target": null, "measured": null, "peak": 0.98},
  "loop": null, "made_for": null}
 ```
 

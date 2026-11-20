@@ -96,6 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Asking for a second run names the canvas that is busy.
 
 ### Fixed
+- Sound: a try that came out quiet is now turned up to the same level as the others (never by
+  more than 24 dB). Before, sounds were only ever turned down, so one try in four could be
+  much quieter. Variation sets are still only turned down.
+- Sound: a ringing sound, like a coin or a bell, is no longer cut off at the length you asked
+  for. It runs on until it dies away (up to half as long again) and ends on a short fade, so
+  a sound can be a little longer than asked. `docs/sound.md` has the numbers.
 - The studio loads through a tunnel (tailscale serve, cloudflared): it hung on "Loading your
   assets" because the lab turned away all but five of the page's files when they arrived at once.
 - Canvas engine menus say which engine each choice is: "Best detail · Pixal3D", "Fastest, rough ·
