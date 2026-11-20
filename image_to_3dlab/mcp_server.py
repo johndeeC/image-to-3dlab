@@ -1274,7 +1274,7 @@ def make_sound(studio: Studio, *, description: str, seconds: float | None = None
             "next": "Takes a few minutes: sound_status(job_id, wait_seconds=50) until done. Then ask the user "
                     "which try to keep (they can listen in the studio's Sound page) and call "
                     "sound_status(job_id, keep=<try>)."
-                    + (" A kept loop's WAV has its loop written inside, so a game engine plays it round with no click."
+                    + (" A kept loop's WAV is the whole loop: set it to loop in the game and it plays round with no click."
                        if kind == "loop" else "")}
 
 

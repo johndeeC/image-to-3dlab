@@ -1192,7 +1192,7 @@ def test_make_sound_can_ask_for_a_background_loop():
     out = ms.make_sound(sound_studio(http), description="rain on a tent", seconds=10, tries=1, kind="loop")
     assert http.calls == [("POST", "api/sound", {"prompt": "rain on a tent", "count": 1, "leave_out": [],
                                                  "kind": "loop", "seconds": 10})]
-    assert "loop written inside" in out["next"] and "sound_status" in out["next"]
+    assert "set it to loop in the game" in out["next"] and "sound_status" in out["next"]
     with pytest.raises(ms.StudioError, match='"effect" .* or "loop"'):
         ms.make_sound(sound_studio(http), description="a tune", kind="music")
     assert len(http.calls) == 1                                  # refused before the studio is asked
