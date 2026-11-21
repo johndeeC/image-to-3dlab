@@ -53,6 +53,9 @@ from image_to_3dlab import sound_post, weight_gate
 CHECKPOINTS = "checkpoints"
 LENGTH_SLACK_S = 2.0           # the engine answers the length asked; further off than this is a fault
 LEAST_SHARE = 0.5              # ...and so is a tune that is more than half silence
+# MLX keeps memory it has finished with, in case it is wanted again. Left alone that grew to
+# 17 GB here for no gain in speed (48 GB at the peak against 31 GB, measured 2026-11-20).
+SPARE_MEMORY_BYTES = 2 * 1024**3
 
 
 def say(event: str, **fields: Any) -> None:
@@ -144,13 +147,18 @@ def load_composer(engine: music_api.MusicEngine, weights: Path, plan: bool, root
     os.environ.setdefault("ACESTEP_PROJECT_ROOT", str(root))
     os.environ.setdefault("HF_MODULES_CACHE", str(root / ".cache" / "hf_modules"))
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    os.environ.setdefault("ACESTEP_DISABLE_TQDM", "1")
+    from loguru import logger
+
+    # before the engine is imported: it logs every step, and warns about training tools we leave out
+    logger.remove()
+    logger.add(sys.stderr, level="ERROR")
+    import mlx.core as mx
     from acestep import inference, model_downloader
     from acestep.handler import AceStepHandler
     from acestep.llm_inference import LLMHandler
-    from loguru import logger
 
-    logger.remove()
-    logger.add(sys.stderr, level="WARNING")
+    mx.set_cache_limit(SPARE_MEMORY_BYTES)
     turbo, planner_folder = engine.parts[0].folder, engine.parts[1].folder
     # the engine downloads what it thinks is missing: ask it first, with its own check, and stop
     if not (model_downloader.check_main_model_exists(view) and model_downloader.check_model_exists(turbo, view)):

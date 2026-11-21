@@ -319,7 +319,10 @@ def fake_engine_package(monkeypatch, have_models=True, starts=True):
                                        check_model_exists=lambda name, view: have_models)
     package = types.ModuleType("acestep")
     package.inference, package.model_downloader = inference, downloader
-    modules = {"acestep": package, "acestep.inference": inference, "acestep.model_downloader": downloader,
+    core = types.SimpleNamespace(set_cache_limit=lambda limit: seen.update(spare=limit))
+    mlx = types.ModuleType("mlx")
+    mlx.core = core
+    modules = {"mlx": mlx, "mlx.core": core, "acestep": package, "acestep.inference": inference, "acestep.model_downloader": downloader,
                "acestep.handler": types.SimpleNamespace(AceStepHandler=Handler),
                "acestep.llm_inference": types.SimpleNamespace(LLMHandler=Planner),
                "loguru": types.SimpleNamespace(logger=types.SimpleNamespace(remove=lambda: None, add=lambda *a, **k: None))}
@@ -338,6 +341,7 @@ def test_the_loader_starts_the_planner_only_when_asked_and_gives_the_engine_word
     assert seen["planner"] == []                                             # 3.8 GB never loaded
     assert seen["init"] == [{"project_root": str(home), "config_path": "acestep-v15-turbo", "device": "auto"}]
     assert os.environ["ACESTEP_PROJECT_ROOT"] == str(home)
+    assert seen["spare"] == 2 * 1024**3                                      # MLX's spare memory is capped
 
     request = api.clean_request({"prompt": VILLAGE, "seconds": 10, "seed": 5, "plan": False})
     steps = []
