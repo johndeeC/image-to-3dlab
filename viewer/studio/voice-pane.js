@@ -36,7 +36,8 @@ function keptHtml(sounds, base, playing) {
 
 /**
  * Open the sheet over the viewer. `on.kept()` tells the page a sound joined the Library;
- * `on.back()` asks it to open the Sound sheet (another kind was picked).
+ * `on.back()` asks it to open the Sound sheet (another kind was picked), `on.music()` the
+ * Music sheet.
  * Returns { element } so the page can tell whether it is still open.
  */
 export function openVoicePane({ stage, on = {} }) {
@@ -187,7 +188,10 @@ export function openVoicePane({ stage, on = {} }) {
       else if (t.dataset.make !== undefined) await make();
       else if (t.dataset.again !== undefined) await make(Number(t.dataset.again));
       else if (t.dataset.stop !== undefined) await post(`/api/sound/${job.job_id}/cancel`);
-      else if (t.dataset.kind) { if (t.dataset.kind !== 'voice') on.back?.(); }
+      else if (t.dataset.kind) {
+        if (t.dataset.kind === 'music') on.music?.();
+        else if (t.dataset.kind !== 'voice') on.back?.();
+      }
       else if (t.dataset.engine) { form.engine = t.dataset.engine; form.voice = null; form.language = null; draw(); }
       else if (t.dataset.direction) { form.direction = form.direction === t.dataset.direction ? '' : t.dataset.direction; draw(); }
       else if (t.dataset.choose) { blocks = chooseTake(blocks, Number(t.dataset.line), t.dataset.choose); drawResults(); }

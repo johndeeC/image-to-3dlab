@@ -130,6 +130,11 @@ export function keptMeta(sound) {
   return length ? `${kind} · ${length}` : kind;
 }
 
+/** Whether "Make variations" is offered: not for a set, a loop (it would not join up) or music. */
+export function canVary(sound) {
+  return !isSet(sound) && !isLoop(sound) && sound?.sound_kind !== 'music';
+}
+
 /** Kept sounds whose name or description has every word typed in the Library's search. */
 export function filterSounds(sounds, query = '') {
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);

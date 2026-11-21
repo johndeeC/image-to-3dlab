@@ -162,7 +162,8 @@ function keptHtml(sounds, base, playing) {
  * Open the sheet over the viewer. `on.kept()` tells the page a sound joined the Library;
  * `on.variations({ id, name })` asks it to open "Make variations" for a kept sound;
  * `on.layers({ description })` asks it to open Layers, split from what is described.
- * `on.voice()` asks it to open the Voice sheet (the Voice kind was picked).
+ * `on.voice()` asks it to open the Voice sheet (the Voice kind was picked), and
+ * `on.music()` the Music sheet.
  * Returns { element } so the page can tell whether it is still open.
  */
 export function openSoundPane({ stage, on = {} }) {
@@ -296,8 +297,10 @@ export function openSoundPane({ stage, on = {} }) {
         on.variations?.({ id: t.dataset.variations, name: sound?.name || job?.prompt || 'Sound' });
       }
       else if (t.dataset.kind) {
-        // Voice is made from a line to say, on a sheet of its own
-        if (kindButtons(defaults).find((k) => k.id === t.dataset.kind)?.sheet === 'voice') on.voice?.();
+        // Voice is made from a line to say, and Music has switches of its own: each on its own sheet
+        const sheet = kindButtons(defaults).find((k) => k.id === t.dataset.kind)?.sheet;
+        if (sheet === 'voice') on.voice?.();
+        else if (sheet === 'music') on.music?.();
         else if (form.kind !== t.dataset.kind) {
           // each kind has its own lengths: a loop starts at its usual 8 s, an effect at 1.5 s
           form.kind = t.dataset.kind;

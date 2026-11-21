@@ -797,6 +797,11 @@ img.glow { animation: doorglow 2.4s ease-in-out infinite; }
 .sound-form select, .sound-form input[type="text"] { width: 100%; min-height: 40px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line-hi); background: var(--coal); color: var(--bone); font-size: 15px; }
 .sound-form select:focus-visible, .sound-form input[type="text"]:focus-visible { outline: 2px solid var(--flame); outline-offset: 1px; }
 .voice-sheet .quick { margin-bottom: 8px; }
+/* Music: its on/off switches. A pill that says so when it is on. */
+.music-switch .qs { justify-self: start; min-height: 36px; }
+.music-switch .qs::before { content: "○ "; }
+.music-switch .qs.on::before { content: "● "; color: var(--ember); }
+.music-switch .qs.on { background: color-mix(in srgb, var(--ember) 14%, transparent); }
 .voice-line { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--panel) 60%, transparent); min-width: 0; }
 .voice-line .sound-head { align-items: center; flex-wrap: nowrap; }
 .voice-line h3 { font: 500 15px/1.4 var(--f-ui); min-width: 0; overflow-wrap: anywhere; }

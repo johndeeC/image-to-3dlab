@@ -22,7 +22,7 @@ DEFAULTS = {
               {"id": "loop", "label": "Background loop", "ready": True,
                "hint": "Plays round and round with no click. Pick it for wind, rain, engines.",
                "seconds": {"min": 4, "max": 30, "default": 8}},
-              {"id": "music", "label": "Music", "hint": "", "ready": False},
+              {"id": "music", "label": "Music", "hint": "", "ready": True, "sheet": "music"},
               {"id": "voice", "label": "Voice", "hint": "", "ready": True, "sheet": "voice"}],
     "leave_out": ["music", "voices", "room echo"],
     "limits": {"min_seconds": 0.5, "max_seconds": 30, "default_seconds": 1.5, "max_prompt": 500, "tries": 4},
@@ -45,13 +45,16 @@ def test_the_request_is_what_the_form_holds():
 
 
 @needs_node
-def test_effect_loop_and_voice_can_be_picked_and_music_says_later():
-    out = _run("console.log(JSON.stringify(m.kindButtons(D)))")
+def test_every_kind_can_be_picked_and_one_not_built_yet_says_later():
+    out = _run("""console.log(JSON.stringify([m.kindButtons(D),
+        m.kindButtons({ kinds: [{ id: 'radio', label: 'Radio play', ready: false }] })]))""")
+    out, later = out
     assert [(k["label"], k["disabled"], k["pressed"]) for k in out] == [
         ("Effect", False, True), ("Background loop", False, False),
-        ("Music · later", True, False), ("Voice", False, False)]
+        ("Music", False, False), ("Voice", False, False)]
+    assert [(k["label"], k["disabled"]) for k in later] == [("Radio play · later", True)]
     assert out[1]["hint"] == "Plays round and round with no click. Pick it for wind, rain, engines."
-    assert [k["sheet"] for k in out] == [None, None, None, "voice"]       # Voice opens a sheet of its own
+    assert [k["sheet"] for k in out] == [None, None, "music", "voice"]    # Music and Voice open sheets of their own
 
 
 @needs_node
@@ -335,7 +338,7 @@ def test_variations_open_from_a_kept_sound_in_the_library_and_from_a_kept_try():
     app = (STUDIO / "app.js").read_text(encoding="utf-8")
     assert "from './variations-pane.js'" in app and "openVariationsPane({ stage: $('stage'), sound" in app
     assert 'data-variations="${escape(sound.id)}"' in app and "variations: openVariations" in app
-    assert "isSet(sound) || isLoop(sound) ? ''" in app                  # a set is not varied again, nor is a loop
+    assert "!canVary(sound) ? ''" in app                  # a set is not varied again, nor is a loop
     pane = (STUDIO / "sound-pane.js").read_text(encoding="utf-8")
     assert 'data-variations="${esc(soundIdOf(card.kept))}"' in pane and "on.variations?.(" in pane
     assert ">Make variations</button>" in pane and ">Make variations</button>" in app

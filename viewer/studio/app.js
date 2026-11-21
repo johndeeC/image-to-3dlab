@@ -23,7 +23,8 @@ import { openKitPane } from './kit-pane.js';
 import { openCanvasPane } from './canvas-pane.js';
 import { openSoundPane, createPlayer, SPEAKER } from './sound-pane.js';
 import { openVoicePane } from './voice-pane.js';
-import { filterSounds, keptMeta, soundsFoot, isSet, nextInOrder, isLoop } from './sound.js';
+import { openMusicPane } from './music-pane.js';
+import { filterSounds, keptMeta, soundsFoot, isSet, nextInOrder, isLoop, canVary } from './sound.js';
 import { openVariationsPane } from './variations-pane.js';
 import { openLayersPane } from './layers-pane.js';
 import { canEditLayers } from './layers.js';
@@ -185,7 +186,7 @@ function soundRows() {
       <span class="thumb">${SPEAKER}</span>
       <span style="min-width:0"><span class="nm">${escape(sound.name)}</span><span class="st">${escape(keptMeta(sound))}${on ? (isLoop(sound) ? ' · playing round and round' : ' · playing') : ''}</span></span></button>
       ${canEditLayers(sound) ? `<button class="ghost small" data-layers="${escape(sound.id)}" data-tip="Open its layers to change the mix. Saving makes a new sound; this one stays.">Edit layers</button>` : ''}
-      ${isSet(sound) || isLoop(sound) ? '' : `<button class="ghost small" data-variations="${escape(sound.id)}" data-tip="Small changes of this sound, so repeats don't sound copied. Takes seconds.">Make variations</button>`}</li>`;
+      ${!canVary(sound) ? '' : `<button class="ghost small" data-variations="${escape(sound.id)}" data-tip="Small changes of this sound, so repeats don't sound copied. Takes seconds.">Make variations</button>`}</li>`;
   }).join('');
 }
 
@@ -205,7 +206,12 @@ function openVariations(sound) {
 
 function openVoice() {
   soundPlayer.stop();
-  openVoicePane({ stage: $('stage'), on: { kept: refreshSounds, back: () => $('soundBtn').click() } });
+  openVoicePane({ stage: $('stage'), on: { kept: refreshSounds, back: () => $('soundBtn').click(), music: openMusic } });
+}
+
+function openMusic() {
+  soundPlayer.stop();
+  openMusicPane({ stage: $('stage'), on: { kept: refreshSounds, back: () => $('soundBtn').click(), voice: openVoice } });
 }
 
 function openLayers({ description = '', sound = null } = {}) {
@@ -847,7 +853,7 @@ $('createBtn').addEventListener('click', () => {
 // ------------------------------------------------------------------ Sound (docs/sound.md)
 $('soundBtn').addEventListener('click', () => {
   soundPlayer.stop();
-  openSoundPane({ stage: $('stage'), on: { kept: refreshSounds, variations: openVariations, layers: openLayers, voice: openVoice } });
+  openSoundPane({ stage: $('stage'), on: { kept: refreshSounds, variations: openVariations, layers: openLayers, voice: openVoice, music: openMusic } });
 });
 
 // ------------------------------------------------------------------ Canvas (docs/canvas.md)

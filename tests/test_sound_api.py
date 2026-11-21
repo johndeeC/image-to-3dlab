@@ -104,7 +104,7 @@ def test_a_good_request_comes_back_tidy():
     ({"leave_out": ["x"] * 0 + [str(i) for i in range(9)]}, "at most 8"),
     ({"leave_out": ["y" * 41]}, "a few words each"),
     ({"leave_out": 5}, "list of things"),
-    ({"kind": "music"}, "Music is not built yet"),
+    ({"kind": "music"}, "Music has its own page"),
     ({"kind": "voice"}, "Voice has its own page"),
     ({"kind": "noise"}, "no sound kind"),
 ])
@@ -516,11 +516,11 @@ def test_the_sheet_is_told_the_kinds_the_limits_and_whether_the_engine_is_here(m
     told = api.defaults_payload()
     assert told["installed"] is False and told["setup_id"] == "sound-effects" and told["download_size"] == "6.4 GB"
     assert [(k["label"], k["ready"]) for k in told["kinds"]] == [
-        ("Effect", True), ("Background loop", True), ("Music", False), ("Voice", True)]
+        ("Effect", True), ("Background loop", True), ("Music", True), ("Voice", True)]
     loop = told["kinds"][1]
     assert loop["hint"] == "Plays round and round with no click. Pick it for wind, rain, engines."
     assert loop["seconds"] == {"min": 4.0, "max": 30.0, "default": 8.0}
-    assert [k.get("sheet") for k in told["kinds"]] == [None, None, None, "voice"]      # Voice has its own sheet
+    assert [k.get("sheet") for k in told["kinds"]] == [None, None, "music", "voice"]   # each has its own sheet
     assert told["leave_out"] == ["music", "voices", "room echo"]
     assert told["limits"] == {"min_seconds": 0.5, "max_seconds": 30.0, "default_seconds": 1.5,
                               "max_prompt": 500, "tries": 4}
@@ -747,7 +747,7 @@ def test_a_loop_request_has_its_own_lengths():
         with pytest.raises(ValueError, match="a background loop is 4 to 30 seconds long"):
             api.clean_request({**LOOP, "seconds": seconds})
     assert api.clean_request({"prompt": "a door"})["seconds"] == 1.5                       # effects are as they were
-    with pytest.raises(ValueError, match="Music is not built yet"):
+    with pytest.raises(ValueError, match="Music has its own page"):
         api.clean_request({**LOOP, "kind": "music"})
 
 

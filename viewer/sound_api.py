@@ -86,15 +86,15 @@ KEPT_LAYERS = "layers"             # beside a sound built from layers: each laye
 KEPT_LAYER_FILE = re.compile(r"^layer-[1-9]\.wav$")
 KEPT_RUN = re.compile(r"^[A-Za-z0-9_-]{1,80}__\d{8}-\d{6}(?:-\d+)?$")
 
-# What the studio offers under "What kind?". Effect and Background loop are made here and Voice
-# on its own sheet (viewer/voice_api.py, `sheet`); Music is shown so people know it is coming.
+# What the studio offers under "What kind?". Effect and Background loop are made here; Voice
+# and Music each on a sheet of their own (viewer/voice_api.py, viewer/music_api.py, `sheet`).
 # `seconds` is a kind's own range of lengths, inside the engine's.
 KINDS = (
     {"id": "effect", "label": "Effect", "hint": "One short sound, like a footstep or a hit.", "ready": True},
     {"id": "loop", "label": "Background loop",
      "hint": "Plays round and round with no click. Pick it for wind, rain, engines.", "ready": True,
      "seconds": {"min": 4.0, "max": 30.0, "default": 8.0}},
-    {"id": "music", "label": "Music", "hint": "A tune for a menu or a level.", "ready": False},
+    {"id": "music", "label": "Music", "hint": "A tune for a menu or a level.", "ready": True, "sheet": "music"},
     {"id": "voice", "label": "Voice", "hint": "A line read out loud.", "ready": True, "sheet": "voice"},
 )
 # "Make variations": the same words in the studio, for agents and in the set's record.
@@ -287,6 +287,8 @@ def clean_request(raw: dict[str, Any], engine: SoundEngine = MOSS) -> dict[str, 
         raise ValueError(f"no sound kind {kind!r}; choose {', '.join(known)}")
     if not known[kind]["ready"]:
         raise ValueError(f"{known[kind]['label']} is not built yet. Effects and background loops are.")
+    if known[kind].get("sheet") == "music":
+        raise ValueError("Music has its own page: it has its own length, and switches for singing and loops")
     if known[kind].get("sheet"):
         raise ValueError(f"{known[kind]['label']} has its own page: it is made from a line to say, not a description")
     prompt = " ".join(str(raw.get("prompt") or "").split())
