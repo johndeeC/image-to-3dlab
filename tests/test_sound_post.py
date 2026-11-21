@@ -940,8 +940,8 @@ def test_music_keeps_both_channels_and_sits_at_its_average_level():
     music, post = sp.clean_music(raw.T, sp.RATE, channels_first=True)
     assert music.shape == raw.shape and post["channels"] == 2
     assert not np.allclose(music[:, 0], music[:, 1])              # still two different channels
-    assert post["loudness"]["target"] == sp.MUSIC_LEVEL_DB == -16.0
-    assert sp.loudness_db(music) == pytest.approx(-16.0, abs=0.6)   # the fade out costs a little
+    assert post["loudness"]["target"] == sp.MUSIC_LEVEL_DB == -18.0
+    assert sp.loudness_db(music) == pytest.approx(-18.0, abs=0.6)   # the fade out costs a little
     assert sp.peak_of(music) <= sp.PEAK + 1e-6
     facts = sp.inspect(music, sp.RATE, want_channels=2)
     assert facts["channels"] == 2 and facts["seconds"] == pytest.approx(6.0, abs=0.01)
@@ -953,7 +953,7 @@ def test_music_that_cannot_reach_its_level_without_clipping_is_held_under_it():
     music, post = sp.clean_music(spiky, sp.RATE)
     assert post["loudness"]["held_by_peak"] is True
     assert sp.peak_of(music) == pytest.approx(sp.PEAK, abs=1e-3)
-    assert sp.loudness_db(music) < -16.0
+    assert sp.loudness_db(music) < -18.0
 
 
 def test_a_tune_still_playing_where_it_stops_fades_out_and_one_that_ended_does_not():

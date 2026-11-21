@@ -46,7 +46,7 @@ is (`wav_bytes(..., loop=...)`, read back by `read_loop`), which game engines pi
 
 Music keeps its two channels (`clean_music`): a tune is heard as it is, not placed in the
 world, so it stays stereo, as (frames, channels). It is set by its **average** level, about
--16 dB, with the same cap on its loudest sample; and a tune still playing where it stops
+-18 dB, with the same cap on its loudest sample; and a tune still playing where it stops
 fades out over two seconds, so it never ends on a cut. A music loop (`clean_music_loop`) is
 joined the way a background loop is, both channels alike, with no fades.
 
@@ -146,7 +146,9 @@ LOOP_SHORTEST_S = 2.0          # less sound than this cannot be made into a loop
 SEAM_LEVEL_MS = 100.0          # the level either side of the join is measured over this long
 
 # Music. Stereo, set by its average level like a background, a little louder than one.
-MUSIC_LEVEL_DB = -16.0         # a tune's average level, dB below full scale
+# -18 dB is what real tunes can reach: our first four, asked for -16, were all held back by
+# their loudest sample and landed between -18.8 and -16.3. At -18 they sit within 1 dB.
+MUSIC_LEVEL_DB = -18.0         # a tune's average level, dB below full scale
 MUSIC_END_MS = 100.0           # "has it ended?" is asked of the last tenth of a second...
 MUSIC_END_QUIET_DB = 20.0      # ...which must be this far under the tune's average to count as ended
 MUSIC_FADE_OUT_MS = 2000.0     # a tune still playing where it stops fades out over this long

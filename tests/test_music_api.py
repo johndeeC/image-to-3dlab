@@ -200,8 +200,8 @@ def test_a_tune_is_made_stereo_levelled_checked_and_written_with_its_record(tmp_
     made = sound_post.inspect_wav(wav, want_channels=2)
     assert made["channels"] == 2 and made["sample_rate"] == 48_000 and made["seconds"] == pytest.approx(12.0, abs=0.05)
     audio, _ = sound_post.read_wav(wav)
-    assert sound_post.loudness_db(audio) == pytest.approx(-16.0, abs=0.6) and sound_post.peak_of(audio) <= 0.981
-    assert facts["seed"] == 7 and facts["level_db"] == pytest.approx(-16.0, abs=0.6) and len(facts["bars"]) == 60
+    assert sound_post.loudness_db(audio) == pytest.approx(-18.0, abs=0.6) and sound_post.peak_of(audio) <= 0.981
+    assert facts["seed"] == 7 and facts["level_db"] == pytest.approx(-18.0, abs=0.6) and len(facts["bars"]) == 60
     assert facts["planned"]["tempo_bpm"] == 73
 
     record = json.loads((tmp_path / "sound.provenance.json").read_text())
@@ -217,7 +217,7 @@ def test_a_tune_is_made_stereo_levelled_checked_and_written_with_its_record(tmp_
     assert [part["part"] for part in music["parts_used"]] == ["music model", "song planner", "text reader", "sound decoder"]
     source = record["layers"][0]["source"]
     assert source["seed"] == 7 and source["steps"] == 8 and "ca1e85fe" in source["runtime"]
-    assert record["loudness"]["target"] == -16.0 and record["loop"] is None
+    assert record["loudness"]["target"] == -18.0 and record["loop"] is None
     assert record["post"]["ended"].startswith("faded out")           # the stand-in never ends by itself
 
 
