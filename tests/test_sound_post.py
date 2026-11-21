@@ -920,3 +920,110 @@ def test_a_wav_with_no_loop_says_none_and_a_bad_loop_is_refused(tmp_path):
             sp.wav_bytes(sine(0.1), loop=bad)
     with pytest.raises(sp.SoundProblem, match="not a WAV"):
         sp.read_loop(b"nope")
+
+
+# ------------------------------------------------------------------ music
+
+
+def tune(seconds=6.0, level=0.3, seed=3):
+    """Two channels that differ: a chord on the left, the same with a fifth on the right."""
+    rng = np.random.default_rng(seed)
+    t = np.arange(int(seconds * sp.RATE)) / sp.RATE
+    left = np.sin(2 * np.pi * 220 * t) + 0.5 * np.sin(2 * np.pi * 277 * t)
+    right = np.sin(2 * np.pi * 220 * t) + 0.5 * np.sin(2 * np.pi * 330 * t)
+    both = np.stack([left, right], axis=1) + 0.05 * rng.standard_normal((t.size, 2))
+    return (level * both / np.abs(both).max()).astype(np.float32)
+
+
+def test_music_keeps_both_channels_and_sits_at_its_average_level():
+    raw = tune()
+    music, post = sp.clean_music(raw.T, sp.RATE, channels_first=True)
+    assert music.shape == raw.shape and post["channels"] == 2
+    assert not np.allclose(music[:, 0], music[:, 1])              # still two different channels
+    assert post["loudness"]["target"] == sp.MUSIC_LEVEL_DB == -16.0
+    assert sp.loudness_db(music) == pytest.approx(-16.0, abs=0.6)   # the fade out costs a little
+    assert sp.peak_of(music) <= sp.PEAK + 1e-6
+    facts = sp.inspect(music, sp.RATE, want_channels=2)
+    assert facts["channels"] == 2 and facts["seconds"] == pytest.approx(6.0, abs=0.01)
+
+
+def test_music_that_cannot_reach_its_level_without_clipping_is_held_under_it():
+    spiky = tune(level=0.05)
+    spiky[1000] = [1.0, -1.0]                                      # one loud click in a quiet tune
+    music, post = sp.clean_music(spiky, sp.RATE)
+    assert post["loudness"]["held_by_peak"] is True
+    assert sp.peak_of(music) == pytest.approx(sp.PEAK, abs=1e-3)
+    assert sp.loudness_db(music) < -16.0
+
+
+def test_a_tune_still_playing_where_it_stops_fades_out_and_one_that_ended_does_not():
+    cut_off, post = sp.clean_music(tune(8.0), sp.RATE)
+    assert post["fade_out_ms"] == sp.MUSIC_FADE_OUT_MS and post["ended"].startswith("faded out")
+    last = cut_off[-sp.RATE // 10:]
+    assert sp.loudness_db(last) < sp.loudness_db(cut_off) - 20.0     # it dies away
+    assert abs(float(cut_off[-1, 0])) < 1e-3 and abs(float(cut_off[0, 0])) < 1e-3
+
+    ending = tune(8.0)
+    ending *= np.linspace(1.0, 0.0, ending.shape[0], dtype=np.float32)[:, None] ** 4      # its own ending
+    _, post = sp.clean_music(ending, sp.RATE)
+    assert post["ended"] == "by itself" and post["fade_out_ms"] == sp.TAIL_FADE_MS
+
+
+def test_dead_air_round_a_tune_is_cut_with_the_channels_kept_in_step():
+    raw = tune(3.0)
+    quiet = np.zeros((4800, 2), np.float32)
+    left_late = np.concatenate([quiet, raw, quiet])
+    left_late[:6000, 0] = 0.0                                      # the left channel starts later than the right
+    trimmed, cut = sp.trim_frames(left_late)
+    assert cut is True and trimmed.shape[0] == pytest.approx(raw.shape[0], abs=60)
+    assert np.all(trimmed[:1000, 0] == 0.0) and np.any(trimmed[:1000, 1] != 0.0)
+
+
+def test_one_channel_music_stays_one_row_and_broken_music_is_refused():
+    music, post = sp.clean_music(sine(3.0), sp.RATE)
+    assert music.ndim == 1 and post["channels"] == 1
+    with pytest.raises(sp.SoundProblem, match="empty"):
+        sp.clean_music(np.zeros((0, 2), np.float32), sp.RATE)
+    bad = tune(1.0)
+    bad[5, 1] = np.nan
+    with pytest.raises(sp.SoundProblem, match="broken"):
+        sp.clean_music(bad, sp.RATE)
+
+
+def test_music_at_another_rate_comes_out_at_48_khz():
+    t = np.arange(44_100 * 2) / 44_100
+    raw = np.stack([np.sin(2 * np.pi * 440 * t), np.sin(2 * np.pi * 660 * t)], axis=1).astype(np.float32) * 0.3
+    music, _ = sp.clean_music(raw, 44_100)
+    assert music.shape[1] == 2 and music.shape[0] == pytest.approx(2 * sp.RATE, abs=200)
+
+
+def test_a_music_loop_joins_with_no_click_in_either_channel():
+    asked = 8.0
+    raw = tune(sp.seconds_for_music_loop(asked, 600.0))
+    loop, post = sp.clean_music_loop(raw.T, sp.RATE, asked, channels_first=True)
+    assert loop.ndim == 2 and loop.shape[1] == 2 and post["channels"] == 2
+    assert loop.shape[0] / sp.RATE == pytest.approx(asked, abs=sp.MUSIC_LOOP_SEARCH_MS / 1000.0 + 0.01)
+    assert post["loop"] == {"start_sample": 0, "end_sample": loop.shape[0] - 1, "crossfade_ms": 800.0}
+    assert post["join"]["taken_from_s"] == sp.MUSIC_LOOP_LEAD_S       # the lead-in is left out
+    for channel in (0, 1):
+        assert sp.seam_report(loop[:, channel])["step_ratio"] < 4.0
+    assert post["join"]["step_ratio"] == max(sp.seam_report(loop[:, c])["step_ratio"] for c in (0, 1))
+    assert post["fade_ms"] == 0.0 and post["fade_out_ms"] == 0.0      # nothing done to its ends
+    assert sp.loudness_db(loop) == pytest.approx(sp.MUSIC_LEVEL_DB, abs=0.1)
+
+
+def test_a_music_loop_is_written_stereo_with_its_loop_in_the_file(tmp_path):
+    loop, post = sp.clean_music_loop(tune(12.0), sp.RATE, 8.0)
+    points = (post["loop"]["start_sample"], post["loop"]["end_sample"])
+    wav = sp.write_wav(tmp_path / "sound.wav", loop, loop=points)
+    assert sp.read_loop(wav) == {"start_sample": points[0], "end_sample": points[1]}
+    back, rate = sp.read_wav(wav)
+    assert rate == sp.RATE and back.shape == loop.shape
+    assert sp.inspect_wav(wav, want_channels=2)["channels"] == 2
+    assert len(sp.wave_bars(loop)) == 60
+
+
+def test_how_much_music_a_loop_asks_the_engine_for():
+    assert sp.seconds_for_music_loop(20.0, 600.0) == 23.5            # 20 + 2 lead + 1 blend + 0.5 search
+    assert sp.seconds_for_music_loop(8.0, 600.0) == 11.3
+    assert sp.seconds_for_music_loop(239.0, 240.0) == 240.0

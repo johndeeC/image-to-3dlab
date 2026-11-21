@@ -44,6 +44,12 @@ A loop is set by its **average** level, about -20 dB (`level_background`), not i
 sample: it sits under the game, it does not sit on top of it. And its WAV says where the loop
 is (`wav_bytes(..., loop=...)`, read back by `read_loop`), which game engines pick up.
 
+Music keeps its two channels (`clean_music`): a tune is heard as it is, not placed in the
+world, so it stays stereo, as (frames, channels). It is set by its **average** level, about
+-16 dB, with the same cap on its loudest sample; and a tune still playing where it stops
+fades out over two seconds, so it never ends on a cut. A music loop (`clean_music_loop`) is
+joined the way a background loop is, both channels alike, with no fades.
+
 Ported from the `postprocess_wav` / `inspect_wav` pair in our older ai-sfx project (trim at
 0.3% of the peak, 5 ms fades, peak 0.98, 16-bit, refuse empty or broken audio).
 """
@@ -138,6 +144,15 @@ LOOP_SEARCH_MS = 150.0         # the loop may come out this much longer or short
 LOOP_MATCH = 0.3               # how alike the two ends must be (0 to 1) before the length moves
 LOOP_SHORTEST_S = 2.0          # less sound than this cannot be made into a loop
 SEAM_LEVEL_MS = 100.0          # the level either side of the join is measured over this long
+
+# Music. Stereo, set by its average level like a background, a little louder than one.
+MUSIC_LEVEL_DB = -16.0         # a tune's average level, dB below full scale
+MUSIC_END_MS = 100.0           # "has it ended?" is asked of the last tenth of a second...
+MUSIC_END_QUIET_DB = 20.0      # ...which must be this far under the tune's average to count as ended
+MUSIC_FADE_OUT_MS = 2000.0     # a tune still playing where it stops fades out over this long
+MUSIC_FADE_SHARE = 0.25        # ...or this share of a short tune
+MUSIC_LOOP_LEAD_S = 2.0        # a music loop leaves out the engine's first two seconds: tunes start with a lead-in
+MUSIC_LOOP_SEARCH_MS = 500.0   # ...and may come out this much longer or shorter, to land on a like beat
 
 
 class SoundProblem(ValueError):
@@ -550,6 +565,33 @@ def blend_loop(samples: np.ndarray, start: int, length: int, blend: int, alike: 
     return loop.astype(np.float32)
 
 
+def plan_loop(mono: np.ndarray, asked_seconds: float, rate: int = RATE, *, lead_s: float = LOOP_LEAD_S,
+              search_ms: float = LOOP_SEARCH_MS) -> tuple[int, int, int, float]:
+    """Where a loop about `asked_seconds` long sits in `mono` (already trimmed): (its first
+    sample, its length, the blend's length, how alike its two ends are). With too little sound
+    for the length asked the loop comes out shorter; with under two seconds it is refused."""
+    data = np.asarray(mono, dtype=np.float32)
+    asked = int(round(float(asked_seconds) * rate))
+    blend = int(round(loop_blend_ms(asked_seconds) * rate / 1000.0))
+    search = int(round(float(search_ms) * rate / 1000.0))
+    if data.size < asked + blend:                       # not enough sound: a shorter loop
+        asked = data.size - blend
+        blend = min(blend, asked // 2)
+        if asked < LOOP_SHORTEST_S * rate:
+            raise SoundProblem("the sound stops too soon to make a loop of it")
+    spare = data.size - asked - blend
+    start = min(int(float(lead_s) * rate), max(0, spare - search))
+    length, alike = pick_loop_length(data, start, asked, blend, search)
+    return start, length, blend, alike
+
+
+def _loop_facts(start: int, length: int, blend: int, alike: float, rate: int) -> dict[str, Any]:
+    return {"start_sample": 0, "end_sample": length - 1,
+            "crossfade_ms": round(blend * 1000.0 / rate, 1),
+            "seconds": round(length / rate, 3), "alike": round(alike, 3),
+            "taken_from_s": round(start / rate, 3)}
+
+
 def make_loop(samples: Any, asked_seconds: float, rate: int = RATE) -> tuple[np.ndarray, dict[str, Any]]:
     """A loop about `asked_seconds` long from a sound made a little longer (`seconds_for_loop`).
     Returns (the loop, where it came from).
@@ -560,22 +602,8 @@ def make_loop(samples: Any, asked_seconds: float, rate: int = RATE) -> tuple[np.
     last sample in the finished file: all of it.
     """
     data, _ = trim_silence(np.asarray(samples, dtype=np.float32))
-    asked = int(round(float(asked_seconds) * rate))
-    blend = int(round(loop_blend_ms(asked_seconds) * rate / 1000.0))
-    search = int(round(LOOP_SEARCH_MS * rate / 1000.0))
-    if data.size < asked + blend:                       # not enough sound: a shorter loop
-        asked = data.size - blend
-        blend = min(blend, asked // 2)
-        if asked < LOOP_SHORTEST_S * rate:
-            raise SoundProblem("the sound stops too soon to make a loop of it")
-    spare = data.size - asked - blend
-    start = min(int(LOOP_LEAD_S * rate), max(0, spare - search))
-    length, alike = pick_loop_length(data, start, asked, blend, search)
-    loop = blend_loop(data, start, length, blend, alike)
-    return loop, {"start_sample": 0, "end_sample": length - 1,
-                  "crossfade_ms": round(blend * 1000.0 / rate, 1),
-                  "seconds": round(length / rate, 3), "alike": round(alike, 3),
-                  "taken_from_s": round(start / rate, 3)}
+    start, length, blend, alike = plan_loop(data, asked_seconds, rate)
+    return blend_loop(data, start, length, blend, alike), _loop_facts(start, length, blend, alike, rate)
 
 
 def seam_report(samples: Any, rate: int = RATE) -> dict[str, Any]:
@@ -656,6 +684,114 @@ def clean_loop(samples: Any, rate: int, asked_seconds: float, *, channels_first:
                   "loop": {key: made[key] for key in ("start_sample", "end_sample", "crossfade_ms")},
                   "loudness": loudness,
                   "join": {**seam_report(loop), "alike": made["alike"], "taken_from_s": made["taken_from_s"]}}
+
+
+# ------------------------------------------------------------------ music
+
+
+def to_frames(samples: Any, *, channels_first: bool = False) -> np.ndarray:
+    """A sound as (frames, channels), float32, keeping every channel. A plain run of samples
+    is one channel. `channels_first` is for engines that answer (channels, frames)."""
+    data = np.asarray(samples, dtype=np.float32)
+    if data.ndim == 1:
+        return data.reshape(-1, 1).copy()
+    if data.ndim != 2:
+        raise SoundProblem(f"a sound is one row of samples per channel, not {data.ndim} dimensions")
+    return (data.T if channels_first else data).copy()
+
+
+def _each_channel(frames: np.ndarray, change: Any) -> np.ndarray:
+    return np.stack([change(frames[:, at]) for at in range(frames.shape[1])], axis=1).astype(np.float32)
+
+
+def _checked_frames(samples: Any, rate: int, channels_first: bool) -> np.ndarray:
+    frames = to_frames(samples, channels_first=channels_first)
+    if not frames.size:
+        raise SoundProblem("the engine made an empty sound")
+    if not np.isfinite(frames).all():
+        raise SoundProblem("the engine made a broken sound (it has values that are not numbers)")
+    return frames if int(rate) == RATE else _each_channel(frames, lambda one: resample(one, rate, RATE))
+
+
+def trim_frames(frames: np.ndarray, fraction: float = TRIM_FRACTION,
+                floor: float = SILENCE_FLOOR) -> tuple[np.ndarray, bool]:
+    """`trim_silence` for (frames, channels): cut where every channel is silent, so the
+    channels stay in step. Returns the sound and whether anything was cut."""
+    data = np.asarray(frames, dtype=np.float32)
+    level = np.abs(data).max(axis=1) if data.size else np.zeros(0, np.float32)
+    active = np.flatnonzero(level > max(floor, float(level.max()) * fraction)) if level.size else level
+    if not active.size:
+        return data, False
+    start, end = int(active[0]), int(active[-1]) + 1
+    return data[start:end].copy(), start > 0 or end < data.shape[0]
+
+
+def still_playing(frames: np.ndarray, rate: int = RATE) -> bool:
+    """Whether a tune is cut off where it stops: its last tenth of a second is not far under
+    its average level."""
+    data = np.asarray(frames, dtype=np.float32)
+    whole = loudness_db(data)
+    last = loudness_db(data[-max(1, int(rate * MUSIC_END_MS / 1000.0)):])
+    return whole is not None and last is not None and last > whole - MUSIC_END_QUIET_DB
+
+
+def _out_shape(frames: np.ndarray) -> np.ndarray:
+    return frames[:, 0].copy() if frames.shape[1] == 1 else frames
+
+
+def clean_music(samples: Any, rate: int, *, channels_first: bool = False,
+                target: float = MUSIC_LEVEL_DB) -> tuple[np.ndarray, dict[str, Any]]:
+    """Everything a fresh tune needs, in order: every channel kept, 48 kHz, dead air cut, a
+    fade out if it was still playing where it stops, then its volume by its average level
+    (`level_background`, at `target`). Returns (float32 at 48 kHz: (frames, channels), or one
+    row when the engine gave one channel; the record's `post` block)."""
+    frames, cut = trim_frames(_checked_frames(samples, rate, channels_first))
+    seconds = frames.shape[0] / RATE
+    faded = still_playing(frames)
+    out_ms = min(MUSIC_FADE_OUT_MS, seconds * 1000.0 * MUSIC_FADE_SHARE) if faded else TAIL_FADE_MS
+    frames = _each_channel(frames, lambda one: fade(one, RATE, FADE_MS, out_ms=out_ms))
+    frames, loudness = level_background(frames, target)
+    return _out_shape(frames), {
+        "trim": cut, "fade_ms": float(FADE_MS), "fade_out_ms": round(out_ms, 1),
+        "ended": "faded out: it was still playing at the length asked" if faded else "by itself",
+        "peak": float(PEAK), "gain_db": loudness["gain_db"], "tail_s": 0.0,
+        "channels": int(frames.shape[1]), "loudness": loudness}
+
+
+def seconds_for_music_loop(asked: float, most: float) -> float:
+    """How long to ask the engine for, to make a music loop `asked` seconds long: the loop,
+    the part blended in, the lead-in that is left out and room to move the join."""
+    extra = MUSIC_LOOP_LEAD_S + (loop_blend_ms(asked) + MUSIC_LOOP_SEARCH_MS) / 1000.0
+    return min(float(most), math.ceil(round((float(asked) + extra) * 10.0, 6)) / 10.0)
+
+
+def seam_report_frames(frames: Any, rate: int = RATE) -> dict[str, Any]:
+    """`seam_report` for (frames, channels): the channel whose join jumps the most."""
+    data = to_frames(frames)
+    return max((seam_report(data[:, at], rate) for at in range(data.shape[1])), key=lambda told: told["step_ratio"])
+
+
+def clean_music_loop(samples: Any, rate: int, asked_seconds: float, *, channels_first: bool = False,
+                     target: float = MUSIC_LEVEL_DB) -> tuple[np.ndarray, dict[str, Any]]:
+    """A tune that plays round with no click: every channel kept, 48 kHz, the loop made, then
+    its volume. The join is found once, on the channels added together (`plan_loop`), and each
+    channel is blended the same way there (`blend_loop`), so the stereo picture holds through it.
+
+    It is a plain blend, not a cut on the bar line: where the tune comes round, a second of
+    its end is heard under its start. No fades and no tail, as for any loop.
+    """
+    frames, _ = trim_frames(_checked_frames(samples, rate, channels_first))
+    start, length, blend, alike = plan_loop(frames.mean(axis=1, dtype=np.float32), asked_seconds,
+                                            lead_s=MUSIC_LOOP_LEAD_S, search_ms=MUSIC_LOOP_SEARCH_MS)
+    loop = _each_channel(frames, lambda one: blend_loop(one, start, length, blend, alike))
+    loop, loudness = level_background(loop, target)
+    made = _loop_facts(start, length, blend, alike, RATE)
+    return _out_shape(loop), {
+        "trim": True, "fade_ms": 0.0, "peak": float(PEAK), "gain_db": loudness["gain_db"],
+        "tail_s": 0.0, "fade_out_ms": 0.0, "ended": "it is a loop", "channels": int(loop.shape[1]),
+        "loop": {key: made[key] for key in ("start_sample", "end_sample", "crossfade_ms")},
+        "loudness": loudness,
+        "join": {**seam_report_frames(loop), "alike": made["alike"], "taken_from_s": made["taken_from_s"]}}
 
 
 def _loop_chunk(start: int, end: int, rate: int) -> bytes:
