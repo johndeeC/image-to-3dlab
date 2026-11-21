@@ -328,6 +328,7 @@ def fake_engine_package(monkeypatch, have_models=True, starts=True):
                "loguru": types.SimpleNamespace(logger=types.SimpleNamespace(remove=lambda: None, add=lambda *a, **k: None))}
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.setattr(runner, "seed_everything", lambda seed: seen.setdefault("seeds", []).append(seed))
     for name in ("ACESTEP_PROJECT_ROOT", "HF_MODULES_CACHE"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("TOKENIZERS_PARALLELISM", "false")
@@ -354,11 +355,14 @@ def test_the_loader_starts_the_planner_only_when_asked_and_gives_the_engine_word
     assert params.enable_normalization is False                              # the volume is set by us
     assert not hasattr(params, "reference_audio") and not hasattr(params, "src_audio")
     assert config.batch_size == 1 and config.seeds == [5] and config.use_random_seed is False
+    assert seen["seeds"] == [5]              # the planner draws from the same seed, so a try can be made again
 
     runner.load_composer(ENGINE, weights, True, root=home)
     assert seen["planner"] == [{"checkpoint_dir": str(home / "checkpoints"), "lm_model_path": "acestep-5Hz-lm-1.7B",
                                 "backend": "mlx", "device": "auto"}]
     assert told["planned"] == {"tempo_bpm": 73, "key": "D major", "beats_in_a_bar": "4", "description": "Gentle."}
+    assert runner.planned_facts({"bpm": 90, "language": "unknown", "keyscale": "N/A"}) == {"tempo_bpm": 90}
+    assert runner.planned_facts({}) is None and runner.planned_facts(None) is None
 
 
 def test_the_loader_stops_rather_than_let_the_engine_download_or_limp(tmp_path, monkeypatch):

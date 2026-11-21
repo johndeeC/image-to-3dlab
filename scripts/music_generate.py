@@ -101,7 +101,7 @@ def planned_facts(found: Any) -> dict[str, Any] | None:
         return None
     names = {"bpm": "tempo_bpm", "keyscale": "key", "timesignature": "beats_in_a_bar",
              "caption": "description", "language": "language"}
-    told = {plain: found[key] for key, plain in names.items() if found.get(key) not in (None, "", "N/A")}
+    told = {plain: found[key] for key, plain in names.items() if found.get(key) not in (None, "", "N/A", "unknown")}
     return told or None
 
 
@@ -109,14 +109,19 @@ class Composer:
     """ACE-Step 1.5 through its own package: words in, (channels, frames) out. Only
     text-to-music is ever asked for: the reference-audio entry points are not."""
 
-    def __init__(self, handler: Any, planner: Any, api: Any):
+    def __init__(self, handler: Any, planner: Any, api: Any, seed_with: Callable[[int], None] | None = None):
         self.handler, self.planner, self.api = handler, planner, api
+        # the engine seeds the music model itself, but not its planner: without this the same
+        # seed planned a different tune each time (a new tempo and key, measured 2026-11-20)
+        self.seed_with = seed_with
 
     def compose(self, request: dict[str, Any], *, seed: int, seconds: float,
                 progress: Callable[[float], None] | None = None) -> tuple[Any, int, dict[str, Any]]:
         import numpy as np
 
         plan = bool(request["plan"])
+        if self.seed_with is not None:
+            self.seed_with(seed)
         params = self.api.GenerationParams(
             task_type="text2music", caption=music_api.engine_prompt(request),
             lyrics=request.get("lyrics") or "[Instrumental]", instrumental=not request["singing"],
@@ -174,7 +179,21 @@ def load_composer(engine: music_api.MusicEngine, weights: Path, plan: bool, root
                                             backend="mlx", device="auto")
         if not ready:
             raise SystemExit(f"{engine.label}'s song planner did not start: {str(message).splitlines()[0]}")
-    return Composer(handler, planner, inference)
+    return Composer(handler, planner, inference, seed_everything)
+
+
+def seed_everything(seed: int) -> None:
+    """One seed for every source of chance the engine draws on: MLX, PyTorch, numpy, Python."""
+    import random
+
+    import mlx.core as mx
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    np.random.seed(seed % 2**32)
+    torch.manual_seed(seed)
+    mx.random.seed(seed)
 
 
 def make_one(composer: Any, engine: music_api.MusicEngine, request: dict[str, Any], number: int,
