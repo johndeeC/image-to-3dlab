@@ -147,6 +147,24 @@ VOICE_PRESET_RULE = (
 )
 
 
+# Music. The weights (ACE-Step/Ace-Step1.5: music model, song planner, text reader, sound
+# decoder) and the ace-step package that runs them are MIT, checked on the Hugging Face card
+# and the GitHub repository 2026-11-20. The card's own words on training data are repeated as
+# its makers' statement, not as something we checked.
+ACE_STEP_OUTPUT_RIGHTS = (
+    "The music you generate is yours, for any use including commercial: ACE-Step 1.5 and the "
+    "code that runs it are MIT, and its model card says the music may be used commercially."
+)
+ACE_STEP_TRAINING_STATEMENT = (
+    "Its makers say it was trained on licensed music, royalty-free and public-domain music, and "
+    "audio made from MIDI; we have not checked that. They also warn that a tune can come out "
+    "sounding like an existing one by chance: listen before you ship."
+)
+MUSIC_WORDS_ONLY_RULE = (
+    "Made from words alone. No recording was given to the model to copy or restyle."
+)
+
+
 # Whichever remover this machine runs (image_to_3dlab/matte.py picks it); both are MIT.
 MATTE_LICENSES = {
     "birefnet-lite-lean": "MIT (BiRefNet)",
@@ -264,6 +282,15 @@ LICENSES = {
         license_url="https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
         conditions=(QWEN_TTS_OUTPUT_RIGHTS, VOICE_PRESET_RULE),
         models=("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"),
+    ),
+    # Text to music, run by its makers' own ace-step package (MIT).
+    "ace-step-1.5": LicenseProfile(
+        classification="commercial-clear",
+        folder="commercial",
+        license_name="MIT",
+        license_url="https://huggingface.co/ACE-Step/Ace-Step1.5",
+        conditions=(ACE_STEP_OUTPUT_RIGHTS, ACE_STEP_TRAINING_STATEMENT, MUSIC_WORDS_ONLY_RULE),
+        models=("ACE-Step/Ace-Step1.5",),
     ),
 }
 

@@ -51,6 +51,7 @@ game-ready LODs), start with [the prop sheet guide](../docs/prop-sheets.md).
 | `sound_generate.py` | Make a sound effect or a background loop from a description with MOSS-SoundEffect v2.0, cleaned up and with its licence record. |
 | `bootstrap_voice.py` | Install a voice engine for the studio's Voice lines: Kokoro or Qwen3-TTS, both Apache-2.0. |
 | `voice_generate.py` | Say a line out loud with Kokoro or Qwen3-TTS, levelled and with its licence record. |
+| `music_generate.py` | Make music from a description with ACE-Step 1.5, levelled and with its licence record. |
 | `bootstrap_qwen_image.py` | Install the text-to-image route: a stable-diffusion.cpp binary and Qwen-Image weights. |
 | `pixal3d_generate.py` | End-to-end Pixal3D generation: image -> textured GLB, on a Mac, NVIDIA or AMD. |
 | `hero_route.py` | Build a hero character: a full-body model with a high-detail head grafted on, as one GLB. |

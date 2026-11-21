@@ -517,6 +517,8 @@ class SoundJob:
             "leave_out": self.request.get("leave_out") or [],
             # a voice job: the lines, the voice and how it is said (viewer/voice_api.py)
             **({"voice": dict(self.request["voice_facts"])} if self.request.get("voice_facts") else {}),
+            # a music job: sung or not, planned or not, a loop or not (viewer/music_api.py)
+            **({"music": dict(self.request["music_facts"])} if self.request.get("music_facts") else {}),
             "tries": [dict(item) for item in self.tries],
             "error": self.error,
             "elapsed_seconds": round(time.monotonic() - self.started, 1),
@@ -652,7 +654,9 @@ def run_job(job: SoundJob, manager: SoundJobManager, command: list[str] | None =
                         "url": f"/api/sound/{job.id}/try-{int(event['number'])}.wav",
                         "kept": None,
                         # a voice try: which line it says, which take of it, and words it had to guess
-                        **{key: event[key] for key in ("line", "take", "level_db", "guessed") if key in event}}
+                        # a tune: what the song planner chose for it, when it ran
+                        **{key: event[key] for key in ("line", "take", "level_db", "guessed", "planned")
+                           if key in event}}
                 job.tries.append(made)
                 job.emit({"phase": "try", **made})
             elif kind == "step":
