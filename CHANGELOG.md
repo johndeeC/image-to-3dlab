@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sounds show under **Library → Sounds** and play there. Pick a length up to 30 seconds and
   what to leave out (music, voices, room echo). Each sound is trimmed, given click-free ends
   and saved as a one-channel 48 kHz WAV in `output/sounds/`, with its licence record beside it.
-  Music is marked "later".
 - **Background loop** on the Sound sheet: rain, wind, an engine. It plays round and round
   with no click: the end is blended into the start. Pick a length from 4 to 30 seconds.
   Tries play round and round in the studio, and **Hear the join** plays just the end running
@@ -39,6 +38,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/bootstrap_voice.py --engine kokoro|qwen`.
 - Agents: `list_voices`, `make_voice` and `join_voice_lines` make voice lines; `sound_status`
   follows and keeps them. See `docs/sound.md`.
+- **Music** on the Sound sheet: describe a tune (style, mood, instruments) and get two
+  tries, from 10 seconds to 4 minutes, in stereo. It is instrumental unless you turn on
+  **With singing** and write the words. **Plan the song first** (on) picks a tempo and a key
+  before the tune is played; each try then says so ("91 beats a minute · C major").
+  **Loops** makes a tune that plays round and round with no click, with the loop marked in
+  the WAV; it is a blend at the join, not a cut on the bar line. Every tune sits at the same
+  average volume. A tune ends when it is done, often a few seconds before the length
+  picked. Kept music shows under **Library → Sounds**. Music is made from words only: there
+  is no way to give it a recording to copy, and its record says so.
+- Music engine: ACE-Step 1.5 (MIT, 10.1 GB in four parts: music model, song planner, text
+  reader, sound decoder; Apple Silicon). A new card on Setup; nothing is downloaded until you
+  say yes there. Its makers say it was trained on licensed, royalty-free and MIDI-made
+  music; we have not checked that, and every record says so. From a terminal:
+  `scripts/bootstrap_music.py`, then `scripts/music_generate.py`.
+- Agents: `make_music` makes music; `sound_status` follows and keeps it. See `docs/sound.md`.
 - Sound engine: MOSS-SoundEffect v2.0 (Apache-2.0, about 6.4 GB, Apple Silicon). It is a
   new card on Setup and is never downloaded until you say yes there; without it the Sound
   sheet says so and points to Setup. From a terminal: `scripts/bootstrap_sound_effects.py`.

@@ -3,7 +3,7 @@
 Describe a sound, get four tries, keep the one you like: a footstep, a hit, a door. Or type
 a line and have it said out loud: see [Voice](#voice-a-line-said-out-loud). Or make rain,
 wind or an engine that plays round and round: see [Background loops](#background-loops).
-Music comes later.
+Or describe a tune: see [Music](#music-a-tune-from-a-description).
 
 ## Flow
 
@@ -441,7 +441,154 @@ block: `text`, `spoken_text`, `engine`, `model`, `revision`, `voice`, `direction
 `guessed_words` when there were any. `loudness` says the mark, what was measured, the level
 it ended at and how far the peaks were pressed.
 
-## The engine
+## Music: a tune from a description
+
+Press **Sound**, then **Music** under "What kind?".
+
+1. Install the engine once: **Setup → ACE-Step 1.5**. It tells you what it fetches (10.1 GB
+   of model files in four parts, plus about 0.7 GB of Python packages) and waits for a yes.
+2. **Describe the music**: style, mood, instruments. *"Calm fantasy village theme, harp,
+   flute, soft strings"*.
+3. **With singing** is off: the music is instrumental, which is what most games want. Turn
+   it on and a box opens for the **words to sing**, one line of the song on each line.
+4. Pick a **Length**, from 10 seconds to 4 minutes. A tune comes to its own ending, often a
+   few seconds before the length you picked (ours ran 24 to 29 seconds of 30); each try
+   shows its real length. A loop is the length you picked.
+5. **Plan the song first** is on. A second model, the song planner, reads your description,
+   writes a fuller one, picks a tempo and a key, and sketches the tune before the music model
+   plays it. It adds a few seconds. Turn it off for a quicker, looser try.
+6. **Loops** makes a tune that plays round and round with no click, for a level or a menu.
+   See below. A loop has no singing.
+7. Press **Make 2**. Play each try, look at its wave, and press **Keep** on the good one.
+
+A try made with the planner says what was planned for it: "24 s · 91 beats a minute · C
+major".
+
+Kept music shows under **Library → Sounds** with the rest. Music has no variations: a tune
+at another pitch is another tune. Make more tries instead.
+
+### Stereo, and how loud
+
+Music keeps its two channels: it is heard as it is, not placed in the game's world, so the
+WAV is stereo at 48 kHz (effects, loops and voice lines are one channel). The record says
+`"channels": 2` and `"stereo": true`.
+
+A tune is set by its **average** level, to -18 dB below full scale, and its loudest sample
+is never past 0.98. Music has sharp peaks, so a tune sometimes cannot reach the mark without
+clipping; it is then held just under, and the record says `held_by_peak`. Our four test
+tunes came out between -18.9 and -18.0 dB. (We first aimed at -16 dB; every tune was held
+back by its peaks and they landed up to 2.5 dB apart, so the mark moved to what real tunes
+reach.)
+
+Dead air is cut from both ends. A tune still playing where it stops fades out over two
+seconds, so it never ends on a cut; one that came to its own ending is left as it is. The
+record's `post.ended` says which.
+
+### Music that loops
+
+With **Loops** on, the engine is asked for a quarter more than the loop, plus three and a
+half seconds. The first two seconds are left out (tunes start with a lead-in), the tune's
+own ending is left out too, and what follows the loop is blended into its start over up to a
+second: the same way a background loop is joined, on both channels alike. The WAV has the
+loop written inside, and tries play round and round in the studio, with **Hear the join**.
+
+What to expect, honestly:
+
+- **No click.** Measured on two 20 second battle loops: the jump across the join was 0.1
+  and 0.7 times the usual jump between two samples, and the level changed by under 1 dB.
+- **It is a blend, not a cut on the bar line.** Where the tune comes round, a second of
+  what came after its end is heard under its start. Nothing forces the tune to a whole
+  number of bars, and in both test loops the two sides did not line up beat for beat. A
+  drummer would notice; under gameplay it mostly passes. Nobody has listened to these yet.
+- **Leave "Plan the song first" on for loops.** Unplanned, our battle tune was loud for
+  ten seconds and then dropped by 15 dB for the rest. Planned, it held one level all the way
+  round. The words "seamless loop, steady, no intro, no ending" are added to the description
+  either way (the record's `prompt_sent`).
+
+### From words only
+
+The engine can also take a recording and restyle it. That is never used: there is no box to
+upload one, no route on the server that takes one, and a request that names one is refused:
+"AssetFurnace makes music from words only." The record says `"made_from": "words only"`.
+Its makers warn that a tune can come out sounding like an existing one by chance, so listen
+before you ship, and do not ask for a named artist's sound.
+
+### The engine
+
+[ACE-Step 1.5](https://huggingface.co/ACE-Step/Ace-Step1.5), run by its makers' own
+[ace-step](https://github.com/ace-step/ACE-Step-1.5) package at one pinned commit. Both are
+MIT: the music is yours, commercial use included. The model card says it was trained on
+licensed music, royalty-free and public-domain music, and audio made from MIDI. We have not
+checked that, and the record beside each tune says so in those words.
+
+Four parts, one download:
+
+| Part | Size | What it does |
+|------|------|--------------|
+| music model | 4.79 GB | Plays the tune |
+| song planner | 3.76 GB | Plans it first: tempo, key, structure. Used when "Plan the song first" is on |
+| text reader | 1.21 GB | Reads your description and lyrics |
+| sound decoder | 0.34 GB | Turns the music model's output into sound |
+
+On a Mac the music model and the sound decoder run on MLX (Apple's own number library), the
+planner on mlx-lm, and the text reader on PyTorch. So this is Apple Silicon only for now.
+It lives in its own Python environment, `vendor/music/.venv`: 50 packages, each pinned. The
+engine's own install list is much longer (a web page, training tools, other download
+sites); none of that is installed, because making music does not use it.
+
+The engine downloads any model it cannot find. Ours never gets the chance: the runner
+checks every file first, pins itself offline, and stops if one is missing. The engine also
+writes its own code files into its model folder, so it is given `vendor/music/checkpoints/`,
+a folder of links to the weights, and never the download itself.
+
+Measured on the machine this was built on (M5 Max, 64 GB):
+
+| What was made | Whole run | Memory at the peak | Came out |
+|---------------|-----------|--------------------|----------|
+| 30 s village theme, planner off | 15 s | 30 GB | 25.9 s, -18.8 dB |
+| the same, planner on | 28 s | 34 GB | 24.1 s, -18.9 dB, planned at 91 beats a minute in C major |
+| 20 s battle loop, planner off | 16 s | 30 GB | 20.0 s, -18.0 dB |
+| the same, planner on | 30 s | 32 GB | 20.0 s, -18.0 dB |
+
+A whole run includes about 10 seconds of loading; the planner adds about 13 (most of it
+loading its word list) and 3 to 4 GB. In the studio, two 30 second tries with the planner
+took 39 seconds from pressing Make.
+
+Smaller Macs are untested. Most of that memory is the engine keeping a second copy of the
+music model for PyTorch beside the one MLX plays from.
+
+### From a terminal, and for agents
+
+```bash
+python scripts/bootstrap_music.py             # says what it wants, then asks
+python scripts/bootstrap_music.py --verify    # the model files are the ones we tested
+vendor/music/.venv/bin/python scripts/music_generate.py \
+    --description "calm fantasy village theme, harp, flute, soft strings" --seconds 30
+vendor/music/.venv/bin/python scripts/music_generate.py \
+    --description "tense battle music, drums, low brass" --seconds 20 --loop
+```
+
+The last two never download: with anything missing they stop and say what. `--no-plan`
+skips the song planner; `--lyrics "..."` makes it sing.
+
+The same seed makes the same tune again, planner and all: two runs gave the same file,
+byte for byte.
+
+Agents: `make_music(description, seconds, lyrics, language, plan_first, loop, tries, seed)`
+starts a batch; `sound_status(job_id)` follows it (each try says what was planned for it)
+and `keep=<try>` keeps one.
+
+Routes (`viewer/music_api.py`): `GET /api/music/defaults`; `POST /api/music` `{prompt,
+seconds, singing, lyrics, language, plan, loop, count, seed, name}`. A music job is a sound
+job, so status, keep, cancel and the try WAVs are the `/api/sound/<job>/…` routes.
+
+The record is the same shape as any sound's, with `"sound_kind": "music"` and a `music`
+block: `description`, `instrumental`, `lyrics`, `language`, `seconds_asked`, `seed`,
+`planner_used`, `planned` (the planner's tempo, key and fuller description), `parts_used`,
+`model`, `revision`, `stereo`, `loops` and `made_from`. `loudness` says the mark, what was
+measured and whether the peak held it back; a loop also fills `loop` and `post.join`.
+
+## The sound-effect engine
 
 [MOSS-SoundEffect v2.0](https://huggingface.co/OpenMOSS-Team/MOSS-SoundEffect-v2.0), in its
 4-bit [MLX](https://huggingface.co/mlx-community/MOSS-SoundEffect-v2.0-4bit) form (MLX is
@@ -463,8 +610,8 @@ with the studio's.
 ## Limits refuse, they do not clip
 
 Ask for 45 seconds and you are told the most is 30. You do not get 30 and a surprise. The
-same goes for an empty description, more than four tries, a loop under 4 seconds, or a kind
-that is not built yet.
+same goes for an empty description, more than four tries, a loop under 4 seconds, or music
+past 4 minutes.
 
 ## One seed per batch
 
