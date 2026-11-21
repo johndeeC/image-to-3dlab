@@ -1024,6 +1024,6 @@ def test_a_music_loop_is_written_stereo_with_its_loop_in_the_file(tmp_path):
 
 
 def test_how_much_music_a_loop_asks_the_engine_for():
-    assert sp.seconds_for_music_loop(20.0, 600.0) == 23.5            # 20 + 2 lead + 1 blend + 0.5 search
-    assert sp.seconds_for_music_loop(8.0, 600.0) == 11.3
+    assert sp.seconds_for_music_loop(20.0, 600.0) == 28.5            # 20 + 2 lead + 1 blend + 0.5 search + a quarter
+    assert sp.seconds_for_music_loop(8.0, 600.0) == 13.3
     assert sp.seconds_for_music_loop(239.0, 240.0) == 240.0

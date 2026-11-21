@@ -236,7 +236,7 @@ def test_a_loop_asks_for_more_and_comes_out_joined_with_its_loop_in_the_file(tmp
     composer = FakeComposer()
     request = api.clean_request({"prompt": "tense battle music", "seconds": 20, "loop": True, "seed": 4, "count": 1})
     facts = runner.make_one(composer, ENGINE, request, 1, tmp_path, tell=lambda *a, **k: None)
-    assert composer.calls[0]["seconds"] == 23.5 and composer.calls[0]["prompt"].endswith("no intro, no ending")
+    assert composer.calls[0]["seconds"] == 28.5 and composer.calls[0]["prompt"].endswith("no intro, no ending")
     wav = tmp_path / "sound.wav"
     loop = sound_post.read_loop(wav)
     audio, _ = sound_post.read_wav(wav)

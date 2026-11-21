@@ -155,6 +155,9 @@ MUSIC_FADE_OUT_MS = 2000.0     # a tune still playing where it stops fades out o
 MUSIC_FADE_SHARE = 0.25        # ...or this share of a short tune
 MUSIC_LOOP_LEAD_S = 2.0        # a music loop leaves out the engine's first two seconds: tunes start with a lead-in
 MUSIC_LOOP_SEARCH_MS = 500.0   # ...and may come out this much longer or shorter, to land on a like beat
+# A tune comes to its own ending before the length asked: real ones ran 80 to 97% of it. A loop
+# must not hold that ending, so the engine is asked for this much more and the end is left out.
+MUSIC_LOOP_SPARE_SHARE = 0.25
 
 
 class SoundProblem(ValueError):
@@ -762,8 +765,10 @@ def clean_music(samples: Any, rate: int, *, channels_first: bool = False,
 
 def seconds_for_music_loop(asked: float, most: float) -> float:
     """How long to ask the engine for, to make a music loop `asked` seconds long: the loop,
-    the part blended in, the lead-in that is left out and room to move the join."""
+    the part blended in, the lead-in that is left out, room to move the join, and a quarter
+    more, because a tune ends before the length it was asked for."""
     extra = MUSIC_LOOP_LEAD_S + (loop_blend_ms(asked) + MUSIC_LOOP_SEARCH_MS) / 1000.0
+    extra += MUSIC_LOOP_SPARE_SHARE * float(asked)
     return min(float(most), math.ceil(round((float(asked) + extra) * 10.0, 6)) / 10.0)
 
 
