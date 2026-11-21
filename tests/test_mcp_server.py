@@ -167,7 +167,8 @@ def test_the_server_registers_every_tool():
                      "list_kits", "make_kit", "add_to_kit", "box_types", "list_canvases", "get_canvas", "edit_canvas",
                      "save_canvas", "check_canvas", "run_canvas", "canvas_status", "cancel_canvas_run",
                      "make_sound", "sound_status", "make_variations", "footsteps",
-                     "split_sound", "make_layered_sound", "list_voices", "make_voice", "join_voice_lines"}
+                     "split_sound", "make_layered_sound", "list_voices", "make_voice", "join_voice_lines",
+                     "make_music"}
 
 
 # --------------------------------------------------------------------------- create
@@ -1314,6 +1315,68 @@ def test_a_missing_voice_engine_or_a_refusal_reaches_the_agent_in_words():
     http = VoiceHttp(error=(422, {"error": "AssetFurnace does not copy a person's voice. Pick one of the voices listed."}))
     with pytest.raises(ms.StudioError, match="does not copy a person's voice"):
         ms.make_voice(sound_studio(http), text="Halt!", voice="me.wav")
+
+
+class MusicHttp:
+    """The studio's music door, as an agent's tool sees it."""
+
+    def __init__(self, error=None):
+        self.calls, self.error = [], error
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append(("GET", url.split("8777/", 1)[1], params))
+        return Response(200, {"job_id": SOUND_JOB, "status": "done", "kind": "music", "prompt": "village theme",
+                              "seconds": 30.0, "seed": 7, "count": 1, "elapsed_seconds": 16.0,
+                              "music": {"engine": "acestep", "singing": False, "lyrics": None, "loop": False,
+                                        "plan": True, "seconds": 30.0},
+                              "tries": [{"number": 1, "seed": 7, "seconds": 29.5, "level_db": -16.0, "kept": None,
+                                         "planned": {"tempo_bpm": 73, "key": "D major"}}]})
+
+    def post(self, url, json=None, files=None, timeout=None):
+        self.calls.append(("POST", url.split("8777/", 1)[1], json))
+        if self.error:
+            return Response(*self.error)
+        return Response(202, {"job_id": SOUND_JOB, "seed": 7, "count": json.get("count", 2),
+                              "seconds": json.get("seconds", 60.0), "plan": json.get("plan", True),
+                              "loop": bool(json.get("loop")), "singing": bool(json.get("lyrics")), "engine": "acestep"})
+
+
+def test_make_music_sends_what_was_asked_and_says_what_to_do_next():
+    http = MusicHttp()
+    out = ms.make_music(sound_studio(http), description="village theme", seconds=30, plan_first=False, tries=1, seed=7)
+    assert http.calls == [("POST", "api/music", {"prompt": "village theme", "seconds": 30, "plan": False,
+                                                 "count": 1, "seed": 7})]
+    assert out["job_id"] == SOUND_JOB and (out["tries"], out["seed"], out["seconds"]) == (1, 7, 30)
+    assert out["instrumental"] is True and out["planned_first"] is False and out["loops"] is False
+    assert "sound_status" in out["next"] and "stereo" in out["next"] and "set it to loop" not in out["next"]
+    # left out, everything but the description is the studio's to choose
+    http = MusicHttp()
+    ms.make_music(sound_studio(http), description="village theme")
+    assert http.calls[0][2] == {"prompt": "village theme"}
+    # sung, and looped
+    http = MusicHttp()
+    sung = ms.make_music(sound_studio(http), description="shanty", lyrics="Heave ho", language="en")
+    assert http.calls[0][2] == {"prompt": "shanty", "lyrics": "Heave ho", "language": "en"} and sung["instrumental"] is False
+    looped = ms.make_music(sound_studio(MusicHttp()), description="battle", loop=True)
+    assert looped["loops"] is True and "set it to loop in the game" in looped["next"]
+
+
+def test_a_missing_music_engine_or_a_refusal_reaches_the_agent_in_words():
+    http = MusicHttp(error=(503, {"error": "ACE-Step 1.5 is not set up yet. Missing: its model files (10.1 GB). "
+                                           "Open Setup to download it.", "needs_setup": True}))
+    with pytest.raises(ms.StudioError, match="not set up yet"):
+        ms.make_music(sound_studio(http), description="village theme")
+    assert [c[1] for c in http.calls] == ["api/music"]           # no install was started on the agent's behalf
+    http = MusicHttp(error=(422, {"error": "ACE-Step 1.5 makes music from 10 to 240 seconds long"}))
+    with pytest.raises(ms.StudioError, match="10 to 240 seconds"):
+        ms.make_music(sound_studio(http), description="village theme", seconds=900)
+
+
+def test_a_music_job_reads_through_sound_status_with_what_was_planned():
+    out = ms.sound_status(sound_studio(MusicHttp()), job_id=SOUND_JOB)
+    assert out["status"] == "done" and out["music"]["plan"] is True and out["description"] == "village theme"
+    assert out["tries"] == [{"try": 1, "seed": 7, "seconds": 29.5, "kept": None, "level_db": -16.0,
+                             "planned": {"tempo_bpm": 73, "key": "D major"}}]
 
 
 def test_a_voice_job_reads_through_sound_status_with_its_lines():

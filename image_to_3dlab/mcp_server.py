@@ -102,7 +102,7 @@ USED = {"api/chains", "api/chains/*/cancel", "api/setup/*/download", "api/reveal
         "api/graphs", "api/graphs/check", "api/graphs/*/run", "api/graph-runs/*/cancel",
         "api/sound", "api/sound/*/keep", "api/sound/*/cancel", "api/sounds/*/set", "api/footsteps",
         "api/sound/layers/split", "api/sound/layers/add", "api/sound/layers/save",
-        "api/voice", "api/voice/join"}
+        "api/voice", "api/voice/join", "api/music"}
 
 
 class StudioError(RuntimeError):
@@ -1244,13 +1244,17 @@ def sound_job_summary(job: dict[str, Any]) -> dict[str, Any]:
     tries = [{"try": t.get("number"), "seed": t.get("seed"), "seconds": t.get("seconds"),
               "kept": str(REPO / "output" / t["kept"]) if t.get("kept") else None,
               # a voice job: which line this try says, which take of it, and words it had to guess
-              **{key: t[key] for key in ("line", "take", "guessed") if t.get(key)}}
+              **{key: t[key] for key in ("line", "take", "guessed") if t.get(key)},
+              # a tune: its average level, and what the song planner chose for it
+              **{key: t[key] for key in ("level_db", "planned") if job.get("kind") == "music" and t.get(key)}}
              for t in job.get("tries") or []]
     voice = job.get("voice") if isinstance(job.get("voice"), dict) else None
+    music = job.get("music") if isinstance(job.get("music"), dict) else None
     return {k: v for k, v in {"job_id": job.get("job_id"), "status": job.get("status"), "error": job.get("error"),
                               "description": job.get("prompt"), "seconds": job.get("seconds"),
                               "lines": voice.get("lines") if voice else None,
                               "voice": voice.get("voice") if voice else None,
+                              "music": music,
                               "seed": job.get("seed"), "tries": tries,
                               "elapsed_seconds": job.get("elapsed_seconds")}.items() if v is not None}
 
@@ -1276,6 +1280,27 @@ def make_sound(studio: Studio, *, description: str, seconds: float | None = None
                     "sound_status(job_id, keep=<try>)."
                     + (" A kept loop's WAV is the whole loop: set it to loop in the game and it plays round with no click."
                        if kind == "loop" else "")}
+
+
+def make_music(studio: Studio, *, description: str, seconds: float | None = None, lyrics: str | None = None,
+               language: str | None = None, plan_first: bool | None = None, loop: bool | None = None,
+               tries: int | None = None, seed: int | None = None) -> dict[str, Any]:
+    """Start a batch of music from a description. Instrumental unless `lyrics` are given.
+    Never downloads the engine."""
+    body: dict[str, Any] = {"prompt": description}
+    for key, value in (("seconds", seconds), ("lyrics", lyrics), ("language", language), ("plan", plan_first),
+                       ("loop", loop), ("count", tries), ("seed", seed)):
+        if value is not None:
+            body[key] = value
+    started = studio.post_json("api/music", body)
+    return {"job_id": started["job_id"], "seed": started.get("seed"), "tries": started.get("count"),
+            "seconds": started.get("seconds"), "instrumental": not started.get("singing"),
+            "planned_first": started.get("plan"), "loops": started.get("loop"),
+            "next": "Takes about half as long as the music itself: sound_status(job_id, wait_seconds=50) until done. "
+                    "Then ask the user which try to keep (they can listen on the studio's Sound page, under Music) "
+                    "and call sound_status(job_id, keep=<try>). The WAV is stereo."
+                    + (" A kept loop's WAV is the whole loop: set it to loop in the game and it plays round with no click."
+                       if started.get("loop") else "")}
 
 
 def list_voices(studio: Studio) -> dict[str, Any]:
@@ -1971,19 +1996,41 @@ def build_server(studio: Studio | None = None):
         (default 8), and describe one steady sound ("rain on a tent"); words like "continuous, steady" are added
         for you unless the description has its own, and "occasional thunder" is respected. A loop has no variations.
         Needs the "sound-effects" engine (list_engines); if it is missing this says so and downloads nothing:
-        install_backend asks the user first. No music yet; a spoken line is make_voice."""
+        install_backend asks the user first. Music is make_music; a spoken line is make_voice."""
         return safe(lambda: make_sound(studio, description=description, seconds=seconds, leave_out=leave_out,
                                        tries=tries, seed=seed, kind=kind))
 
     @server.tool(name="sound_status", structured_output=False)
     def tool_sound_status(job_id: str, wait_seconds: int = 30, keep: int | None = None, name: str | None = None,
                           cancel: bool = False):
-        """Status of a make_sound or make_voice job and its tries; waits up to wait_seconds (max 50) for it to end.
+        """Status of a make_sound, make_voice or make_music job and its tries; waits up to wait_seconds (max 50) for it to end.
         keep=<try number> puts that try in the Library (name: optional) and answers its WAV path; its
         licence record sits beside it as sound.provenance.json. Tries nobody keeps are cleared by the next batch.
         cancel=true stops a job that is still running."""
         return safe(lambda: sound_status(studio, job_id=job_id, wait_seconds=wait_seconds, keep=keep, name=name,
                                          cancel=cancel))
+
+    @server.tool(name="make_music", structured_output=False)
+    def tool_make_music(description: str, seconds: float | None = None, lyrics: str | None = None,
+                        language: str | None = None, plan_first: bool | None = None, loop: bool | None = None,
+                        tries: int | None = None, seed: int | None = None):
+        """Make music from a description: a village theme, battle music, a menu tune. Stereo 48 kHz WAVs,
+        MIT engine (ACE-Step 1.5). description: style, mood, instruments ("calm fantasy village theme, harp,
+        flute, soft strings"), up to 500 characters. seconds: 10 to 240 (default 60); past that it is refused,
+        not shortened. A tune may end a little early if it comes to its own ending.
+        It is instrumental unless you give lyrics (the words to sing, one line per line; language is an
+        optional code such as "en"). plan_first (default true): a song planner picks a tempo and a key and
+        sketches the tune before it is played, a few seconds more; false is quicker and looser. loop=true makes a
+        tune that plays round and round with no click (instrumental only): its end is blended into its start
+        over about a second, not cut on the bar line, and its WAV has the loop written inside.
+        tries: 1 to 4 (default 2) from one seed (try n uses seed + n - 1). Each tune sits at the same average
+        volume. It is made from words only: there is no way to give it a recording or a song to copy, so do
+        not ask the user for one, and do not ask for a named artist's sound.
+        Needs the "music" engine (list_engines); if it is missing this says so and downloads nothing:
+        install_backend("music") asks the user first (10.1 GB). Then sound_status(job_id) to wait, and
+        keep=<try> to put one in the Library. Music has no variations."""
+        return safe(lambda: make_music(studio, description=description, seconds=seconds, lyrics=lyrics,
+                                       language=language, plan_first=plan_first, loop=loop, tries=tries, seed=seed))
 
     @server.tool(name="list_voices", structured_output=False)
     def tool_list_voices():

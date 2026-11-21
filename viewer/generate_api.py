@@ -42,6 +42,7 @@ import hf_api
 import image_api
 import kits_api
 import model_info_api
+import music_api
 import notices_api
 import preview_api
 import request_utils
@@ -3150,6 +3151,9 @@ class Handler(SimpleHTTPRequestHandler):
         if parts == ["api", "voice", "join"]:
             self._voice_join()
             return
+        if parts == ["api", "music"]:
+            self._create_music_job()
+            return
         if parts == ["api", "sound", "layers", "split"]:
             self._sound_layers_post("split")
             return
@@ -3579,6 +3583,47 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json(202, {
             "job_id": job.id, "seed": job.request["seed"], "count": job.request["count"],
             "lines": job.request["lines"], "takes": job.request["takes"], "engine": engine.id,
+            "status_url": f"/api/sound/{job.id}/status",
+        })
+
+    def _create_music_job(self) -> None:
+        """Start music: {prompt, seconds?, singing?, lyrics?, language?, plan?, loop?, count?,
+        seed?, name?}. Instrumental unless there are words to sing. It is a sound job: status,
+        keep and cancel are the sound ones. Never downloads: with the engine missing it answers
+        503 and points at Setup."""
+        try:
+            payload = self._small_json(64 * 1024)
+        except ValueError as exc:
+            self._send_json(400, {"error": f"could not read the request: {exc}"})
+            return
+        try:
+            engine = music_api.pick_engine(str(payload.get("engine") or "") or None)
+            music_api.clean_request(payload, engine)     # a bad request is refused before "busy" or "not set up"
+        except ValueError as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        try:
+            music_api.check_ready(engine)
+        except sound_api.MissingSound as exc:
+            self._send_json(503, {"error": str(exc), "needs_setup": True, "missing": exc.missing,
+                                  "setup_id": engine.setup_id})
+            return
+        waiting = busy_reason("sound")
+        if waiting:
+            self._send_json(409, {"error": waiting})
+            return
+        try:
+            job = music_api.start(payload, engine)
+        except ValueError as exc:
+            self._send_json(422, {"error": str(exc)})
+            return
+        except RuntimeError as exc:
+            self._send_json(409, {"error": str(exc)})
+            return
+        self._send_json(202, {
+            "job_id": job.id, "seed": job.request["seed"], "count": job.request["count"],
+            "seconds": job.request["seconds"], "plan": job.request["plan"], "loop": job.request["loop"],
+            "singing": job.request["singing"], "engine": engine.id,
             "status_url": f"/api/sound/{job.id}/status",
         })
 
@@ -4212,6 +4257,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parts == ["api", "voice", "defaults"]:
             self._send_json(200, voice_api.defaults_payload())
+            return
+        if parts == ["api", "music", "defaults"]:
+            self._send_json(200, music_api.defaults_payload())
             return
         if parts == ["api", "sound", "kept"]:
             self._send_json(200, {"base": "/output/", "sounds": sound_api.kept_sounds(OUTPUT_ROOT)})

@@ -888,9 +888,13 @@ def variations_of(root: Path, sound_id: Any, request: dict[str, Any]) -> tuple[P
     is remembered, so playing its takes one by one does not make them all again each time."""
     global _LAST_TAKES
     folder = kept_folder(root, sound_id)
-    if _record(folder / SIDECAR_FILE).get("sound_kind") == "loop":
+    kind = _record(folder / SIDECAR_FILE).get("sound_kind")
+    if kind == "loop":
         raise ValueError("a background loop has no variations: they would not join up. "
                          "Change its pitch or volume in the game")
+    if kind == "music":
+        raise ValueError("music has no variations: a tune at another pitch is another tune. "
+                         "Make more tries of it instead")
     wav = folder / SOUND_FILE
     stat = wav.stat()
     key = (str(wav), stat.st_mtime_ns, stat.st_size, request["count"], request["how_different"],
