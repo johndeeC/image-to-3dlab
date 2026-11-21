@@ -975,6 +975,32 @@ CATALOG: tuple[Backend, ...] = (
         ),
     ),
     Backend(
+        id="music",
+        label="ACE-Step 1.5 (text to music)",
+        kind="sound",
+        best_for=("Makes music from a description: a village theme, battle music, a menu tune. "
+                  "Instrumental or sung, 10 seconds to 4 minutes, in stereo, and it can loop."),
+        tradeoff=("MIT: the music you make is yours for any use. A 30 second tune takes about "
+                  "15 seconds on a fast Mac, and it used about 31 GB of memory on ours (64 GB); smaller "
+                  "Macs are untested. Its makers say it was trained on licensed, "
+                  "royalty-free and MIDI-made music; we have not checked that. A tune can come "
+                  "out sounding like an existing one by chance, so listen before you ship."),
+        license_name="MIT",
+        license_url="https://huggingface.co/ACE-Step/Ace-Step1.5",
+        install="scripts/bootstrap_music.py",
+        runs_on=(APPLE,),
+        setup_minutes=20,
+        # its own environment: PyTorch, MLX and the ace-step package stay out of the main one
+        build_probes=(venv_python(REPO / "vendor" / "music"),),
+        amd_blocked_reason="This route runs on MLX, Apple's own library, so only on an Apple Silicon Mac.",
+        weights=(
+            WeightSet("ACE-Step 1.5 (music model, song planner, text reader, sound decoder)",
+                      "ACE-Step/Ace-Step1.5", 10_092_095_357, HF_HUB_DIR / "models--ACE-Step--Ace-Step1.5",
+                      note="Four parts in one download: the music model (4.79 GB), the song planner "
+                           "(3.76 GB), the text reader (1.21 GB) and the sound decoder (0.34 GB)."),
+        ),
+    ),
+    Backend(
         id="matte",
         label="Background remover (BiRefNet-lite)",
         kind="tool",

@@ -70,6 +70,7 @@ COMMANDS: dict[str, list[str]] = {
     "sound-effects": [sys.executable, str(REPO / "scripts" / "bootstrap_sound_effects.py"), "--yes"],
     "voice-kokoro": [sys.executable, str(REPO / "scripts" / "bootstrap_voice.py"), "--engine", "kokoro", "--yes"],
     "voice-qwen": [sys.executable, str(REPO / "scripts" / "bootstrap_voice.py"), "--engine", "qwen", "--yes"],
+    "music": [sys.executable, str(REPO / "scripts" / "bootstrap_music.py"), "--yes"],
     "matte": [sys.executable, str(REPO / "scripts" / "bootstrap_matte.py"), "--yes"],
     "upscaler": [sys.executable, str(REPO / "scripts" / "bootstrap_upscaler.py"), "--yes"],
     "autorig": [sys.executable, str(REPO / "scripts" / "bootstrap_autorig.py"), "--yes"],
@@ -229,6 +230,13 @@ def also_fetches(backend_id: str) -> list[dict[str, str]]:
             extra.append({"what": f"spaCy's small English model ({voice.READER_NAME}), which reads each "
                                   "sentence before Kokoro says it",
                           "from": voice.READER_URL, "size": f"{voice.READER_BYTES / 1e6:.0f} MB", "licence": "MIT"})
+    elif backend_id == "music":
+        import bootstrap_music as music
+
+        if not music.ENGINE.python.exists():
+            extra.append({"what": "ace-step, the code that runs the music model, with PyTorch, MLX and the "
+                                  "other Python packages it needs (in their own environment)",
+                          "from": music.PACKAGE_REPO, "size": music.PACKAGES_SIZE, "licence": "MIT"})
     return extra
 
 
